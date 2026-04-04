@@ -11,7 +11,7 @@ import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useCompetitors, useAddCompetitor, useDeleteCompetitor, useCompetitorComparison } from "@/hooks/useCompetitors";
 import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
-import { Plus, Trash2, Loader2, RefreshCw, Trophy } from "lucide-react";
+import { Plus, Trash2, Loader2, RefreshCw, Trophy, Users, MessageSquare, Search, Crown, ArrowUp, ArrowDown } from "lucide-react";
 
 export default function CompetitorsPage() {
   const { storeId } = useCurrentStoreId();
@@ -48,7 +48,6 @@ export default function CompetitorsPage() {
     }
   };
 
-  // 레이더 차트 — 첫 번째 경쟁매장과 비교
   const firstComp = compData[0];
   const radarData = firstComp && myStore ? [
     { metric: "블로그 리뷰", myStore: myStore.blogReviewCount ?? 0, competitor: firstComp.blogReviewCount ?? 0 },
@@ -56,26 +55,108 @@ export default function CompetitorsPage() {
     { metric: "일 검색량", myStore: myStore.dailySearchVolume ?? 0, competitor: firstComp.dailySearchVolume ?? 0 },
   ] : [];
 
+  const CompareCell = ({ my, their, unit }: { my: number; their: number; unit: string }) => {
+    const diff = my - their;
+    return (
+      <div className="text-center">
+        <p className="text-sm font-bold">{their.toLocaleString()}<span className="text-[10px] text-muted-foreground font-normal">{unit}</span></p>
+        {diff !== 0 && (
+          <span className={`text-[10px] font-medium flex items-center justify-center gap-0.5 ${diff > 0 ? "text-emerald-500" : "text-rose-500"}`}>
+            {diff > 0 ? <ArrowDown size={10} /> : <ArrowUp size={10} />}
+            {Math.abs(diff).toLocaleString()}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="space-y-4 md:space-y-6 max-w-5xl">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h2 className="text-xl font-bold">경쟁 비교</h2>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing || comps.length === 0}>
-            {refreshing ? <Loader2 size={14} className="animate-spin mr-1" /> : <RefreshCw size={14} className="mr-1" />}
-            데이터 수집
-          </Button>
-          <Badge variant="secondary">{comps.length}개 매장</Badge>
+    <div className="space-y-5 md:space-y-6 max-w-5xl mx-auto">
+      {/* 헤더 */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold tracking-tight">경쟁 비교</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">{comps.length}개 경쟁 매장 추적 중</p>
         </div>
+        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing || comps.length === 0} className="rounded-xl">
+          {refreshing ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <RefreshCw size={14} className="mr-1.5" />}
+          데이터 수집
+        </Button>
       </div>
 
       {/* 경쟁매장 추가 */}
       <div className="flex gap-2">
-        <Input placeholder="경쟁 매장명 입력 (예: 옆집 고깃집)" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAdd()} />
-        <Button onClick={handleAdd} disabled={addComp.isPending || !newName.trim()}>
-          {addComp.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+        <div className="flex-1 relative">
+          <Users size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="경쟁 매장명 입력 (예: 옆집 고깃집)"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            className="pl-10 rounded-xl h-11"
+          />
+        </div>
+        <Button onClick={handleAdd} disabled={addComp.isPending || !newName.trim()} className="rounded-xl h-11 px-5">
+          {addComp.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={16} />}
         </Button>
       </div>
+
+      {/* 내 매장 vs 경쟁매장 요약 */}
+      {myStore && compData.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* 내 매장 카드 */}
+          <Card className="overflow-hidden border-2 border-primary/20">
+            <CardContent className="pt-4 pb-3 px-4 bg-gradient-to-br from-blue-500/10 to-indigo-500/5">
+              <div className="flex items-center gap-2 mb-3">
+                <Crown size={16} className="text-primary" />
+                <span className="text-sm font-bold">내 매장</span>
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">영수증 리뷰</span>
+                  <span className="font-bold">{(myStore.receiptReviewCount ?? 0).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">블로그 리뷰</span>
+                  <span className="font-bold">{(myStore.blogReviewCount ?? 0).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">일 검색량</span>
+                  <span className="font-bold">{(myStore.dailySearchVolume ?? 0).toLocaleString()}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* 경쟁매장 TOP 2 */}
+          {compData.slice(0, 2).map((c: any, i: number) => (
+            <Card key={c.id || i} className="overflow-hidden">
+              <CardContent className="pt-4 pb-3 px-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-6 h-6 rounded-full bg-rose-100 flex items-center justify-center">
+                    <span className="text-[10px] font-bold text-rose-600">{i + 1}</span>
+                  </div>
+                  <span className="text-sm font-bold truncate">{c.name}</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">영수증 리뷰</span>
+                    <CompareCell my={myStore.receiptReviewCount ?? 0} their={c.receiptReviewCount ?? 0} unit="" />
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">블로그 리뷰</span>
+                    <CompareCell my={myStore.blogReviewCount ?? 0} their={c.blogReviewCount ?? 0} unit="" />
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">일 검색량</span>
+                    <CompareCell my={myStore.dailySearchVolume ?? 0} their={c.dailySearchVolume ?? 0} unit="" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* 레이더 차트 */}
       {radarData.length > 0 && (
@@ -86,89 +167,66 @@ export default function CompetitorsPage() {
         />
       )}
 
-      {/* 비교 테이블 */}
-      {compData.length > 0 && myStore && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">경쟁 비교 테이블</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left p-3 font-medium text-muted-foreground">매장</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">영수증 리뷰</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">블로그 리뷰</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">일 검색량</th>
-                </tr>
-              </thead>
-              <tbody>
-                {/* 내 매장 */}
-                <tr className="border-b bg-primary/5">
-                  <td className="p-3 font-medium flex items-center gap-2">
-                    <Trophy size={14} className="text-primary" />
-                    {myStore.name}
-                  </td>
-                  <td className="p-3 text-center font-medium">{myStore.receiptReviewCount?.toLocaleString() ?? "-"}</td>
-                  <td className="p-3 text-center font-medium">{myStore.blogReviewCount?.toLocaleString() ?? "-"}</td>
-                  <td className="p-3 text-center font-medium">{myStore.dailySearchVolume?.toLocaleString() ?? "-"}</td>
-                </tr>
-                {/* 경쟁 매장 */}
-                {compData.map((c: any, i: number) => (
-                  <tr key={c.id || i} className="border-b last:border-0">
-                    <td className="p-3">
-                      <span className="font-medium">{c.name}</span>
-                      <Badge variant={c.type === "AUTO" ? "secondary" : "outline"} className="text-[10px] ml-2">
-                        {c.type === "AUTO" ? "AI" : "직접"}
-                      </Badge>
-                    </td>
-                    <td className={`p-3 text-center ${(c.receiptReviewCount ?? 0) > (myStore.receiptReviewCount ?? 0) ? "text-red-500 font-medium" : ""}`}>
-                      {c.receiptReviewCount?.toLocaleString() ?? "-"}
-                    </td>
-                    <td className={`p-3 text-center ${(c.blogReviewCount ?? 0) > (myStore.blogReviewCount ?? 0) ? "text-red-500 font-medium" : ""}`}>
-                      {c.blogReviewCount?.toLocaleString() ?? "-"}
-                    </td>
-                    <td className={`p-3 text-center ${(c.dailySearchVolume ?? 0) > (myStore.dailySearchVolume ?? 0) ? "text-red-500 font-medium" : ""}`}>
-                      {c.dailySearchVolume?.toLocaleString() ?? "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* 경쟁 매장 목록 */}
+      {isLoading ? <Skeleton className="h-48 w-full rounded-2xl" /> : comps.length === 0 ? (
+        <Card className="rounded-2xl">
+          <CardContent className="py-16 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-rose-50 flex items-center justify-center mx-auto mb-4">
+              <Users size={24} className="text-rose-400" />
+            </div>
+            <p className="text-muted-foreground font-medium">등록된 경쟁 매장이 없습니다</p>
+            <p className="text-sm text-muted-foreground mt-1">위에서 경쟁 매장을 추가하세요</p>
           </CardContent>
         </Card>
-      )}
-
-      {/* 경쟁 매장 목록 */}
-      {isLoading ? <Skeleton className="h-48 w-full rounded-xl" /> : comps.length === 0 ? (
-        <Card><CardContent className="py-12 text-center text-muted-foreground">등록된 경쟁 매장이 없습니다. 위에서 추가하거나 매장 셋업을 실행하세요.</CardContent></Card>
       ) : (
-        <div className="space-y-2">
-          {comps.map((c: any, i: number) => (
-            <Card key={c.id || i}>
-              <CardContent className="py-3 px-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-medium">{i + 1}</span>
-                  <div>
-                    <p className="font-medium text-sm">{c.competitorName}</p>
-                    <div className="flex gap-3 text-xs text-muted-foreground mt-0.5">
-                      {c.blogReviewCount != null && <span>블로그 {c.blogReviewCount}건</span>}
-                      {c.receiptReviewCount != null && <span>방문자 {c.receiptReviewCount}건</span>}
-                      {c.dailySearchVolume != null && <span>검색 {c.dailySearchVolume}/일</span>}
-                      {!c.blogReviewCount && !c.receiptReviewCount && <span className="text-yellow-500">"데이터 수집" 버튼을 눌러주세요</span>}
+        <div>
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3">전체 경쟁 매장 ({comps.length})</h3>
+          <div className="space-y-2">
+            {comps.map((c: any, i: number) => (
+              <Card key={c.id || i} className="overflow-hidden hover:shadow-md transition-all">
+                <CardContent className="py-3 px-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold ${
+                        c.type === "AUTO" ? "bg-violet-100 text-violet-600" : "bg-blue-100 text-blue-600"
+                      }`}>
+                        {i + 1}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-sm truncate">{c.competitorName}</p>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                            c.type === "AUTO" ? "bg-violet-100 text-violet-700" : "bg-gray-100 text-gray-700"
+                          }`}>
+                            {c.type === "AUTO" ? "AI추천" : "직접추가"}
+                          </span>
+                        </div>
+                        <div className="flex gap-3 text-[11px] text-muted-foreground mt-1">
+                          {c.blogReviewCount != null && <span className="flex items-center gap-0.5"><MessageSquare size={10} /> 블로그 {c.blogReviewCount}</span>}
+                          {c.receiptReviewCount != null && <span className="flex items-center gap-0.5"><Users size={10} /> 방문자 {c.receiptReviewCount}</span>}
+                          {c.dailySearchVolume != null && <span className="flex items-center gap-0.5"><Search size={10} /> {c.dailySearchVolume}/일</span>}
+                          {!c.blogReviewCount && !c.receiptReviewCount && (
+                            <span className="text-amber-500 font-medium">"데이터 수집" 버튼을 눌러주세요</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => deleteComp.mutate(c.id, {
+                        onSuccess: () => toast.success("삭제됨"),
+                        onError: () => toast.error("삭제 실패"),
+                      })}
+                      className="text-muted-foreground hover:text-destructive shrink-0 rounded-xl"
+                    >
+                      <Trash2 size={14} />
+                    </Button>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={c.type === "AUTO" ? "secondary" : "outline"} className="text-[10px]">{c.type === "AUTO" ? "AI추천" : "직접추가"}</Badge>
-                  <Button variant="ghost" size="sm" onClick={() => deleteComp.mutate(c.id, {
-                    onSuccess: () => toast.success("삭제됨"),
-                    onError: () => toast.error("삭제 실패"),
-                  })} className="text-muted-foreground hover:text-destructive"><Trash2 size={14} /></Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
     </div>

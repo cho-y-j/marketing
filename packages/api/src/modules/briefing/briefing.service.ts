@@ -39,9 +39,9 @@ export class BriefingService {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       include: {
-        analyses: { take: 1, orderBy: { analyzedAt: "desc" } },
-        keywords: { orderBy: { monthlySearchVolume: "desc" }, take: 5 },
-        competitors: { take: 3 },
+        analyses: { take: 2, orderBy: { analyzedAt: "desc" } },
+        keywords: { orderBy: { monthlySearchVolume: "desc" }, take: 10 },
+        competitors: { take: 5 },
       },
     });
     if (!store) throw new NotFoundException("매장을 찾을 수 없습니다");
@@ -49,7 +49,60 @@ export class BriefingService {
     this.logger.log(`브리핑 생성 시작: ${store.name}`);
 
     const lastAnalysis = store.analyses[0];
+    const prevAnalysis = store.analyses[1];
     const today = new Date();
+
+    // 순위 히스토리 조회 (최근 7일)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const rankHistory = await this.prisma.keywordRankHistory.findMany({
+      where: {
+        storeId,
+        checkedAt: { gte: sevenDaysAgo },
+      },
+      orderBy: { checkedAt: "desc" },
+    });
+
+    // 키워드별 순위 변동 계산
+    const rankChanges: Record<string, { current: number | null; previous: number | null; change: number | null }> = {};
+    for (const kw of store.keywords) {
+      const kwRanks = rankHistory
+        .filter((r) => r.keyword === kw.keyword && r.rank !== null)
+        .sort((a, b) => b.checkedAt.getTime() - a.checkedAt.getTime());
+      if (kwRanks.length >= 2) {
+        rankChanges[kw.keyword] = {
+          current: kwRanks[0].rank,
+          previous: kwRanks[kwRanks.length - 1].rank,
+          change: (kwRanks[kwRanks.length - 1].rank ?? 0) - (kwRanks[0].rank ?? 0),
+        };
+      } else if (kwRanks.length === 1) {
+        rankChanges[kw.keyword] = { current: kwRanks[0].rank, previous: null, change: null };
+      }
+    }
+
+    // 경쟁사 히스토리 조회
+    const competitorHistory = await this.prisma.competitorHistory.findMany({
+      where: {
+        competitor: { storeId },
+        recordedAt: { gte: sevenDaysAgo },
+      },
+      include: { competitor: true },
+      orderBy: { recordedAt: "desc" },
+    });
+
+    // 경쟁사 변동 요약
+    const competitorChanges = store.competitors.map((c) => {
+      const history = competitorHistory.filter((h) => h.competitorId === c.id);
+      const latest = history[0];
+      const oldest = history[history.length - 1];
+      return {
+        name: c.competitorName,
+        currentReviews: c.blogReviewCount ?? 0,
+        reviewChange: latest && oldest
+          ? (latest.blogReviewCount ?? 0) - (oldest.blogReviewCount ?? 0)
+          : 0,
+      };
+    });
 
     // 시즌 정보 조회
     const seasonalEvents = await this.prisma.seasonalEvent.findMany({
@@ -59,21 +112,31 @@ export class BriefingService {
       },
     });
 
-    // 컨텍스트 구성
+    // 점수 변동
+    const scoreChange = lastAnalysis && prevAnalysis
+      ? (lastAnalysis.competitiveScore ?? 0) - (prevAnalysis.competitiveScore ?? 0)
+      : null;
+
+    // 컨텍스트 구성 (강화된 버전)
     const userPrompt = JSON.stringify({
       today: today.toISOString().split("T")[0],
       dayOfWeek: ["일", "월", "화", "수", "목", "금", "토"][today.getDay()],
+      dayType: [0, 6].includes(today.getDay()) ? "주말" : today.getDay() === 1 ? "월요일(주간시작)" : today.getDay() === 5 ? "금요일(주말대비)" : "평일",
       store: {
         name: store.name,
         category: store.category,
         district: store.district,
+        address: store.address,
         competitiveScore: store.competitiveScore,
+        scoreChange,
       },
       latestAnalysis: lastAnalysis
         ? {
             strengths: lastAnalysis.strengths,
             weaknesses: lastAnalysis.weaknesses,
             recommendations: lastAnalysis.recommendations,
+            blogReviewCount: lastAnalysis.blogReviewCount,
+            receiptReviewCount: lastAnalysis.receiptReviewCount,
           }
         : null,
       keywords: store.keywords.map((kw) => ({
@@ -81,11 +144,10 @@ export class BriefingService {
         trend: kw.trendDirection,
         change: kw.trendPercentage,
         volume: kw.monthlySearchVolume,
+        currentRank: kw.currentRank,
+        rankChange: rankChanges[kw.keyword] ?? null,
       })),
-      competitors: store.competitors.map((c) => ({
-        name: c.competitorName,
-        reviews: c.blogReviewCount,
-      })),
+      competitors: competitorChanges,
       seasonalEvents: seasonalEvents.map((e) => ({
         name: e.name,
         keywords: e.keywords,

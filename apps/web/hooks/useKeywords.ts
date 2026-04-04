@@ -14,6 +14,17 @@ export function useKeywords(storeId: string) {
   });
 }
 
+export function useKeywordDiscovery(storeId: string) {
+  return useQuery({
+    queryKey: ["keywords", storeId, "discover"],
+    queryFn: async () => {
+      const { data } = await apiClient.post(`/stores/${storeId}/keywords/discover`);
+      return data;
+    },
+    enabled: false, // 수동 실행만
+  });
+}
+
 export function useKeywordTrends(storeId: string) {
   return useQuery({
     queryKey: ["keywords", storeId, "trends"],
