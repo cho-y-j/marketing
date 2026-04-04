@@ -1,0 +1,290 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== 사용자 =====
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  name            String?
+  password        String?
+  provider        String?  // naver, google, email
+  providerId      String?
+  profileImage    String?
+
+  // 구독 정보
+  subscriptionPlan SubscriptionPlan @default(FREE)
+  subscriptionEndAt DateTime?
+
+  // API 키 (프리미엄 사용자)
+  anthropicApiKey  String?  // 암호화 저장
+
+  // 관계
+  stores          Store[]
+  notifications   Notification[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+enum SubscriptionPlan {
+  FREE
+  BASIC
+  PREMIUM
+}
+
+// ===== 매장 =====
+model Store {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+
+  // 기본 정보
+  name            String
+  naverPlaceId    String?  @unique
+  naverPlaceUrl   String?
+  category        String?
+  subCategory     String?
+  address         String?
+  phone           String?
+
+  // 상권 정보
+  district        String?
+
+  // 경쟁력 점수
+  competitiveScore Float?
+  lastAnalyzedAt  DateTime?
+
+  // 관계
+  analyses        StoreAnalysis[]
+  competitors     Competitor[]
+  keywords        StoreKeyword[]
+  briefings       DailyBriefing[]
+  contents        GeneratedContent[]
+  rankHistories   KeywordRankHistory[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([district, category])
+}
+
+// ===== 매장 분석 =====
+model StoreAnalysis {
+  id              String   @id @default(cuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id])
+
+  // 핵심 지표
+  receiptReviewCount  Int?
+  blogReviewCount     Int?
+  dailySearchVolume   Int?
+  saveCount           Int?
+  visitorCount        Int?
+
+  // 네이버 지수
+  n1Score         Float?
+  n2Score         Float?
+  n3Score         Float?
+
+  // AI 분석 결과 (JSON)
+  aiAnalysis      Json?
+  strengths       Json?
+  weaknesses      Json?
+  recommendations Json?
+
+  // 경쟁력 점수
+  competitiveScore Float?
+
+  analyzedAt      DateTime @default(now())
+
+  @@index([storeId, analyzedAt])
+}
+
+// ===== 경쟁 매장 =====
+model Competitor {
+  id              String   @id @default(cuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id])
+
+  competitorName  String
+  competitorPlaceId String?
+  competitorUrl   String?
+  category        String?
+
+  type            CompetitorType @default(AUTO)
+
+  receiptReviewCount  Int?
+  blogReviewCount     Int?
+  dailySearchVolume   Int?
+  lastComparedAt  DateTime?
+
+  // 관계
+  histories       CompetitorHistory[]
+
+  createdAt       DateTime @default(now())
+
+  @@index([storeId])
+}
+
+enum CompetitorType {
+  AUTO
+  USER_SET
+  CROSS_INDUSTRY
+}
+
+// ===== 키워드 =====
+model StoreKeyword {
+  id              String   @id @default(cuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id])
+
+  keyword         String
+  monthlySearchVolume Int?
+  competitorCount Int?
+  currentRank     Int?
+  previousRank    Int?
+
+  type            KeywordType @default(AI_RECOMMENDED)
+
+  trendDirection  TrendDirection?
+  trendPercentage Float?
+
+  lastCheckedAt   DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([storeId, keyword])
+  @@index([storeId])
+}
+
+enum KeywordType {
+  MAIN
+  AI_RECOMMENDED
+  HIDDEN
+  SEASONAL
+  USER_ADDED
+}
+
+enum TrendDirection {
+  UP
+  DOWN
+  STABLE
+}
+
+// ===== 오늘 장사 브리핑 =====
+model DailyBriefing {
+  id              String   @id @default(cuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id])
+
+  date            DateTime @db.Date
+  summary         String
+  trends          Json
+  actions         Json
+  competitorAlert Json?
+  seasonalInfo    Json?
+
+  aiModel         String?
+  generatedAt     DateTime @default(now())
+
+  @@unique([storeId, date])
+  @@index([storeId, date])
+}
+
+// ===== AI 생성 콘텐츠 =====
+model GeneratedContent {
+  id              String   @id @default(cuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id])
+
+  type            ContentType
+  title           String
+  body            String   @db.Text
+  keywords        String[]
+
+  status          ContentStatus @default(DRAFT)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([storeId, type])
+}
+
+enum ContentType {
+  PLACE_POST
+  REVIEW_REPLY
+  SNS_POST
+  BLOG_POST
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// ===== 알림 =====
+model Notification {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+
+  type            String
+  title           String
+  message         String
+  data            Json?
+  isRead          Boolean  @default(false)
+
+  createdAt       DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+// ===== 시즌/이벤트 =====
+model SeasonalEvent {
+  id              String   @id @default(cuid())
+  name            String
+  region          String?
+  startDate       DateTime @db.Date
+  endDate         DateTime @db.Date
+  keywords        String[]
+  description     String?
+
+  @@index([startDate, endDate])
+  @@index([region])
+}
+
+// ===== 키워드 순위 히스토리 =====
+model KeywordRankHistory {
+  id            String   @id @default(cuid())
+  storeId       String
+  store         Store    @relation(fields: [storeId], references: [id])
+  keyword       String
+  rank          Int?     // null이면 50위 밖
+  totalResults  Int?
+  topPlaces     Json?    // 상위 10개 매장 스냅샷
+  checkedAt     DateTime @default(now())
+
+  @@index([storeId, keyword, checkedAt])
+  @@index([storeId, checkedAt])
+}
+
+// ===== 경쟁 매장 히스토리 =====
+model CompetitorHistory {
+  id                  String     @id @default(cuid())
+  competitorId        String
+  competitor          Competitor @relation(fields: [competitorId], references: [id])
+  receiptReviewCount  Int?
+  blogReviewCount     Int?
+  saveCount           Int?
+  recordedAt          DateTime   @default(now())
+
+  @@index([competitorId, recordedAt])
+}

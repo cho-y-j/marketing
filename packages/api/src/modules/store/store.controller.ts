@@ -1,0 +1,67 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
+import { StoreService } from "./store.service";
+import { CreateStoreDto, UpdateStoreDto } from "./dto/store.dto";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { StoreSetupService } from "../../providers/data/store-setup.service";
+
+@ApiTags("매장")
+@Controller("stores")
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth()
+export class StoreController {
+  constructor(
+    private storeService: StoreService,
+    private storeSetup: StoreSetupService,
+  ) {}
+
+  @Post()
+  @ApiOperation({ summary: "매장 등록" })
+  create(@Req() req: any, @Body() dto: CreateStoreDto) {
+    return this.storeService.create(req.user.id, dto);
+  }
+
+  @Get()
+  @ApiOperation({ summary: "내 매장 목록" })
+  findAll(@Req() req: any) {
+    return this.storeService.findAllByUser(req.user.id);
+  }
+
+  @Get(":id")
+  @ApiOperation({ summary: "매장 상세" })
+  findOne(@Param("id") id: string, @Req() req: any) {
+    return this.storeService.findOne(id, req.user.id);
+  }
+
+  @Put(":id")
+  @ApiOperation({ summary: "매장 수정" })
+  update(
+    @Param("id") id: string,
+    @Req() req: any,
+    @Body() dto: UpdateStoreDto,
+  ) {
+    return this.storeService.update(id, req.user.id, dto);
+  }
+
+  @Delete(":id")
+  @ApiOperation({ summary: "매장 삭제" })
+  remove(@Param("id") id: string, @Req() req: any) {
+    return this.storeService.remove(id, req.user.id);
+  }
+
+  @Post(":id/setup")
+  @ApiOperation({ summary: "매장 자동 셋업 (AI 키워드 + 경쟁매장 + 검색량)" })
+  setup(@Param("id") id: string) {
+    return this.storeSetup.autoSetup(id);
+  }
+}
