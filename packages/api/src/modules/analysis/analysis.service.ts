@@ -1,16 +1,31 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { AIProvider } from "../../providers/ai/ai.provider";
+import { NaverSearchadProvider } from "../../providers/naver/naver-searchad.provider";
 import { ANALYSIS_SYSTEM_PROMPT } from "../../providers/ai/prompts";
+import { chromium } from "playwright-core";
+import { execFileSync } from "child_process";
 
 @Injectable()
 export class AnalysisService {
   private readonly logger = new Logger(AnalysisService.name);
+  private readonly chromePath: string;
 
   constructor(
     private prisma: PrismaService,
     private ai: AIProvider,
-  ) {}
+    private searchad: NaverSearchadProvider,
+  ) {
+    const paths = [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/usr/bin/google-chrome",
+    ];
+    let found = "";
+    for (const p of paths) {
+      try { execFileSync("test", ["-f", p]); found = p; break; } catch {}
+    }
+    this.chromePath = found;
+  }
 
   // 최신 분석 결과 조회
   async getLatestAnalysis(storeId: string) {
@@ -54,6 +69,10 @@ export class AnalysisService {
 
     this.logger.log(`AI 분석 시작: ${store.name}`);
 
+    // 내 매장 실데이터 수집 (리뷰 수 + 검색량)
+    const liveData = await this.collectMyStoreData(store.name);
+    this.logger.log(`내 매장 실데이터: 영수증=${liveData.receiptReviewCount} 블로그=${liveData.blogReviewCount} 검색=${liveData.dailySearchVolume}/일`);
+
     // 순위 히스토리 조회
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -70,10 +89,10 @@ export class AnalysisService {
         category: store.category,
         district: store.district,
         address: store.address,
-        receiptReviews: lastAnalysis?.receiptReviewCount || 0,
-        blogReviews: lastAnalysis?.blogReviewCount || 0,
-        dailySearch: lastAnalysis?.dailySearchVolume || 0,
-        saveCount: lastAnalysis?.saveCount || 0,
+        receiptReviews: liveData.receiptReviewCount || lastAnalysis?.receiptReviewCount || 0,
+        blogReviews: liveData.blogReviewCount || lastAnalysis?.blogReviewCount || 0,
+        dailySearch: liveData.dailySearchVolume || lastAnalysis?.dailySearchVolume || 0,
+        saveCount: liveData.saveCount || lastAnalysis?.saveCount || 0,
       },
       keywords: store.keywords.map((kw) => ({
         keyword: kw.keyword,
@@ -122,10 +141,10 @@ export class AnalysisService {
     const analysis = await this.prisma.storeAnalysis.create({
       data: {
         storeId,
-        receiptReviewCount: lastAnalysis?.receiptReviewCount,
-        blogReviewCount: lastAnalysis?.blogReviewCount,
-        dailySearchVolume: lastAnalysis?.dailySearchVolume,
-        saveCount: lastAnalysis?.saveCount,
+        receiptReviewCount: liveData.receiptReviewCount || lastAnalysis?.receiptReviewCount || 0,
+        blogReviewCount: liveData.blogReviewCount || lastAnalysis?.blogReviewCount || 0,
+        dailySearchVolume: liveData.dailySearchVolume || lastAnalysis?.dailySearchVolume || 0,
+        saveCount: liveData.saveCount || lastAnalysis?.saveCount || 0,
         aiAnalysis: parsed,
         strengths: parsed.strengths || [],
         weaknesses: parsed.weaknesses || [],
@@ -233,5 +252,82 @@ export class AnalysisService {
     );
 
     return Math.min(100, Math.max(0, finalScore));
+  }
+
+  // 내 매장 실데이터 수집 (Playwright + 검색광고 API)
+  private async collectMyStoreData(storeName: string): Promise<{
+    receiptReviewCount: number;
+    blogReviewCount: number;
+    dailySearchVolume: number;
+    saveCount: number;
+  }> {
+    let receiptReviewCount = 0;
+    let blogReviewCount = 0;
+    let dailySearchVolume = 0;
+    let saveCount = 0;
+
+    // 1. 검색광고 API로 일 검색량
+    try {
+      const stats = await this.searchad.getKeywordStats([storeName.replace(/\s+/g, "")]);
+      if (stats.length > 0) {
+        dailySearchVolume = Math.round(this.searchad.getTotalMonthlySearch(stats[0]) / 30);
+      }
+    } catch {}
+
+    // 2. Playwright로 리뷰 수 스크래핑
+    if (this.chromePath) {
+      try {
+        const browser = await chromium.launch({
+          headless: true,
+          executablePath: this.chromePath,
+          args: ["--no-sandbox"],
+        });
+        const page = await browser.newPage();
+        await page.goto(
+          `https://search.naver.com/search.naver?query=${encodeURIComponent(storeName)}`,
+          { waitUntil: "networkidle", timeout: 15000 },
+        );
+        const html = await page.content();
+        await browser.close();
+
+        // 영수증(방문자) 리뷰 수
+        const reviewPatterns = [
+          /"reviewCount":(\d+)/,
+          /"totalReviewCount":(\d+)/,
+          /"visitorReviewCount":(\d+)/,
+          /리뷰\s*(\d[\d,]*)/,
+          /방문자리뷰\s*(\d[\d,]*)/,
+        ];
+        for (const p of reviewPatterns) {
+          const m = html.match(p);
+          if (m) { receiptReviewCount = parseInt(m[1].replace(/,/g, "")); break; }
+        }
+
+        // 블로그 리뷰 수
+        const blogPatterns = [
+          /"blogReviewCount":(\d+)/,
+          /블로그리뷰\s*(\d[\d,]*)/,
+          /블로그\s*(\d[\d,]*)/,
+        ];
+        for (const p of blogPatterns) {
+          const m = html.match(p);
+          if (m) { blogReviewCount = parseInt(m[1].replace(/,/g, "")); break; }
+        }
+
+        // 저장 수
+        const savePatterns = [
+          /"saveCount":(\d+)/,
+          /저장\s*(\d[\d,]*)/,
+        ];
+        for (const p of savePatterns) {
+          const m = html.match(p);
+          if (m) { saveCount = parseInt(m[1].replace(/,/g, "")); break; }
+        }
+      } catch (e: any) {
+        this.logger.warn(`내 매장 스크래핑 실패: ${e.message}`);
+      }
+    }
+
+    return { receiptReviewCount, blogReviewCount, dailySearchVolume, saveCount };
   }
 }
