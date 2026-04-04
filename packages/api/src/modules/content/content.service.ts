@@ -39,6 +39,7 @@ export class ContentService {
       where: { id: storeId },
       include: {
         keywords: { orderBy: { monthlySearchVolume: "desc" }, take: 5 },
+        analyses: { take: 1, orderBy: { analyzedAt: "desc" } },
       },
     });
     if (!store) throw new NotFoundException("매장을 찾을 수 없습니다");
@@ -53,6 +54,7 @@ export class ContentService {
       where: { startDate: { lte: today }, endDate: { gte: today } },
     });
 
+    const latestAnalysis = store.analyses?.[0];
     const userPrompt = JSON.stringify({
       store: {
         name: store.name,
@@ -60,6 +62,9 @@ export class ContentService {
         subCategory: store.subCategory,
         district: store.district,
         address: store.address,
+        competitiveScore: store.competitiveScore,
+        receiptReviews: latestAnalysis?.receiptReviewCount ?? 0,
+        blogReviews: latestAnalysis?.blogReviewCount ?? 0,
       },
       targetKeywords: dto.targetKeywords || store.keywords.map((kw) => kw.keyword),
       seasonalKeywords: seasonalEvents.flatMap((e) => e.keywords),

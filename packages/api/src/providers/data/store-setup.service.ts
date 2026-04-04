@@ -107,14 +107,27 @@ export class StoreSetupService {
         args: ["--no-sandbox"],
       });
       const page = await browser.newPage();
-      await page.goto(
-        `https://search.naver.com/search.naver?query=${encodeURIComponent(storeName)}`,
-        { waitUntil: "networkidle", timeout: 15000 },
-      );
-      const html = await page.content();
+
+      // 여러 검색어로 시도 — 가장 정확한 결과를 찾기 위해
+      let html = "";
+      const queries = [
+        storeName, // "남해꼼장어 청주 가경동" 같은 힌트 포함 검색어
+        `${storeName.split(" ")[0]} 플레이스 ${placeId}`, // 매장명 + 플레이스ID
+      ];
+
+      for (const query of queries) {
+        await page.goto(
+          `https://search.naver.com/search.naver?query=${encodeURIComponent(query)}`,
+          { waitUntil: "networkidle", timeout: 15000 },
+        );
+        html = await page.content();
+        // 주소가 발견되면 성공
+        if (html.match(/"address":"[^"]+"/)) break;
+      }
       await browser.close();
 
-      // 주소 추출
+      // 주소 추출 (여러 패턴)
+      const allAddrs = [...html.matchAll(/"(?:road)?[Aa]ddress":"([^"]+)"/g)].map((m) => m[1]);
       const addrMatch = html.match(/"address":"([^"]+)"/);
       const roadMatch = html.match(/"roadAddress":"([^"]+)"/);
       const catMatch = html.match(/"category(?:Name)?":"([^"]+)"/);

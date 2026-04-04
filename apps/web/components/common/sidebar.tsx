@@ -10,11 +10,13 @@ import {
   FileText,
   Settings,
   PlusCircle,
+  Store,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "대시보드", icon: LayoutDashboard },
+  { href: "/stores", label: "내 매장", icon: Store },
   { href: "/analysis", label: "매장 분석", icon: BarChart3 },
   { href: "/competitors", label: "경쟁 비교", icon: Users },
   { href: "/keywords", label: "키워드", icon: Search },
