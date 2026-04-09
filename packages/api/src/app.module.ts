@@ -9,11 +9,13 @@ import { CompetitorModule } from "./modules/competitor/competitor.module";
 import { KeywordModule } from "./modules/keyword/keyword.module";
 import { BriefingModule } from "./modules/briefing/briefing.module";
 import { ContentModule } from "./modules/content/content.module";
+import { ReviewModule } from "./modules/review/review.module";
 import { SubscriptionModule } from "./modules/subscription/subscription.module";
 import { NotificationModule } from "./modules/notification/notification.module";
 import { AIModule } from "./providers/ai/ai.module";
 import { NaverModule } from "./providers/naver/naver.module";
 import { DataModule } from "./providers/data/data.module";
+import { ActionModule } from "./modules/action/action.module";
 import { JobsModule } from "./jobs/jobs.module";
 
 @Module({
@@ -34,8 +36,10 @@ import { JobsModule } from "./jobs/jobs.module";
     KeywordModule,
     BriefingModule,
     ContentModule,
+    ReviewModule,
     SubscriptionModule,
     NotificationModule,
+    ActionModule,
     JobsModule,
   ],
   controllers: [],

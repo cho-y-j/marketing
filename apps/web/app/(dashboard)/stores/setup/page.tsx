@@ -5,8 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiClient } from "@/lib/api-client";
+import { useSetupStatus } from "@/hooks/useStore";
 import { toast } from "sonner";
-import { Check, Loader2, Search, Users, Sparkles, BarChart3, ArrowRight, AlertCircle } from "lucide-react";
+import { Check, Loader2, Search, Users, Sparkles, BarChart3, ArrowRight, AlertCircle, RotateCcw } from "lucide-react";
 
 export default function SetupPageWrapper() {
   return <Suspense fallback={<div className="flex justify-center py-16"><Loader2 className="animate-spin" /></div>}><SetupPage /></Suspense>;
@@ -27,6 +28,9 @@ function SetupPage() {
   const storeId = searchParams.get("id") || "";
   const storeName = searchParams.get("name") || "매장";
 
+  // 백엔드 셋업 상태 폴링 (RUNNING 이면 2초 간격)
+  const { data: setupData } = useSetupStatus(storeId);
+
   const [steps, setSteps] = useState<Step[]>([
     { id: "setup", label: "매장 정보 수집", desc: "플레이스에서 주소/카테고리 자동 수집", icon: Search, status: "pending" },
     { id: "keywords", label: "AI 키워드 생성", desc: "실제 주소 기반 검색 키워드 + 검색량 조회", icon: Search, status: "pending" },
@@ -34,41 +38,58 @@ function SetupPage() {
     { id: "analysis", label: "AI 매장 분석", desc: "경쟁력 점수 + 강점/약점 진단", icon: BarChart3, status: "pending" },
     { id: "briefing", label: "오늘의 브리핑 생성", desc: "오늘 할 일 3가지 AI 생성", icon: Sparkles, status: "pending" },
   ]);
-  const [allDone, setAllDone] = useState(false);
-  const [hasError, setHasError] = useState(false);
+  const [phase, setPhase] = useState<"setup" | "analysis" | "briefing" | "done" | "error">("setup");
 
   const updateStep = (id: string, update: Partial<Step>) => {
     setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, ...update } : s)));
   };
 
+  // 백엔드 셋업 상태에 따라 프론트 스텝 업데이트
   useEffect(() => {
-    if (!storeId) return;
-    runSetup();
-  }, [storeId]);
+    if (!setupData) return;
 
-  const runSetup = async () => {
-    // 1단계: 백엔드 autoSetup (플레이스 정보 수집 → AI 키워드 → 경쟁매장 → 검색량)
-    updateStep("setup", { status: "running" });
-    updateStep("keywords", { status: "running" });
-    updateStep("competitors", { status: "running" });
-
-    try {
-      await apiClient.post(`/stores/${storeId}/setup`);
-      updateStep("setup", { status: "done", result: "주소/카테고리 수집 완료" });
-      updateStep("keywords", { status: "done", result: "AI가 키워드를 자동 생성했습니다" });
-      updateStep("competitors", { status: "done", result: "경쟁 매장을 찾았습니다" });
-    } catch (e: any) {
-      updateStep("setup", { status: "done", result: "기본 정보 확인됨" });
-      updateStep("keywords", { status: "done", result: "기본 키워드 설정됨" });
-      updateStep("competitors", { status: "done", result: "나중에 추가할 수 있습니다" });
+    if (setupData.status === "RUNNING") {
+      // 현재 단계에 따라 UI 업데이트
+      const step = setupData.step || "";
+      if (step.includes("매장 정보") || step.includes("네이버")) {
+        updateStep("setup", { status: "running" });
+      } else if (step.includes("키워드")) {
+        updateStep("setup", { status: "done", result: "매장 정보 수집 완료" });
+        updateStep("keywords", { status: "running" });
+      } else if (step.includes("경쟁")) {
+        updateStep("setup", { status: "done", result: "매장 정보 수집 완료" });
+        updateStep("keywords", { status: "done", result: `키워드 ${setupData.keywordCount}개 생성` });
+        updateStep("competitors", { status: "running" });
+      }
     }
 
-    // 2단계: 검색량 새로고침
-    try {
-      await apiClient.post(`/stores/${storeId}/keywords/refresh-volume`);
-    } catch {}
+    if (setupData.status === "COMPLETED" && phase === "setup") {
+      updateStep("setup", { status: "done", result: "매장 정보 수집 완료" });
+      updateStep("keywords", { status: "done", result: `키워드 ${setupData.keywordCount}개 생성` });
+      updateStep("competitors", { status: "done", result: `경쟁사 ${setupData.competitorCount}개 발견` });
+      setPhase("analysis");
+      runAnalysisAndBriefing();
+    }
 
-    // 3단계: AI 분석
+    if (setupData.status === "FAILED") {
+      updateStep("setup", {
+        status: setupData.keywordCount > 0 ? "done" : "error",
+        result: setupData.keywordCount > 0 ? "부분 완료" : (setupData.error || "실패"),
+      });
+      if (setupData.keywordCount > 0) {
+        updateStep("keywords", { status: "done", result: `키워드 ${setupData.keywordCount}개 생성` });
+      } else {
+        updateStep("keywords", { status: "error", result: "키워드 생성 실패" });
+      }
+      if (setupData.competitorCount > 0) {
+        updateStep("competitors", { status: "done", result: `경쟁사 ${setupData.competitorCount}개 발견` });
+      }
+      setPhase("error");
+    }
+  }, [setupData?.status, setupData?.step]);
+
+  const runAnalysisAndBriefing = async () => {
+    // AI 분석 실행
     updateStep("analysis", { status: "running" });
     try {
       const { data } = await apiClient.post(`/stores/${storeId}/analysis/run`);
@@ -78,7 +99,7 @@ function SetupPage() {
       updateStep("analysis", { status: "done", result: "대시보드에서 실행 가능" });
     }
 
-    // 4단계: 브리핑 생성
+    // 브리핑 생성
     updateStep("briefing", { status: "running" });
     try {
       await apiClient.post(`/stores/${storeId}/briefing/generate`);
@@ -87,20 +108,34 @@ function SetupPage() {
       updateStep("briefing", { status: "done", result: "대시보드에서 생성 가능" });
     }
 
-    // 5단계: 경쟁매장 데이터 수집 (백그라운드)
-    try {
-      await apiClient.post(`/stores/${storeId}/competitors/refresh`);
-    } catch {}
+    // 경쟁매장 데이터 수집 (백그라운드)
+    apiClient.post(`/stores/${storeId}/competitors/refresh`).catch(() => {});
 
-    setAllDone(true);
+    setPhase("done");
     toast.success("매장 셋업이 완료되었습니다!");
+  };
+
+  const handleRetry = async () => {
+    setPhase("setup");
+    setSteps((prev) => prev.map((s) => ({ ...s, status: "pending" as const, result: undefined })));
+    try {
+      await apiClient.post(`/stores/${storeId}/setup`);
+    } catch {
+      toast.error("재시도 실패");
+    }
   };
 
   return (
     <div className="max-w-lg mx-auto mt-8">
       <div className="text-center mb-6">
         <h2 className="text-xl font-bold">&ldquo;{storeName}&rdquo; 준비 중</h2>
-        <p className="text-sm text-muted-foreground mt-1">AI가 매장을 분석하고 있어요. 잠시만 기다려주세요.</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          {phase === "error"
+            ? "셋업 중 문제가 발생했습니다. 재시도해주세요."
+            : phase === "done"
+              ? "모든 준비가 완료되었습니다!"
+              : "AI가 매장을 분석하고 있어요. 잠시만 기다려주세요."}
+        </p>
       </div>
 
       <Card>
@@ -123,7 +158,10 @@ function SetupPage() {
                 )}
               </div>
               <div className="flex-1">
-                <p className={`text-sm font-medium ${step.status === "done" ? "text-foreground" : "text-muted-foreground"}`}>
+                <p className={`text-sm font-medium ${
+                  step.status === "done" ? "text-foreground" :
+                  step.status === "error" ? "text-red-600" : "text-muted-foreground"
+                }`}>
                   {step.label}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -135,9 +173,15 @@ function SetupPage() {
         </CardContent>
       </Card>
 
-      {allDone && (
+      {phase === "done" && (
         <Button className="w-full mt-4" size="lg" onClick={() => router.push("/")}>
           대시보드에서 확인하기 <ArrowRight size={16} className="ml-2" />
+        </Button>
+      )}
+
+      {phase === "error" && (
+        <Button className="w-full mt-4" size="lg" variant="outline" onClick={handleRetry}>
+          <RotateCcw size={16} className="mr-2" /> 다시 시도하기
         </Button>
       )}
     </div>

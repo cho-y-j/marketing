@@ -12,6 +12,7 @@ import {
   PlusCircle,
   Store,
   Sparkles,
+  MessageSquareReply,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,7 @@ const navItems = [
   { href: "/competitors", label: "경쟁 비교", icon: Users, color: "text-rose-500" },
   { href: "/keywords", label: "키워드", icon: Search, color: "text-emerald-500" },
   { href: "/content", label: "콘텐츠", icon: FileText, color: "text-purple-500" },
+  { href: "/reviews", label: "리뷰 답글", icon: MessageSquareReply, color: "text-cyan-500" },
   { href: "/settings", label: "설정", icon: Settings, color: "text-gray-500" },
 ];
 

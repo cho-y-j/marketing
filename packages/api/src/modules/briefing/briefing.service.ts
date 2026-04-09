@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
+import { CacheService } from "../../common/cache.service";
 import { AIProvider } from "../../providers/ai/ai.provider";
 import { BRIEFING_SYSTEM_PROMPT } from "../../providers/ai/prompts";
 
@@ -10,10 +11,15 @@ export class BriefingService {
   constructor(
     private prisma: PrismaService,
     private ai: AIProvider,
+    private cache: CacheService,
   ) {}
 
-  // 오늘 브리핑 조회
+  // 오늘 브리핑 조회 — Redis 캐시 우선, 미스 시 DB
   async getTodayBriefing(storeId: string) {
+    const cacheKey = CacheService.keys.briefingToday(storeId);
+    const cached = await this.cache.get<any>(cacheKey);
+    if (cached) return cached;
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -22,6 +28,9 @@ export class BriefingService {
     });
     if (!briefing)
       throw new NotFoundException("오늘의 브리핑이 아직 생성되지 않았습니다");
+
+    // 다음 새벽까지 캐시 (TTL 24h)
+    await this.cache.set(cacheKey, briefing, 86400);
     return briefing;
   }
 
@@ -104,6 +113,18 @@ export class BriefingService {
       };
     });
 
+    // 경쟁사 알림 조회 (최근 24시간 내 미읽은 것)
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+    const competitorAlerts = await this.prisma.competitorAlert.findMany({
+      where: {
+        storeId,
+        createdAt: { gte: oneDayAgo },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    });
+
     // 시즌 정보 조회
     const seasonalEvents = await this.prisma.seasonalEvent.findMany({
       where: {
@@ -148,6 +169,12 @@ export class BriefingService {
         rankChange: rankChanges[kw.keyword] ?? null,
       })),
       competitors: competitorChanges,
+      competitorAlerts: competitorAlerts.map((a) => ({
+        competitor: a.competitorName,
+        type: a.alertType,
+        detail: a.detail,
+        recommendation: a.aiRecommendation,
+      })),
       seasonalEvents: seasonalEvents.map((e) => ({
         name: e.name,
         keywords: e.keywords,
@@ -157,27 +184,27 @@ export class BriefingService {
     // AI 브리핑 생성
     const aiResponse = await this.ai.analyze(BRIEFING_SYSTEM_PROMPT, userPrompt);
 
-    // JSON 파싱
+    // JSON 파싱 — 실패 시 명시적 에러 (하드코딩 위안 메시지 금지)
     let parsed: any;
     try {
       const jsonMatch = aiResponse.content.match(/\{[\s\S]*\}/);
       parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiResponse.content);
-    } catch {
-      this.logger.warn("브리핑 JSON 파싱 실패, 기본 응답 생성");
-      parsed = {
-        greeting: `사장님, 좋은 ${["일", "월", "화", "수", "목", "금", "토"][today.getDay()]}요일이에요!`,
-        trends: [],
-        competitorAlert: null,
-        todayActions: [
-          {
-            order: 1,
-            action: "네이버 플레이스 게시글을 올려보세요",
-            reason: "꾸준한 게시글이 검색 노출에 도움이 됩니다",
-            howTo: "매장 소식이나 신메뉴를 짧게 소개해보세요",
-          },
-        ],
-        motivation: "오늘도 화이팅이에요!",
-      };
+    } catch (e: any) {
+      this.logger.error(
+        `브리핑 JSON 파싱 실패 [${store.name}] provider=${aiResponse.provider}: ${e.message}`,
+      );
+      this.logger.error(`AI 응답 원문 (앞 500자): ${aiResponse.content.slice(0, 500)}`);
+      throw new Error(
+        `AI 브리핑 응답이 유효한 JSON이 아닙니다 (provider=${aiResponse.provider}). ` +
+          `재시도 또는 프롬프트 검토 필요.`,
+      );
+    }
+
+    // 응답 구조 최소 검증
+    if (!parsed.todayActions || !Array.isArray(parsed.todayActions) || parsed.todayActions.length === 0) {
+      throw new Error(
+        `AI 브리핑 응답에 todayActions 배열이 없거나 비어있음 (provider=${aiResponse.provider})`,
+      );
     }
 
     // 브리핑 저장 (upsert)
@@ -205,6 +232,13 @@ export class BriefingService {
         aiModel: aiResponse.provider,
       },
     });
+
+    // 캐시에 즉시 반영 (배치 후 사용자 첫 접속 즉시 응답)
+    await this.cache.set(
+      CacheService.keys.briefingToday(storeId),
+      briefing,
+      86400,
+    );
 
     this.logger.log(
       `브리핑 생성 완료: ${store.name} (provider: ${aiResponse.provider})`,

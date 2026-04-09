@@ -40,9 +40,10 @@ export class StoreService {
       },
     });
 
-    // 비동기 자동 셋업 (플레이스 정보 수집 → AI 키워드 → 경쟁매장 → 검색량)
+    // 비동기 자동 셋업 — 실패해도 store는 반환, 상태는 DB에 기록됨
     this.storeSetup.autoSetup(store.id).catch((e) => {
-      this.logger.warn(`자동 셋업 실패: ${e.message}`);
+      this.logger.warn(`자동 셋업 실패 [${store.name}]: ${e.message}`);
+      // setupStatus=FAILED 는 autoSetup 내부에서 이미 기록됨
     });
 
     return store;

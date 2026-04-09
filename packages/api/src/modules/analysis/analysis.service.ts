@@ -1,39 +1,38 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
+import { CacheService } from "../../common/cache.service";
 import { AIProvider } from "../../providers/ai/ai.provider";
 import { NaverSearchadProvider } from "../../providers/naver/naver-searchad.provider";
+import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 import { ANALYSIS_SYSTEM_PROMPT } from "../../providers/ai/prompts";
-import { chromium } from "playwright-core";
-import { execFileSync } from "child_process";
+import { PlaceIndexService } from "./place-index.service";
 
 @Injectable()
 export class AnalysisService {
   private readonly logger = new Logger(AnalysisService.name);
-  private readonly chromePath: string;
 
   constructor(
     private prisma: PrismaService,
     private ai: AIProvider,
     private searchad: NaverSearchadProvider,
-  ) {
-    const paths = [
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/usr/bin/google-chrome",
-    ];
-    let found = "";
-    for (const p of paths) {
-      try { execFileSync("test", ["-f", p]); found = p; break; } catch {}
-    }
-    this.chromePath = found;
-  }
+    private naverPlace: NaverPlaceProvider,
+    private cache: CacheService,
+    private placeIndex: PlaceIndexService,
+  ) {}
 
-  // 최신 분석 결과 조회
+  // 최신 분석 결과 조회 — Redis 캐시 우선
   async getLatestAnalysis(storeId: string) {
+    const cacheKey = CacheService.keys.analysisLatest(storeId);
+    const cached = await this.cache.get<any>(cacheKey);
+    if (cached) return cached;
+
     const analysis = await this.prisma.storeAnalysis.findFirst({
       where: { storeId },
       orderBy: { analyzedAt: "desc" },
     });
     if (!analysis) throw new NotFoundException("분석 결과가 없습니다");
+
+    await this.cache.set(cacheKey, analysis, 86400);
     return analysis;
   }
 
@@ -70,8 +69,23 @@ export class AnalysisService {
     this.logger.log(`AI 분석 시작: ${store.name}`);
 
     // 내 매장 실데이터 수집 (리뷰 수 + 검색량)
-    const liveData = await this.collectMyStoreData(store.name);
-    this.logger.log(`내 매장 실데이터: 영수증=${liveData.receiptReviewCount} 블로그=${liveData.blogReviewCount} 검색=${liveData.dailySearchVolume}/일`);
+    const liveData = await this.collectMyStoreData(
+      store.name,
+      store.naverPlaceId ?? undefined,
+    );
+    this.logger.log(
+      `내 매장 실데이터 [${liveData.source}]: 영수증=${liveData.receiptReviewCount} 블로그=${liveData.blogReviewCount} 검색=${liveData.dailySearchVolume}/일${
+        liveData.error ? ` (error=${liveData.error})` : ""
+      }`,
+    );
+
+    // 데이터 소스가 'failed' 이고 직전 분석도 없으면 분석 중단 — 0 채워서 가짜 점수 만드는 것 금지
+    const lastAnalysisGuard = store.analyses[0];
+    if (liveData.source === "failed" && !lastAnalysisGuard) {
+      throw new NotFoundException(
+        `매장 실데이터 수집 실패 — Chrome/Playwright 또는 네이버 페이지 접근 불가. 사유: ${liveData.error}`,
+      );
+    }
 
     // 순위 히스토리 조회
     const sevenDaysAgo = new Date();
@@ -83,16 +97,32 @@ export class AnalysisService {
 
     // 데이터 컨텍스트 구성 (강화)
     const lastAnalysis = store.analyses[0];
+
+    // 실데이터 우선, 없으면 직전 분석. null 은 명시적으로 null 로 전달 (0 으로 위장 금지)
+    const pick = <T>(live: T | null, prev: T | null | undefined): T | null =>
+      live !== null && live !== undefined
+        ? live
+        : prev !== null && prev !== undefined
+          ? prev
+          : null;
+
+    const finalReceiptReviews = pick(liveData.receiptReviewCount, lastAnalysis?.receiptReviewCount);
+    const finalBlogReviews = pick(liveData.blogReviewCount, lastAnalysis?.blogReviewCount);
+    const finalDailySearch = pick(liveData.dailySearchVolume, lastAnalysis?.dailySearchVolume);
+    const finalSaveCount = pick(liveData.saveCount, lastAnalysis?.saveCount);
+
     const userPrompt = JSON.stringify({
       store: {
         name: store.name,
         category: store.category,
         district: store.district,
         address: store.address,
-        receiptReviews: liveData.receiptReviewCount || lastAnalysis?.receiptReviewCount || 0,
-        blogReviews: liveData.blogReviewCount || lastAnalysis?.blogReviewCount || 0,
-        dailySearch: liveData.dailySearchVolume || lastAnalysis?.dailySearchVolume || 0,
-        saveCount: liveData.saveCount || lastAnalysis?.saveCount || 0,
+        receiptReviews: finalReceiptReviews,
+        blogReviews: finalBlogReviews,
+        dailySearch: finalDailySearch,
+        saveCount: finalSaveCount,
+        dataSource: liveData.source,
+        dataError: liveData.error ?? null,
       },
       keywords: store.keywords.map((kw) => ({
         keyword: kw.keyword,
@@ -118,33 +148,37 @@ export class AnalysisService {
     // AI 분석 호출
     const aiResponse = await this.ai.analyze(ANALYSIS_SYSTEM_PROMPT, userPrompt);
 
-    // JSON 파싱
+    // JSON 파싱 — 실패 시 명시적 에러
     let parsed: any;
     try {
       const jsonMatch = aiResponse.content.match(/\{[\s\S]*\}/);
       parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiResponse.content);
-    } catch {
-      this.logger.warn("AI 응답 JSON 파싱 실패, 원본 저장");
-      parsed = {
-        competitiveScore: 50,
-        summary: aiResponse.content.slice(0, 200),
-        strengths: [],
-        weaknesses: [],
-        recommendations: [],
-      };
+    } catch (e: any) {
+      this.logger.error(
+        `분석 JSON 파싱 실패 [${store.name}] provider=${aiResponse.provider}: ${e.message}`,
+      );
+      this.logger.error(`AI 응답 원문 (앞 500자): ${aiResponse.content.slice(0, 500)}`);
+      throw new Error(
+        `AI 분석 응답이 유효한 JSON이 아닙니다 (provider=${aiResponse.provider})`,
+      );
+    }
+    if (typeof parsed.competitiveScore !== "number") {
+      throw new Error(
+        `AI 분석 응답에 competitiveScore 가 없음 (provider=${aiResponse.provider})`,
+      );
     }
 
     // 경쟁력 점수 (5가지 지표 가중치)
     const score = this.calculateFinalScore(parsed, lastAnalysis, store.competitors, store.keywords, rankHistory);
 
-    // 분석 결과 저장
+    // 분석 결과 저장 — null 은 null 로 저장 (DB 컬럼 모두 nullable)
     const analysis = await this.prisma.storeAnalysis.create({
       data: {
         storeId,
-        receiptReviewCount: liveData.receiptReviewCount || lastAnalysis?.receiptReviewCount || 0,
-        blogReviewCount: liveData.blogReviewCount || lastAnalysis?.blogReviewCount || 0,
-        dailySearchVolume: liveData.dailySearchVolume || lastAnalysis?.dailySearchVolume || 0,
-        saveCount: liveData.saveCount || lastAnalysis?.saveCount || 0,
+        receiptReviewCount: finalReceiptReviews,
+        blogReviewCount: finalBlogReviews,
+        dailySearchVolume: finalDailySearch,
+        saveCount: finalSaveCount,
         aiAnalysis: parsed,
         strengths: parsed.strengths || [],
         weaknesses: parsed.weaknesses || [],
@@ -159,8 +193,25 @@ export class AnalysisService {
       data: { competitiveScore: score, lastAnalyzedAt: new Date() },
     });
 
+    // N1/N2/N3 자체 산출 지수 채우기
+    try {
+      await this.placeIndex.computeAndPersist(storeId);
+    } catch (e: any) {
+      this.logger.warn(`N1/N2/N3 산출 실패: ${e.message}`);
+    }
+
+    // 캐시 무효화 + 새 결과 즉시 반영
+    const refreshed = await this.prisma.storeAnalysis.findUnique({
+      where: { id: analysis.id },
+    });
+    await this.cache.set(
+      CacheService.keys.analysisLatest(storeId),
+      refreshed ?? analysis,
+      86400,
+    );
+
     this.logger.log(`AI 분석 완료: ${store.name} (점수: ${score}, provider: ${aiResponse.provider})`);
-    return analysis;
+    return refreshed ?? analysis;
   }
 
   /**
@@ -254,80 +305,91 @@ export class AnalysisService {
     return Math.min(100, Math.max(0, finalScore));
   }
 
-  // 내 매장 실데이터 수집 (Playwright + 검색광고 API)
-  private async collectMyStoreData(storeName: string): Promise<{
-    receiptReviewCount: number;
-    blogReviewCount: number;
-    dailySearchVolume: number;
-    saveCount: number;
+  /**
+   * 내 매장 실데이터 수집 (네이버 API 기반).
+   * Chrome/Playwright 불필요 — 서버 환경에 관계없이 동작.
+   *
+   * 결과 source:
+   *  - 'live'    : 모든 핵심 지표 추출 성공
+   *  - 'partial' : 일부 지표만 추출 성공 (나머지는 null)
+   *  - 'failed'  : 추출 0 — caller 가 lastAnalysis 폴백 또는 에러 처리 필요
+   *
+   * 절대 0 으로 가짜 채우지 않는다. null 로 반환해서 호출자가 명시적으로 처리.
+   */
+  private async collectMyStoreData(
+    storeName: string,
+    naverPlaceId?: string,
+  ): Promise<{
+    receiptReviewCount: number | null;
+    blogReviewCount: number | null;
+    dailySearchVolume: number | null;
+    saveCount: number | null;
+    source: "live" | "partial" | "failed";
+    error?: string;
   }> {
-    let receiptReviewCount = 0;
-    let blogReviewCount = 0;
-    let dailySearchVolume = 0;
-    let saveCount = 0;
+    let receiptReviewCount: number | null = null;
+    let blogReviewCount: number | null = null;
+    let dailySearchVolume: number | null = null;
+    let saveCount: number | null = null;
+    let dataError: string | undefined;
 
-    // 1. 검색광고 API로 일 검색량
+    // 1. 검색광고 API → 일 검색량
     try {
-      const stats = await this.searchad.getKeywordStats([storeName.replace(/\s+/g, "")]);
+      const stats = await this.searchad.getKeywordStats([
+        storeName.replace(/\s+/g, ""),
+      ]);
       if (stats.length > 0) {
-        dailySearchVolume = Math.round(this.searchad.getTotalMonthlySearch(stats[0]) / 30);
-      }
-    } catch {}
-
-    // 2. Playwright로 리뷰 수 스크래핑
-    if (this.chromePath) {
-      try {
-        const browser = await chromium.launch({
-          headless: true,
-          executablePath: this.chromePath,
-          args: ["--no-sandbox"],
-        });
-        const page = await browser.newPage();
-        await page.goto(
-          `https://search.naver.com/search.naver?query=${encodeURIComponent(storeName)}`,
-          { waitUntil: "networkidle", timeout: 15000 },
+        dailySearchVolume = Math.round(
+          this.searchad.getTotalMonthlySearch(stats[0]) / 30,
         );
-        const html = await page.content();
-        await browser.close();
-
-        // 영수증(방문자) 리뷰 수
-        const reviewPatterns = [
-          /"reviewCount":(\d+)/,
-          /"totalReviewCount":(\d+)/,
-          /"visitorReviewCount":(\d+)/,
-          /리뷰\s*(\d[\d,]*)/,
-          /방문자리뷰\s*(\d[\d,]*)/,
-        ];
-        for (const p of reviewPatterns) {
-          const m = html.match(p);
-          if (m) { receiptReviewCount = parseInt(m[1].replace(/,/g, "")); break; }
-        }
-
-        // 블로그 리뷰 수
-        const blogPatterns = [
-          /"blogReviewCount":(\d+)/,
-          /블로그리뷰\s*(\d[\d,]*)/,
-          /블로그\s*(\d[\d,]*)/,
-        ];
-        for (const p of blogPatterns) {
-          const m = html.match(p);
-          if (m) { blogReviewCount = parseInt(m[1].replace(/,/g, "")); break; }
-        }
-
-        // 저장 수
-        const savePatterns = [
-          /"saveCount":(\d+)/,
-          /저장\s*(\d[\d,]*)/,
-        ];
-        for (const p of savePatterns) {
-          const m = html.match(p);
-          if (m) { saveCount = parseInt(m[1].replace(/,/g, "")); break; }
-        }
-      } catch (e: any) {
-        this.logger.warn(`내 매장 스크래핑 실패: ${e.message}`);
       }
+    } catch (e: any) {
+      this.logger.warn(`검색광고 API 실패 [${storeName}]: ${e.message}`);
     }
 
-    return { receiptReviewCount, blogReviewCount, dailySearchVolume, saveCount };
+    // 2. 네이버 맵 API → 리뷰 수 + 저장 수 (Chrome 불필요)
+    try {
+      const placeInfo = naverPlaceId
+        ? await this.naverPlace.getPlaceDetail(naverPlaceId)
+        : await this.naverPlace.searchAndGetPlaceInfo(storeName);
+
+      if (placeInfo) {
+        if (placeInfo.visitorReviewCount != null && placeInfo.visitorReviewCount > 0) {
+          receiptReviewCount = placeInfo.visitorReviewCount;
+        }
+        if (placeInfo.blogReviewCount != null && placeInfo.blogReviewCount > 0) {
+          blogReviewCount = placeInfo.blogReviewCount;
+        }
+        if (placeInfo.saveCount != null && placeInfo.saveCount > 0) {
+          saveCount = placeInfo.saveCount;
+        }
+        this.logger.log(
+          `네이버 API 데이터: ${storeName} — 방문자=${receiptReviewCount} 블로그=${blogReviewCount} 저장=${saveCount}`,
+        );
+      } else {
+        dataError = "naver_place_api_no_result";
+        this.logger.warn(`[${storeName}] 네이버 API에서 매장 정보를 찾을 수 없음`);
+      }
+    } catch (e: any) {
+      dataError = `naver_api:${e.message}`;
+      this.logger.warn(`네이버 API 실패 [${storeName}]: ${e.message}`);
+    }
+
+    // source 판정
+    const filledCore =
+      [receiptReviewCount, blogReviewCount].filter((v) => v !== null).length;
+    let source: "live" | "partial" | "failed";
+    if (filledCore === 2) source = "live";
+    else if (filledCore === 1 || dailySearchVolume !== null) source = "partial";
+    else source = "failed";
+
+    return {
+      receiptReviewCount,
+      blogReviewCount,
+      dailySearchVolume,
+      saveCount,
+      source,
+      error: dataError,
+    };
   }
 }

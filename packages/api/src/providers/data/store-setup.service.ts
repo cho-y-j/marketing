@@ -1,149 +1,264 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { NaverSearchadProvider } from "../naver/naver-searchad.provider";
+import { NaverSearchProvider } from "../naver/naver-search.provider";
+import { NaverPlaceProvider } from "../naver/naver-place.provider";
 import { AIProvider } from "../ai/ai.provider";
-import { chromium } from "playwright-core";
-import { execFileSync } from "child_process";
+import { KeywordDiscoveryService } from "../../modules/keyword/keyword-discovery.service";
+import { AnalysisService } from "../../modules/analysis/analysis.service";
+import { BriefingService } from "../../modules/briefing/briefing.service";
 
 @Injectable()
 export class StoreSetupService {
   private readonly logger = new Logger(StoreSetupService.name);
-  private readonly chromePath: string;
 
   constructor(
     private prisma: PrismaService,
     private searchad: NaverSearchadProvider,
+    private naverSearch: NaverSearchProvider,
+    private naverPlace: NaverPlaceProvider,
     private ai: AIProvider,
-  ) {
-    // Chrome 경로 탐지
-    const paths = [
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/usr/bin/google-chrome",
-      "/usr/bin/chromium-browser",
-    ];
-    let found = "";
-    for (const p of paths) {
-      try { execFileSync("test", ["-f", p]); found = p; break; } catch {}
-    }
-    this.chromePath = found;
-  }
+    @Inject(forwardRef(() => KeywordDiscoveryService))
+    private keywordDiscovery: KeywordDiscoveryService,
+    @Inject(forwardRef(() => AnalysisService))
+    private analysisService: AnalysisService,
+    @Inject(forwardRef(() => BriefingService))
+    private briefingService: BriefingService,
+  ) {}
 
   /**
-   * 매장 등록 후 자동 셋업 전체 파이프라인
+   * 매장 등록 후 자동 셋업 전체 파이프라인 (상태 추적 포함)
    * 1. 플레이스에서 실제 주소/카테고리 수집
    * 2. AI가 실제 주소 기반 키워드 자동 생성
    * 3. 같은 지역+업종 경쟁매장 자동 탐색
    * 4. 키워드 검색량 자동 조회
+   * 5. 첫 분석 자동 실행
+   *
+   * 각 단계마다 setupStep 을 DB에 기록 → 프론트에서 진행률 표시 가능.
+   * 실패 시 setupStatus=FAILED + setupError 기록 → 재시도 버튼 지원.
    */
   async autoSetup(storeId: string) {
     const store = await this.prisma.store.findUnique({ where: { id: storeId } });
     if (!store) return;
 
-    this.logger.log(`자동 셋업 시작: ${store.name}`);
-
-    // 1단계: 플레이스에서 실제 정보 수집
-    let placeInfo: any = null;
-    if (store.naverPlaceId) {
-      // 매장명 + 기존 주소/지역 정보를 조합해서 정확하게 검색
-      const searchHint = [store.name, store.district, store.address].filter(Boolean).join(" ");
-      placeInfo = await this.scrapePlace(searchHint, store.naverPlaceId);
-      if (placeInfo) {
-        await this.prisma.store.update({
-          where: { id: storeId },
-          data: {
-            address: placeInfo.address || store.address,
-            category: placeInfo.category || store.category,
-            district: placeInfo.district || store.district,
-            phone: placeInfo.phone || store.phone,
-          },
-        });
-        this.logger.log(`매장 정보 업데이트: ${placeInfo.address}, ${placeInfo.category}`);
-      }
-    }
-
-    // 실제 주소에서 지역 추출
-    const address = placeInfo?.address || store.address || "";
-    const category = placeInfo?.category || store.category || "";
-    const district = this.extractDistrict(address) || store.district || "";
-
-    // 2단계: AI가 실제 주소 기반 키워드 자동 생성
-    const keywords = await this.generateSmartKeywords(store.name, address, category, district);
-    this.logger.log(`AI 키워드 ${keywords.length}개 생성: ${keywords.join(", ")}`);
-
-    for (const kw of keywords) {
-      try {
-        const created = await this.prisma.storeKeyword.create({
-          data: { storeId, keyword: kw, type: "AI_RECOMMENDED" },
-        });
-        // 검색량 자동 조회
-        await this.fetchVolume(created.id, kw);
-      } catch (e: any) {
-        // 중복 키워드 무시
-        if (!e.message?.includes("Unique")) {
-          this.logger.warn(`키워드 추가 실패 [${kw}]: ${e.message}`);
-        }
-      }
-    }
-
-    // 최신 매장 정보 다시 로드 (업데이트된 주소 반영)
-    const updatedStore = await this.prisma.store.findUnique({ where: { id: storeId } });
-    const finalDistrict = updatedStore?.district || district;
-    const finalCategory = updatedStore?.category || category;
-
-    // 3단계: 같은 지역+업종 경쟁매장 자동 탐색
-    await this.findCompetitors(storeId, store.name, finalDistrict, finalCategory);
-
-    this.logger.log(`자동 셋업 완료: ${store.name}`);
-  }
-
-  // 네이버 검색에서 매장 정보 스크래핑
-  private async scrapePlace(storeName: string, placeId: string): Promise<any> {
-    if (!this.chromePath) return null;
+    // 셋업 시작 상태 기록
+    await this.updateSetupStatus(storeId, "RUNNING", "매장 정보 수집 중...");
 
     try {
-      const browser = await chromium.launch({
-        headless: true,
-        executablePath: this.chromePath,
-        args: ["--no-sandbox"],
-      });
-      const page = await browser.newPage();
-
-      // 여러 검색어로 시도 — 가장 정확한 결과를 찾기 위해
-      let html = "";
-      const queries = [
-        storeName, // "남해꼼장어 청주 가경동" 같은 힌트 포함 검색어
-        `${storeName.split(" ")[0]} 플레이스 ${placeId}`, // 매장명 + 플레이스ID
-      ];
-
-      for (const query of queries) {
-        await page.goto(
-          `https://search.naver.com/search.naver?query=${encodeURIComponent(query)}`,
-          { waitUntil: "networkidle", timeout: 15000 },
-        );
-        html = await page.content();
-        // 주소가 발견되면 성공
-        if (html.match(/"address":"[^"]+"/)) break;
+      // 1단계: 플레이스에서 실제 정보 수집
+      await this.updateSetupStatus(storeId, "RUNNING", "네이버 매장 정보 수집 중...");
+      let placeInfo: any = null;
+      if (store.naverPlaceId) {
+        const searchHint = [store.name, store.district, store.address].filter(Boolean).join(" ");
+        placeInfo = await this.scrapePlace(searchHint, store.naverPlaceId);
+        if (placeInfo) {
+          await this.prisma.store.update({
+            where: { id: storeId },
+            data: {
+              address: placeInfo.address || store.address,
+              category: placeInfo.category || store.category,
+              district: placeInfo.district || store.district,
+              phone: placeInfo.phone || store.phone,
+            },
+          });
+          this.logger.log(`매장 정보 업데이트: ${placeInfo.address}, ${placeInfo.category}`);
+        }
       }
-      await browser.close();
 
-      // 주소 추출 (여러 패턴)
-      const allAddrs = [...html.matchAll(/"(?:road)?[Aa]ddress":"([^"]+)"/g)].map((m) => m[1]);
-      const addrMatch = html.match(/"address":"([^"]+)"/);
-      const roadMatch = html.match(/"roadAddress":"([^"]+)"/);
-      const catMatch = html.match(/"category(?:Name)?":"([^"]+)"/);
-      const phoneMatch = html.match(/"phone":"([^"]+)"/);
+      const address = placeInfo?.address || store.address || "";
+      const category = placeInfo?.category || store.category || "";
+      const district = this.extractDistrict(address) || store.district || "";
 
-      const address = roadMatch?.[1] || addrMatch?.[1] || "";
-      return {
-        address,
-        category: catMatch?.[1] || "",
-        district: this.extractDistrict(address),
-        phone: phoneMatch?.[1] || "",
-      };
+      // 2단계: AI 키워드 자동 생성
+      await this.updateSetupStatus(storeId, "RUNNING", "AI가 키워드를 생성하는 중...");
+      const keywords = await this.generateSmartKeywords(store.name, address, category, district);
+      this.logger.log(`AI 키워드 ${keywords.length}개 생성: ${keywords.join(", ")}`);
+
+      let keywordCount = 0;
+      for (const kw of keywords) {
+        try {
+          const created = await this.prisma.storeKeyword.create({
+            data: { storeId, keyword: kw, type: "AI_RECOMMENDED" },
+          });
+          await this.fetchVolume(created.id, kw);
+          keywordCount++;
+        } catch (e: any) {
+          if (!e.message?.includes("Unique")) {
+            this.logger.warn(`키워드 추가 실패 [${kw}]: ${e.message}`);
+          }
+        }
+      }
+
+      // 3단계: 경쟁매장 탐색
+      await this.updateSetupStatus(storeId, "RUNNING", "경쟁 매장을 찾는 중...");
+      const updatedStore = await this.prisma.store.findUnique({ where: { id: storeId } });
+      const finalDistrict = updatedStore?.district || district;
+      const finalCategory = updatedStore?.category || category;
+      await this.findCompetitors(storeId, store.name, finalDistrict, finalCategory);
+
+      const competitorCount = await this.prisma.competitor.count({ where: { storeId } });
+
+      // 4단계: 히든 키워드 발굴 + 자동 등록
+      await this.updateSetupStatus(storeId, "RUNNING", "히든 키워드를 발굴하는 중...");
+      let hiddenCount = 0;
+      try {
+        const discovery = await this.keywordDiscovery.discoverKeywords(storeId);
+        for (const hidden of discovery.hidden) {
+          try {
+            await this.prisma.storeKeyword.create({
+              data: {
+                storeId,
+                keyword: hidden.keyword,
+                type: "HIDDEN",
+                monthlySearchVolume: hidden.monthlyVolume || null,
+                lastCheckedAt: new Date(),
+              },
+            });
+            hiddenCount++;
+          } catch (e: any) {
+            if (!e.message?.includes("Unique")) {
+              this.logger.warn(`히든 키워드 추가 실패 [${hidden.keyword}]: ${e.message}`);
+            }
+          }
+        }
+        this.logger.log(`히든 키워드 ${hiddenCount}개 등록`);
+      } catch (e: any) {
+        this.logger.warn(`히든 키워드 발굴 실패: ${e.message}`);
+      }
+
+      // 5단계: 첫 AI 분석 자동 실행
+      await this.updateSetupStatus(storeId, "RUNNING", "AI가 매장을 분석하는 중...");
+      let analysisScore: number | null = null;
+      try {
+        const analysis = await this.analysisService.analyzeStore(storeId);
+        analysisScore = analysis.competitiveScore as number | null;
+        this.logger.log(`첫 분석 완료: 경쟁력 ${analysisScore}점`);
+      } catch (e: any) {
+        this.logger.warn(`첫 분석 실패 (나중에 재시도 가능): ${e.message}`);
+      }
+
+      // 6단계: 첫 브리핑 생성
+      await this.updateSetupStatus(storeId, "RUNNING", "오늘의 브리핑을 생성하는 중...");
+      try {
+        await this.briefingService.generateDailyBriefing(storeId);
+        this.logger.log(`첫 브리핑 생성 완료`);
+      } catch (e: any) {
+        this.logger.warn(`첫 브리핑 생성 실패 (나중에 재시도 가능): ${e.message}`);
+      }
+
+      // 7단계: 셋업 완료
+      const totalKeywords = keywordCount + hiddenCount;
+      const scoreText = analysisScore ? `, 경쟁력 ${analysisScore}점` : "";
+      await this.prisma.store.update({
+        where: { id: storeId },
+        data: {
+          setupStatus: "COMPLETED",
+          setupStep: `키워드 ${totalKeywords}개, 경쟁사 ${competitorCount}개${scoreText}`,
+          setupError: null,
+          setupCompletedAt: new Date(),
+        },
+      });
+      this.logger.log(
+        `자동 셋업 완료: ${store.name} (키워드 ${totalKeywords}개, 히든 ${hiddenCount}개, 경쟁사 ${competitorCount}개${scoreText})`,
+      );
+
     } catch (e: any) {
-      this.logger.warn(`플레이스 스크래핑 실패: ${e.message}`);
-      return null;
+      this.logger.error(`자동 셋업 실패 [${store.name}]: ${e.message}`);
+      await this.prisma.store.update({
+        where: { id: storeId },
+        data: {
+          setupStatus: "FAILED",
+          setupStep: null,
+          setupError: e.message?.slice(0, 500),
+        },
+      });
+      throw e;
     }
+  }
+
+  // 셋업 상태 업데이트 헬퍼
+  private async updateSetupStatus(storeId: string, status: string, step: string) {
+    await this.prisma.store.update({
+      where: { id: storeId },
+      data: { setupStatus: status, setupStep: step },
+    });
+  }
+
+  // 셋업 상태 조회 (프론트 폴링용)
+  async getSetupStatus(storeId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: {
+        setupStatus: true,
+        setupStep: true,
+        setupError: true,
+        setupCompletedAt: true,
+        _count: { select: { keywords: true, competitors: true } },
+      },
+    });
+    if (!store) return null;
+    return {
+      status: store.setupStatus,
+      step: store.setupStep,
+      error: store.setupError,
+      completedAt: store.setupCompletedAt,
+      keywordCount: store._count.keywords,
+      competitorCount: store._count.competitors,
+    };
+  }
+
+  // 네이버 API로 매장 정보 조회 (Chrome 불필요)
+  private async scrapePlace(storeName: string, placeId: string): Promise<any> {
+    // 1차: placeId로 직접 조회
+    try {
+      const detail = await this.naverPlace.getPlaceDetail(placeId);
+      if (detail && (detail.address || detail.roadAddress)) {
+        const address = detail.roadAddress || detail.address;
+        return {
+          address,
+          category: detail.category || "",
+          district: this.extractDistrict(address),
+          phone: detail.phone || "",
+        };
+      }
+    } catch (e: any) {
+      this.logger.debug(`placeId 직접 조회 실패 (${placeId}): ${e.message}`);
+    }
+
+    // 2차: 매장명으로 검색 API
+    try {
+      const places = await this.naverSearch.searchPlace(storeName, 3);
+      if (places.length > 0) {
+        const best = places[0];
+        const address = best.roadAddress || best.address || "";
+        return {
+          address,
+          category: best.category || "",
+          district: this.extractDistrict(address),
+          phone: best.telephone || "",
+        };
+      }
+    } catch (e: any) {
+      this.logger.warn(`검색 API 매장 정보 실패: ${e.message}`);
+    }
+
+    // 3차: 맵 API 검색 폴백
+    try {
+      const info = await this.naverPlace.searchAndGetPlaceInfo(storeName);
+      if (info) {
+        const address = info.roadAddress || info.address;
+        return {
+          address,
+          category: info.category || "",
+          district: this.extractDistrict(address),
+          phone: info.phone || "",
+        };
+      }
+    } catch (e: any) {
+      this.logger.warn(`맵 API 매장 검색 실패: ${e.message}`);
+    }
+
+    return null;
   }
 
   // 주소에서 지역명 추출 (동 단위)
@@ -205,43 +320,37 @@ JSON 배열로만 응답해:
     return fallback;
   }
 
-  // 같은 지역+업종 경쟁매장 자동 탐색
+  // 같은 지역+업종 경쟁매장 자동 탐색 (Chrome 불필요)
   private async findCompetitors(
     storeId: string,
     storeName: string,
     district: string,
     category: string,
   ) {
-    if (!district || !this.chromePath) return;
+    if (!district) return;
 
     const query = `${district} ${category || "맛집"}`;
     this.logger.log(`경쟁매장 탐색: "${query}"`);
 
     try {
-      const browser = await chromium.launch({
-        headless: true,
-        executablePath: this.chromePath,
-        args: ["--no-sandbox"],
-      });
-      const page = await browser.newPage();
-      await page.goto(
-        `https://search.naver.com/search.naver?query=${encodeURIComponent(query)}`,
-        { waitUntil: "networkidle", timeout: 15000 },
-      );
-      const html = await page.content();
-      await browser.close();
+      // 네이버 검색 API로 주변 매장 검색
+      const results = await this.naverSearch.searchPlace(query, 10);
 
-      // 매장명 추출
-      const nameRe = /"name":"([^"]{2,30})"/g;
-      const exclude = new Set([district, category, "맛집", query.replace(/\s/g, ""), storeName]);
-      const places: string[] = [];
-      let m;
-      while ((m = nameRe.exec(html)) !== null) {
-        const name = m[1];
-        if (!exclude.has(name) && !name.startsWith("http") && !/^\d+$/.test(name) && places.length < 5) {
-          if (!places.includes(name)) places.push(name);
-        }
-      }
+      // 내 매장 제외 + 상위 5개
+      const normalizedStoreName = storeName.replace(/\s+/g, "");
+      const places = results
+        .map((r) => r.title.replace(/<[^>]*>/g, "").trim())
+        .filter((name) => {
+          const normalized = name.replace(/\s+/g, "");
+          return (
+            normalized !== normalizedStoreName &&
+            !normalized.includes(normalizedStoreName) &&
+            !normalizedStoreName.includes(normalized) &&
+            name.length >= 2 &&
+            !/^\d+$/.test(name)
+          );
+        })
+        .slice(0, 5);
 
       // 경쟁매장 저장
       for (const name of places) {

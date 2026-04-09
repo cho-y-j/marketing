@@ -74,18 +74,26 @@ export class ContentService {
     // AI 콘텐츠 생성 (높은 temperature)
     const aiResponse = await this.ai.generate(systemPrompt, userPrompt);
 
-    // JSON 파싱
+    // JSON 파싱 — 실패 시 명시적 에러
     let parsed: any;
     try {
       const jsonMatch = aiResponse.content.match(/\{[\s\S]*\}/);
       parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiResponse.content);
-    } catch {
-      parsed = {
-        title: `${store.name} 소식`,
-        body: aiResponse.content,
-        tags: [],
-        targetKeywords: dto.targetKeywords || [],
-      };
+    } catch (e: any) {
+      this.logger.error(
+        `콘텐츠 JSON 파싱 실패 [${store.name}/${dto.type}] provider=${aiResponse.provider}: ${e.message}`,
+      );
+      this.logger.error(
+        `AI 응답 원문 (앞 500자): ${aiResponse.content.slice(0, 500)}`,
+      );
+      throw new Error(
+        `AI 콘텐츠 응답이 유효한 JSON이 아닙니다 (provider=${aiResponse.provider})`,
+      );
+    }
+    if (!parsed.body || typeof parsed.body !== "string") {
+      throw new Error(
+        `AI 콘텐츠 응답에 body 필드가 없거나 비어있음 (provider=${aiResponse.provider})`,
+      );
     }
 
     return this.prisma.generatedContent.create({
@@ -93,7 +101,7 @@ export class ContentService {
         storeId,
         type: dto.type as ContentType,
         title: parsed.title || `${store.name} 콘텐츠`,
-        body: parsed.body || "",
+        body: parsed.body,
         keywords: parsed.targetKeywords || parsed.tags || [],
       },
     });

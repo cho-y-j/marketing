@@ -56,6 +56,19 @@ model Store {
   // 상권 정보
   district        String?
 
+  // 매출 관련
+  avgOrderValue   Int?     // 객단가 (원) — ROI 계산용
+
+  // 마케팅 등급
+  marketingGrade  String   @default("BRONZE") // BRONZE | SILVER | GOLD | DIAMOND
+  actionRate      Float?   // 액션 수행률 (0~100)
+
+  // 자동 셋업 상태 추적
+  setupStatus     String   @default("PENDING")  // PENDING | RUNNING | COMPLETED | FAILED
+  setupStep       String?  // 현재 진행 중인 단계 설명
+  setupError      String?  // 실패 시 에러 메시지
+  setupCompletedAt DateTime?
+
   // 경쟁력 점수
   competitiveScore Float?
   lastAnalyzedAt  DateTime?
@@ -287,4 +300,127 @@ model CompetitorHistory {
   recordedAt          DateTime   @default(now())
 
   @@index([competitorId, recordedAt])
+}
+
+// ===== AI 자동 실행 대기열 =====
+model PendingAction {
+  id              String   @id @default(cuid())
+  storeId         String
+  actionType      String   // CONTENT_PUBLISH | REVIEW_REPLY | KEYWORD_ADD | SEASONAL_KEYWORD
+  title           String   // "벚꽃 맛집 플레이스 소식 발행"
+  description     String   @db.Text // 상세 내용 (발행할 콘텐츠, 답변할 리뷰 등)
+  data            Json?    // 관련 데이터 (contentId, reviewId, keyword 등)
+  status          String   @default("PENDING") // PENDING | APPROVED | REJECTED | EXECUTED | FAILED
+  autoExecute     Boolean  @default(false) // 자동 실행 모드일 때 true
+  executedAt      DateTime?
+  rejectedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([storeId, status])
+  @@index([storeId, createdAt])
+}
+
+// ===== 매장별 자동화 설정 =====
+model StoreAutoSettings {
+  id                    String  @id @default(cuid())
+  storeId               String  @unique
+  autoReviewReply       Boolean @default(false) // 리뷰 자동 답변
+  autoContentPublish    Boolean @default(false) // 콘텐츠 자동 발행 (주 N회)
+  contentPublishPerWeek Int     @default(2)     // 주간 자동 발행 횟수
+  autoSeasonalKeyword   Boolean @default(true)  // 시즌 키워드 자동 추가
+  autoHiddenKeyword     Boolean @default(true)  // 히든 키워드 자동 추가
+
+  @@index([storeId])
+}
+
+// ===== 액션 로그 (마케팅 액션 추적) =====
+model ActionLog {
+  id              String   @id @default(cuid())
+  storeId         String
+  actionType      String   // CONTENT_PUBLISHED | KEYWORD_ADDED | REVIEW_REPLIED | COMPETITOR_RESPONDED | RANK_CHECK
+  description     String   // "벚꽃 맛집 소식 발행", "리뷰 답변 3건"
+  relatedKeywords String[] // 관련 키워드 목록
+  executedAt      DateTime @default(now())
+
+  // 효과 측정 (7일 후 자동 채움)
+  effectMeasuredAt DateTime?
+  rankBefore       Json?    // {keyword: rank} 실행 전 순위
+  rankAfter        Json?    // {keyword: rank} 7일 후 순위
+  effectSummary    String?  // "순위 +3위 상승, 노출 +200회 추정"
+
+  @@index([storeId, executedAt])
+}
+
+// ===== 경쟁사 알림 + AI 대응 추천 =====
+model CompetitorAlert {
+  id              String   @id @default(cuid())
+  storeId         String
+  competitorName  String
+  alertType       String   // REVIEW_SURGE | BLOG_SURGE | RANK_OVERTAKE
+  detail          String   // "방문자 리뷰 +12개 (체험단 추정)"
+  aiRecommendation String? @db.Text // AI가 생성한 대응 추천
+  isRead          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([storeId, createdAt])
+}
+
+// ===== 키워드 검색량 히스토리 (트래픽 이동 분석용) =====
+model KeywordVolumeHistory {
+  id            String   @id @default(cuid())
+  storeId       String?  // null 이면 글로벌 추적 키워드 (전국 트렌드)
+  keyword       String
+  monthlyVolume Int      // PC + Mobile 합계
+  pcVolume      Int?
+  mobileVolume  Int?
+  source        String   @default("searchad") // searchad | datalab
+  recordedAt    DateTime @default(now())
+
+  @@index([keyword, recordedAt])
+  @@index([storeId, keyword, recordedAt])
+}
+
+// ===== 푸시 알림 토큰 (Web Push / FCM 공용) =====
+model PushSubscription {
+  id          String   @id @default(cuid())
+  userId      String
+  // type: webpush | fcm
+  type        String
+  // Web Push: endpoint + keys{p256dh,auth} 를 JSON 에 저장
+  // FCM: token 만 사용
+  endpoint    String?
+  token       String?
+  keys        Json?
+  userAgent   String?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  lastUsedAt  DateTime?
+
+  @@unique([userId, endpoint])
+  @@index([userId, enabled])
+}
+
+// ===== 리뷰 (자동 답글 대상) =====
+model StoreReview {
+  id              String   @id @default(cuid())
+  storeId         String
+  source          String   // naver | baemin | yogiyo
+  externalId      String   // 플랫폼 내 리뷰 ID (중복 방지)
+  authorName      String?
+  rating          Int?
+  body            String   @db.Text
+  postedAt        DateTime
+  fetchedAt       DateTime @default(now())
+
+  // 자동 답글 상태
+  replyStatus     String   @default("PENDING")  // PENDING | DRAFTED | APPROVED | REJECTED | PUBLISHED
+  draftReply      String?  @db.Text
+  finalReply      String?  @db.Text
+  draftedAt       DateTime?
+  approvedAt      DateTime?
+  publishedAt     DateTime?
+
+  @@unique([source, externalId])
+  @@index([storeId, replyStatus])
+  @@index([storeId, postedAt])
 }

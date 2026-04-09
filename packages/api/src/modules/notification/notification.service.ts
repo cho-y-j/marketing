@@ -64,4 +64,27 @@ export class NotificationService {
       data: { keyword, prevRank, newRank, diff },
     });
   }
+
+  // 경쟁사 리뷰 급증 알림
+  async createCompetitorAlert(
+    userId: string,
+    competitorName: string,
+    detail: string,
+  ) {
+    return this.create(userId, {
+      type: "COMPETITOR_ALERT",
+      title: `경쟁사 "${competitorName}" 리뷰 급증!`,
+      message: detail,
+      data: { competitorName, detail },
+    });
+  }
+
+  // 브리핑 생성 완료 알림
+  async createBriefingAlert(userId: string, storeName: string) {
+    return this.create(userId, {
+      type: "BRIEFING_READY",
+      title: `${storeName} 오늘의 브리핑`,
+      message: "오늘 할 마케팅 액션 3가지가 준비되었습니다",
+    });
+  }
 }

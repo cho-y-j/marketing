@@ -72,22 +72,36 @@ export class NaverRankCheckerProvider {
 
       this.logger.debug(`HTML 길이: ${html.length}`);
 
-      // HTML 내 JSON에서 매장명 추출 (플레이스 섹션)
+      // HTML 내 JSON에서 매장 (id + 이름) 추출
       const places = this.extractPlacesFromHtml(html);
-      this.logger.debug(`추출된 매장: ${places.length}개 - ${places.slice(0, 3).join(", ")}`);
+      this.logger.debug(`추출된 매장: ${places.length}개 - ${places.slice(0, 3).map((p) => p.name).join(", ")}`);
 
-      // 순위 찾기
+      // 순위 찾기 — placeId 우선, 이름 토큰 매칭 폴백
       let rank: number | null = null;
       const topPlaces: Array<{ name: string; rank: number }> = [];
+      const targetTokens = this.tokenize(storeName);
 
       for (let i = 0; i < places.length; i++) {
-        topPlaces.push({ name: places[i], rank: i + 1 });
+        const p = places[i];
+        topPlaces.push({ name: p.name, rank: i + 1 });
 
         if (rank !== null) continue;
 
-        const placeName = places[i].toLowerCase();
-        const target = storeName.toLowerCase();
-        if (placeName.includes(target) || target.includes(placeName)) {
+        // 1순위: placeId 정확 일치 (가장 신뢰성 높음)
+        if (naverPlaceId && p.id && p.id === naverPlaceId) {
+          rank = i + 1;
+          continue;
+        }
+
+        // 2순위: 매장명 토큰 매칭 (양방향 부분 일치 또는 토큰 50% 이상 겹침)
+        const candidateTokens = this.tokenize(p.name);
+        const intersection = [...targetTokens].filter((t) => candidateTokens.has(t));
+        const minSize = Math.min(targetTokens.size, candidateTokens.size);
+        if (
+          minSize > 0 &&
+          intersection.length / minSize >= 0.5 &&
+          intersection.length >= 1
+        ) {
           rank = i + 1;
         }
       }
@@ -112,18 +126,12 @@ export class NaverRankCheckerProvider {
   }
 
   /**
-   * HTML에서 플레이스 매장 목록 추출
-   * 네이버 검색 결과 HTML에 내장된 JSON 데이터에서 "name" 필드를 파싱
+   * HTML에서 플레이스 매장 목록 추출 — name + id 쌍.
+   * 네이버 검색 결과에 "id":"숫자","name":"매장명" 또는 인접한 형태로 들어있음.
+   * 순서를 유지하며 (검색 노출 순) 중복 제거.
    */
-  private extractPlacesFromHtml(html: string): string[] {
-    const places: string[] = [];
-
-    // 전체 HTML에서 "name" 필드를 추출 (플레이스 JSON 데이터 포함)
-    const searchArea = html;
-
-    // JSON 내 "name" 필드 추출 (플레이스 영역)
-    const namePattern = /"name"\s*:\s*"([^"]{2,50})"/g;
-    let match: RegExpExecArray | null;
+  private extractPlacesFromHtml(html: string): Array<{ id: string | null; name: string }> {
+    const places: Array<{ id: string | null; name: string }> = [];
     const seen = new Set<string>();
 
     // 검색어, UI 요소, 일반 단어 필터
@@ -134,11 +142,16 @@ export class NaverRankCheckerProvider {
     ]);
     const excludePatterns = [
       /^naver/i, /^search/i, /^http/i, /^image/i, /^icon/i,
-      /^[가-힣]{1}$/, // 한 글자
+      /^[가-힣]{1}$/,
     ];
 
-    while ((match = namePattern.exec(searchArea)) !== null) {
-      const name = match[1].trim();
+    // 1) "id":"숫자".....,"name":"매장명" 패턴 — placeId 와 name 을 함께 추출
+    //    네이버는 plain JSON 으로 내보내므로 같은 객체 안에 id + name 이 인접
+    const pairPattern = /"id"\s*:\s*"?(\d{5,12})"?[^{}]{0,500}?"name"\s*:\s*"([^"]{2,50})"/g;
+    let m: RegExpExecArray | null;
+    while ((m = pairPattern.exec(html)) !== null) {
+      const id = m[1];
+      const name = m[2].trim();
       if (
         name.length >= 2 &&
         name.length <= 40 &&
@@ -146,27 +159,64 @@ export class NaverRankCheckerProvider {
         !excludeSet.has(name) &&
         !excludePatterns.some((p) => p.test(name)) &&
         !/^\d+$/.test(name) &&
-        !name.includes("\\") &&
-        !name.startsWith("http")
+        !name.includes("\\")
       ) {
         seen.add(name);
-        places.push(name);
+        places.push({ id, name });
       }
     }
 
-    // 방법 2: 플레이스 리스트 마크업에서 추출 (폴백)
+    // 2) 폴백: name 필드만 추출 (id 없음)
+    if (places.length === 0) {
+      const namePattern = /"name"\s*:\s*"([^"]{2,50})"/g;
+      while ((m = namePattern.exec(html)) !== null) {
+        const name = m[1].trim();
+        if (
+          name.length >= 2 &&
+          name.length <= 40 &&
+          !seen.has(name) &&
+          !excludeSet.has(name) &&
+          !excludePatterns.some((p) => p.test(name)) &&
+          !/^\d+$/.test(name) &&
+          !name.includes("\\")
+        ) {
+          seen.add(name);
+          places.push({ id: null, name });
+        }
+      }
+    }
+
+    // 3) 마지막 폴백: place_bluelink 마크업
     if (places.length === 0) {
       const linkPattern = /place_bluelink[^>]*>([^<]+)/g;
-      while ((match = linkPattern.exec(html)) !== null) {
-        const name = match[1].trim();
+      while ((m = linkPattern.exec(html)) !== null) {
+        const name = m[1].trim();
         if (name.length >= 2 && !seen.has(name)) {
           seen.add(name);
-          places.push(name);
+          places.push({ id: null, name });
         }
       }
     }
 
     return places;
+  }
+
+  /** 매장명 토큰화 — 2-gram + 단어 단위. rank-check 매칭용 */
+  private tokenize(text: string): Set<string> {
+    if (!text) return new Set();
+    const cleaned = text
+      .toLowerCase()
+      .replace(/[^\w가-힣\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const tokens = new Set<string>();
+    for (const w of cleaned.split(" ").filter((t) => t.length >= 2)) {
+      tokens.add(w);
+      if (w.length >= 4) {
+        for (let i = 0; i <= w.length - 2; i++) tokens.add(w.slice(i, i + 2));
+      }
+    }
+    return tokens;
   }
 
   async checkMultipleRanks(

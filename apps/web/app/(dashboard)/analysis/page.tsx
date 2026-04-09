@@ -8,7 +8,7 @@ import { CompetitiveScoreChart } from "@/components/charts/competitive-score-cha
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useLatestAnalysis, useRunAnalysis } from "@/hooks/useAnalysis";
 import { toast } from "sonner";
-import { ThumbsUp, ThumbsDown, Lightbulb, Loader2, BarChart3, MessageSquare, Users, Search, Bookmark, Sparkles } from "lucide-react";
+import { ThumbsUp, ThumbsDown, Lightbulb, Loader2, BarChart3, MessageSquare, Users, Search, Bookmark, Sparkles, Target, Layers, Award, Info } from "lucide-react";
 
 export default function AnalysisPage() {
   const { storeId } = useCurrentStoreId();
@@ -92,6 +92,47 @@ export default function AnalysisPage() {
               </Card>
             ))}
           </div>
+
+          {/* === 자체 산출 N1/N2/N3 지수 === */}
+          <Card className="rounded-2xl overflow-hidden">
+            <CardHeader className="pb-2 bg-gradient-to-r from-indigo-50 to-violet-50">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-indigo-100 flex items-center justify-center">
+                  <Layers size={12} className="text-indigo-600" />
+                </div>
+                자체 산출 플레이스 지수
+                <span className="text-[10px] font-normal text-muted-foreground ml-auto flex items-center gap-1">
+                  <Info size={10} />
+                  AI 자체 계산 (네이버 비공개 지수 X)
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-3">
+              <div className="grid grid-cols-3 gap-3">
+                <IndexCard
+                  label="N1 관련성"
+                  value={(analysis as any).n1Score}
+                  icon={Target}
+                  color="indigo"
+                  desc="키워드 ↔ 매장 정보"
+                />
+                <IndexCard
+                  label="N2 콘텐츠"
+                  value={(analysis as any).n2Score}
+                  icon={Layers}
+                  color="violet"
+                  desc="리뷰 + 저장 + 키워드 풍부도"
+                />
+                <IndexCard
+                  label="N3 랭킹"
+                  value={(analysis as any).n3Score}
+                  icon={Award}
+                  color="amber"
+                  desc="평균 순위 (1위=100)"
+                />
+              </div>
+            </CardContent>
+          </Card>
 
           <CompetitiveScoreChart data={[{ date: analysis.analyzedAt?.split("T")[0] ?? "", score }]} />
 
@@ -185,6 +226,63 @@ export default function AnalysisPage() {
             </Card>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+function IndexCard({
+  label,
+  value,
+  icon: Icon,
+  color,
+  desc,
+}: {
+  label: string;
+  value: number | null | undefined;
+  icon: any;
+  color: "indigo" | "violet" | "amber";
+  desc: string;
+}) {
+  const colorMap = {
+    indigo: {
+      bg: "from-indigo-500/10 to-indigo-500/5",
+      text: "text-indigo-600",
+      ring: "from-indigo-400 to-indigo-600",
+    },
+    violet: {
+      bg: "from-violet-500/10 to-violet-500/5",
+      text: "text-violet-600",
+      ring: "from-violet-400 to-violet-600",
+    },
+    amber: {
+      bg: "from-amber-500/10 to-amber-500/5",
+      text: "text-amber-600",
+      ring: "from-amber-400 to-amber-600",
+    },
+  } as const;
+  const c = colorMap[color];
+  const has = typeof value === "number";
+  const display = has ? value!.toFixed(1) : "-";
+  return (
+    <div className={`rounded-xl p-3 bg-gradient-to-br ${c.bg}`}>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <Icon size={12} className={c.text} />
+        <span className="text-[11px] font-semibold text-muted-foreground">
+          {label}
+        </span>
+      </div>
+      <div className={`text-2xl font-extrabold ${has ? c.text : "text-muted-foreground"}`}>
+        {display}
+      </div>
+      <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{desc}</p>
+      {has && (
+        <div className="mt-2 h-1 rounded-full bg-white/50 overflow-hidden">
+          <div
+            className={`h-full bg-gradient-to-r ${c.ring}`}
+            style={{ width: `${Math.min(100, value!)}%` }}
+          />
+        </div>
       )}
     </div>
   );

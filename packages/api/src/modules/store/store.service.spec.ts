@@ -4,6 +4,7 @@ import { StoreService } from "./store.service";
 import { PrismaService } from "../../common/prisma.service";
 import { DataCollectorService } from "../../providers/data/data-collector.service";
 import { CompetitorFinderService } from "../../providers/data/competitor-finder.service";
+import { StoreSetupService } from "../../providers/data/store-setup.service";
 
 const mockPrisma = {
   store: {
@@ -17,6 +18,7 @@ const mockPrisma = {
 
 const mockDataCollector = { collectInitialData: jest.fn() };
 const mockCompetitorFinder = { findCompetitors: jest.fn() };
+const mockStoreSetup = { autoSetup: jest.fn().mockResolvedValue(undefined) };
 
 describe("StoreService", () => {
   let service: StoreService;
@@ -28,6 +30,7 @@ describe("StoreService", () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: DataCollectorService, useValue: mockDataCollector },
         { provide: CompetitorFinderService, useValue: mockCompetitorFinder },
+        { provide: StoreSetupService, useValue: mockStoreSetup },
       ],
     }).compile();
 

@@ -60,8 +60,16 @@ export class StoreController {
   }
 
   @Post(":id/setup")
-  @ApiOperation({ summary: "매장 자동 셋업 (AI 키워드 + 경쟁매장 + 검색량)" })
-  setup(@Param("id") id: string) {
-    return this.storeSetup.autoSetup(id);
+  @ApiOperation({ summary: "매장 자동 셋업 재시도 (AI 키워드 + 경쟁매장 + 검색량)" })
+  async setup(@Param("id") id: string) {
+    // 비동기 실행 — 바로 응답 후 백그라운드 진행
+    this.storeSetup.autoSetup(id).catch(() => {});
+    return { message: "셋업이 시작되었습니다", storeId: id };
+  }
+
+  @Get(":id/setup-status")
+  @ApiOperation({ summary: "매장 셋업 진행 상태 조회" })
+  getSetupStatus(@Param("id") id: string) {
+    return this.storeSetup.getSetupStatus(id);
   }
 }

@@ -1,40 +1,64 @@
+import { InjectQueue } from "@nestjs/bull";
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
+import { Queue } from "bull";
 import { PrismaService } from "../common/prisma.service";
-import { BriefingService } from "../modules/briefing/briefing.service";
+import { QUEUES } from "./queue.constants";
 
+/**
+ * 06:00 브리핑 생성 enqueue.
+ * 4시 분석/5시 순위가 끝난 후 실행되는 체인의 마지막 단계.
+ *
+ * 체인 가드는 BriefingProcessor 안에서 수행 (오늘 분석 데이터 존재 확인).
+ * 분석 데이터 없으면 fail → 모든 attempts 소진 후 사용자 알림.
+ */
 @Injectable()
 export class BriefingGenerationJob {
   private readonly logger = new Logger(BriefingGenerationJob.name);
 
   constructor(
     private prisma: PrismaService,
-    private briefingService: BriefingService,
+    @InjectQueue(QUEUES.BRIEFING) private briefingQueue: Queue,
   ) {}
 
-  // 매일 새벽 6시 실행 (분석 완료 후)
   @Cron("0 6 * * *")
-  async generateAllBriefings() {
-    this.logger.log("=== 일일 브리핑 생성 시작 ===");
-
+  async enqueueDailyBriefings() {
     const stores = await this.prisma.store.findMany({
       where: { user: { subscriptionPlan: { not: "FREE" } } },
+      select: { id: true, name: true },
     });
-
-    this.logger.log(`대상 매장: ${stores.length}개`);
+    this.logger.log(`[06시] 브리핑 enqueue 대상 ${stores.length}개`);
 
     for (const store of stores) {
-      try {
-        await this.briefingService.generateDailyBriefing(store.id);
-        this.logger.log(`브리핑 생성: ${store.name}`);
-      } catch (e: any) {
-        this.logger.error(`브리핑 실패 [${store.name}]: ${e.message}`);
-      }
-
-      // Rate limit 방지
-      await new Promise((r) => setTimeout(r, 2000));
+      await this.briefingQueue.add(
+        "generate-briefing",
+        { storeId: store.id },
+        {
+          // 분석 데이터 부재로 인한 일시적 실패 대비 — 5분, 15분 간격 재시도
+          attempts: 3,
+          backoff: { type: "fixed", delay: 5 * 60 * 1000 },
+          removeOnComplete: 100,
+          removeOnFail: 200,
+          jobId: `cron:briefing:${store.id}:${this.todayKey()}`,
+        },
+      );
     }
+  }
 
-    this.logger.log("=== 일일 브리핑 생성 완료 ===");
+  /** 수동 트리거 */
+  async enqueueBriefingManual(storeId: string) {
+    return this.briefingQueue.add(
+      "generate-briefing",
+      { storeId },
+      {
+        attempts: 1,
+        removeOnComplete: 50,
+        removeOnFail: 100,
+      },
+    );
+  }
+
+  private todayKey(): string {
+    return new Date().toISOString().split("T")[0];
   }
 }

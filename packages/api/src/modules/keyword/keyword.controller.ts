@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from "@nestjs/swagger"
 import { KeywordService } from "./keyword.service";
 import { RankCheckService } from "./rank-check.service";
 import { KeywordDiscoveryService } from "./keyword-discovery.service";
+import { TrafficShiftService } from "./traffic-shift.service";
 import { CreateKeywordDto } from "./dto/keyword.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 
@@ -15,6 +16,7 @@ export class KeywordController {
     private keywordService: KeywordService,
     private rankCheckService: RankCheckService,
     private discoveryService: KeywordDiscoveryService,
+    private trafficShift: TrafficShiftService,
   ) {}
 
   @Get()
@@ -89,5 +91,28 @@ export class KeywordController {
   @ApiOperation({ summary: "전체 키워드 검색량 새로고침" })
   refreshVolumes(@Param("storeId") storeId: string) {
     return this.keywordService.refreshAllSearchVolumes(storeId);
+  }
+
+  @Post("traffic-shift/record")
+  @ApiOperation({
+    summary: "검색량 히스토리 기록 (트래픽 이동 분석용)",
+  })
+  recordVolumes(@Param("storeId") storeId: string) {
+    return this.trafficShift.recordCurrentVolumes(storeId);
+  }
+
+  @Get("traffic-shift")
+  @ApiOperation({
+    summary: "검색 트래픽 이동 분석 (감소 키워드 → 후보 키워드 + AI 해석)",
+  })
+  @ApiQuery({ name: "threshold", required: false, type: Number })
+  analyzeTrafficShift(
+    @Param("storeId") storeId: string,
+    @Query("threshold") threshold?: string,
+  ) {
+    return this.trafficShift.analyzeShifts(
+      storeId,
+      threshold ? parseFloat(threshold) : -15,
+    );
   }
 }

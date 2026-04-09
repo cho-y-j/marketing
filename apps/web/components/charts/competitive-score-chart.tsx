@@ -33,6 +33,9 @@ export function CompetitiveScoreChart({
       title="경쟁력 점수 변동"
       isLoading={isLoading}
       isEmpty={!data || data.length === 0}
+      emptyMessage="AI 분석을 실행하면 점수 변동 추이가 표시됩니다"
+      isInsufficient={data && data.length === 1}
+      insufficientMessage="경쟁력 점수 1회 측정됨 — 다음 분석 후 추이 차트가 그려집니다"
       onPeriodChange={onPeriodChange}
     >
       <ResponsiveContainer width="100%" height={200}>

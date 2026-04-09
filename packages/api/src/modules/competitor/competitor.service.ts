@@ -2,30 +2,19 @@ import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { NaverSearchadProvider } from "../../providers/naver/naver-searchad.provider";
 import { NaverSearchProvider } from "../../providers/naver/naver-search.provider";
+import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 import { CreateCompetitorDto } from "./dto/competitor.dto";
-import { chromium } from "playwright-core";
-import { execFileSync } from "child_process";
 
 @Injectable()
 export class CompetitorService {
   private readonly logger = new Logger(CompetitorService.name);
-  private readonly chromePath: string;
 
   constructor(
     private prisma: PrismaService,
     private searchad: NaverSearchadProvider,
     private naverSearch: NaverSearchProvider,
-  ) {
-    const paths = [
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/usr/bin/google-chrome",
-    ];
-    let found = "";
-    for (const p of paths) {
-      try { execFileSync("test", ["-f", p]); found = p; break; } catch {}
-    }
-    this.chromePath = found;
-  }
+    private naverPlace: NaverPlaceProvider,
+  ) {}
 
   async findAll(storeId: string) {
     return this.prisma.competitor.findMany({
@@ -102,27 +91,34 @@ export class CompetitorService {
     };
   }
 
-  // 경쟁매장 전체 데이터 새로고침
+  // 경쟁매장 전체 데이터 새로고침 + 변동 감지
   async refreshAll(storeId: string) {
     const competitors = await this.prisma.competitor.findMany({ where: { storeId } });
     let updated = 0;
+    const allChanges: Array<{ type: string; name: string; detail: string }> = [];
+
     for (const c of competitors) {
       try {
-        await this.collectCompetitorData(c.id, c.competitorName);
+        const result = await this.collectCompetitorData(c.id, c.competitorName);
+        if (result?.changes?.length) {
+          allChanges.push(...result.changes);
+        }
         updated++;
       } catch {}
       await new Promise((r) => setTimeout(r, 1000));
     }
-    return { updated, total: competitors.length };
+
+    return { updated, total: competitors.length, changes: allChanges };
   }
 
-  // 경쟁매장 실데이터 수집 (검색 API + Playwright 하이브리드)
+  // 경쟁매장 실데이터 수집 (네이버 API 기반 — Chrome 불필요)
   private async collectCompetitorData(competitorId: string, name: string) {
     this.logger.log(`경쟁매장 데이터 수집: ${name}`);
 
     let blogReviewCount = 0;
     let receiptReviewCount = 0;
     let searchVolume = 0;
+    let placeId: string | undefined;
 
     // 1. 검색광고 API로 일 검색량
     try {
@@ -132,31 +128,65 @@ export class CompetitorService {
       }
     } catch {}
 
-    // 2. 검색 API로 카테고리 업데이트
+    // 2. 네이버 검색 API로 카테고리 + placeId 추출
     try {
       const places = await this.naverSearch.searchPlace(name, 3);
       const match = places.find((p) =>
         p.title.replace(/<[^>]*>/g, "").includes(name.replace(/\s+/g, "")) ||
         name.includes(p.title.replace(/<[^>]*>/g, ""))
       );
-      if (match?.category) {
+      if (match) {
+        const updateData: any = { lastComparedAt: new Date() };
+        if (match.category) updateData.category = match.category;
+        // link에서 placeId 추출
+        const extractedId = this.naverPlace.extractPlaceIdFromUrl(match.link || "");
+        if (extractedId) {
+          placeId = extractedId;
+          updateData.competitorPlaceId = placeId;
+        }
         await this.prisma.competitor.update({
           where: { id: competitorId },
-          data: { category: match.category },
+          data: updateData,
         });
       }
     } catch {}
 
-    // 3. Playwright로 영수증 리뷰 + 블로그 리뷰 수 스크래핑
-    if (this.chromePath) {
+    // 3. placeId가 있으면 맵 API로 리뷰 수 수집
+    const existingComp = await this.prisma.competitor.findUnique({
+      where: { id: competitorId },
+      select: { competitorPlaceId: true },
+    });
+    const effectivePlaceId = placeId || existingComp?.competitorPlaceId;
+
+    if (effectivePlaceId) {
       try {
-        const { receipt, blog } = await this.scrapeReviewCounts(name);
-        receiptReviewCount = receipt;
-        blogReviewCount = blog;
+        const detail = await this.naverPlace.getPlaceDetail(effectivePlaceId);
+        if (detail) {
+          receiptReviewCount = detail.visitorReviewCount || 0;
+          blogReviewCount = detail.blogReviewCount || 0;
+        }
       } catch (e: any) {
-        this.logger.warn(`리뷰 수 스크래핑 실패 [${name}]: ${e.message}`);
+        this.logger.debug(`경쟁매장 상세 API 실패 [${name}]: ${e.message}`);
       }
     }
+
+    // 4. 맵 API도 실패 시 → allSearch 폴백
+    if (receiptReviewCount === 0 && blogReviewCount === 0) {
+      try {
+        const placeInfo = await this.naverPlace.searchAndGetPlaceInfo(name);
+        if (placeInfo) {
+          receiptReviewCount = placeInfo.visitorReviewCount || 0;
+          blogReviewCount = placeInfo.blogReviewCount || 0;
+          if (!placeId && placeInfo.id) placeId = placeInfo.id;
+        }
+      } catch {}
+    }
+
+    // 변동 감지를 위해 이전 값 조회
+    const prev = await this.prisma.competitor.findUnique({
+      where: { id: competitorId },
+      select: { receiptReviewCount: true, blogReviewCount: true, storeId: true },
+    });
 
     await this.prisma.competitor.update({
       where: { id: competitorId },
@@ -168,56 +198,46 @@ export class CompetitorService {
       },
     });
 
+    // CompetitorHistory에 일별 스냅샷 저장 (검색량이라도 있으면 기록)
+    if (receiptReviewCount > 0 || blogReviewCount > 0 || searchVolume > 0) {
+      await this.prisma.competitorHistory.create({
+        data: {
+          competitorId,
+          receiptReviewCount: receiptReviewCount || null,
+          blogReviewCount: blogReviewCount || null,
+        },
+      });
+    }
+
+    // 변동 감지: 리뷰 급증 (전일 대비 +5개 이상)
+    const changes: Array<{ type: string; name: string; detail: string }> = [];
+    if (prev && receiptReviewCount > 0) {
+      const prevReceipt = prev.receiptReviewCount || 0;
+      const diff = receiptReviewCount - prevReceipt;
+      if (diff >= 5) {
+        changes.push({
+          type: "REVIEW_SURGE",
+          name,
+          detail: `방문자 리뷰 +${diff}개 (${prevReceipt}→${receiptReviewCount})`,
+        });
+      }
+    }
+    if (prev && blogReviewCount > 0) {
+      const prevBlog = prev.blogReviewCount || 0;
+      const diff = blogReviewCount - prevBlog;
+      if (diff >= 5) {
+        changes.push({
+          type: "BLOG_SURGE",
+          name,
+          detail: `블로그 리뷰 +${diff}개 (${prevBlog}→${blogReviewCount})`,
+        });
+      }
+    }
+
     this.logger.log(
       `경쟁매장 데이터 수집 완료: ${name} (리뷰:${receiptReviewCount}, 블로그:${blogReviewCount}, 검색:${searchVolume}/일)`,
     );
-  }
 
-  // 네이버 검색에서 리뷰 수 스크래핑
-  private async scrapeReviewCounts(name: string): Promise<{ receipt: number; blog: number }> {
-    const browser = await chromium.launch({
-      headless: true,
-      executablePath: this.chromePath,
-      args: ["--no-sandbox"],
-    });
-
-    try {
-      const page = await browser.newPage();
-      await page.goto(
-        `https://search.naver.com/search.naver?query=${encodeURIComponent(name)}`,
-        { waitUntil: "networkidle", timeout: 15000 },
-      );
-      const html = await page.content();
-
-      // 영수증(방문자) 리뷰 수 추출
-      const reviewPatterns = [
-        /"reviewCount":(\d+)/,
-        /"totalReviewCount":(\d+)/,
-        /"visitorReviewCount":(\d+)/,
-        /리뷰\s*(\d[\d,]*)/,
-        /방문자리뷰\s*(\d[\d,]*)/,
-      ];
-      let receipt = 0;
-      for (const p of reviewPatterns) {
-        const m = html.match(p);
-        if (m) { receipt = parseInt(m[1].replace(/,/g, "")); break; }
-      }
-
-      // 블로그 리뷰 수 추출
-      const blogPatterns = [
-        /"blogReviewCount":(\d+)/,
-        /블로그리뷰\s*(\d[\d,]*)/,
-        /블로그\s*(\d[\d,]*)/,
-      ];
-      let blog = 0;
-      for (const p of blogPatterns) {
-        const m = html.match(p);
-        if (m) { blog = parseInt(m[1].replace(/,/g, "")); break; }
-      }
-
-      return { receipt, blog };
-    } finally {
-      await browser.close();
-    }
+    return { storeId: prev?.storeId, changes };
   }
 }

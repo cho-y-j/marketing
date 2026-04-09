@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   BarChart3,
-  Users,
+  MessageSquareReply,
   Search,
   Settings,
 } from "lucide-react";
@@ -15,7 +15,7 @@ const tabs = [
   { href: "/", label: "홈", icon: LayoutDashboard },
   { href: "/keywords", label: "키워드", icon: Search },
   { href: "/analysis", label: "분석", icon: BarChart3 },
-  { href: "/competitors", label: "비교", icon: Users },
+  { href: "/reviews", label: "리뷰", icon: MessageSquareReply },
   { href: "/settings", label: "설정", icon: Settings },
 ];
 

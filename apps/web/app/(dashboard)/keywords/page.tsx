@@ -10,9 +10,10 @@ import { RankHistoryChart } from "@/components/charts/rank-history-chart";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useKeywords } from "@/hooks/useKeywords";
 import { useRankHistory, useRankCheck } from "@/hooks/useRankHistory";
+import { useTrafficShift, useRecordVolumes } from "@/hooks/useTrafficShift";
 import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
-import { TrendingUp, TrendingDown, Minus, Plus, Search, Loader2, RefreshCw, BarChart3, Hash, ArrowUpRight, ArrowDownRight, Sparkles, Lightbulb } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Plus, Search, Loader2, RefreshCw, BarChart3, Hash, ArrowUpRight, ArrowDownRight, Sparkles, Lightbulb, ArrowRight, Activity } from "lucide-react";
 
 const typeBadge: Record<string, { label: string; color: string }> = {
   MAIN: { label: "대표", color: "bg-blue-100 text-blue-700" },
@@ -27,10 +28,23 @@ export default function KeywordsPage() {
   const { data: keywords, isLoading, refetch } = useKeywords(storeId);
   const { data: rankData } = useRankHistory(storeId, 7);
   const rankCheck = useRankCheck(storeId);
+  const { data: trafficShift, refetch: refetchShift, isLoading: shiftLoading } = useTrafficShift(storeId);
+  const recordVolumes = useRecordVolumes(storeId);
   const [newKeyword, setNewKeyword] = useState("");
   const [adding, setAdding] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discoveredKeywords, setDiscoveredKeywords] = useState<any>(null);
+
+  const handleRecordVolumes = () => {
+    recordVolumes.mutate(undefined, {
+      onSuccess: (count) => {
+        toast.success(`검색량 ${count}건 기록됨 — 누적 2주 후 트래픽 이동 분석 가능`);
+        refetchShift();
+      },
+      onError: (e: any) =>
+        toast.error("기록 실패: " + (e.response?.data?.message || e.message)),
+    });
+  };
 
   const handleAdd = async () => {
     if (!newKeyword.trim() || !storeId) return;
@@ -179,14 +193,19 @@ export default function KeywordsPage() {
         </Button>
       </div>
 
-      {/* 순위 차트 */}
-      {kws.length > 0 && (
-        <RankHistoryChart
-          data={rankData ?? []}
-          keywords={kws.slice(0, 3).map((k: any) => k.keyword)}
-          isLoading={false}
-        />
-      )}
+      {/* 순위 차트 — 순위 잡힌 키워드 우선, 부족하면 검색량 순으로 채움 */}
+      {kws.length > 0 && (() => {
+        const ranked = kws.filter((k: any) => k.currentRank != null);
+        const unranked = kws.filter((k: any) => k.currentRank == null);
+        const chartKeywords = [...ranked, ...unranked].slice(0, 5).map((k: any) => k.keyword);
+        return (
+          <RankHistoryChart
+            data={rankData ?? []}
+            keywords={chartKeywords}
+            isLoading={false}
+          />
+        );
+      })()}
 
       {/* 키워드 목록 */}
       {isLoading ? (
@@ -267,6 +286,108 @@ export default function KeywordsPage() {
           })}
         </div>
       )}
+
+      {/* === 검색 트래픽 이동 분석 === */}
+      <Card className="rounded-2xl overflow-hidden">
+        <CardContent className="pt-5 pb-4 px-5">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center">
+                <Activity size={14} className="text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-bold">검색 트래픽 이동 분석</p>
+                <p className="text-[11px] text-muted-foreground">
+                  감소 키워드 → 후보 키워드 + AI 해석 (15% 이상 하락 시)
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRecordVolumes}
+              disabled={recordVolumes.isPending || kws.length === 0}
+              className="rounded-xl"
+            >
+              {recordVolumes.isPending ? (
+                <Loader2 size={12} className="animate-spin mr-1.5" />
+              ) : (
+                <RefreshCw size={12} className="mr-1.5" />
+              )}
+              검색량 기록
+            </Button>
+          </div>
+
+          {shiftLoading ? (
+            <Skeleton className="h-20 w-full rounded-xl" />
+          ) : !trafficShift || trafficShift.length === 0 ? (
+            <div className="text-center py-6 px-3">
+              <p className="text-xs text-muted-foreground">
+                감소 임계치(-15%) 이하 키워드가 없습니다
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                "검색량 기록" 버튼을 매일 눌러 누적 데이터를 만드세요 (2주 이상 필요)
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 mt-3">
+              {trafficShift.map((shift, i) => (
+                <div
+                  key={i}
+                  className="p-3 rounded-xl bg-gradient-to-br from-rose-50/50 to-cyan-50/50 border border-cyan-200/30"
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-bold text-rose-600">
+                      {shift.sourceKeyword}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {shift.sourcePrevious.toLocaleString()} →{" "}
+                      {shift.sourceCurrent.toLocaleString()}
+                    </span>
+                    <span className="text-xs font-semibold text-rose-600">
+                      ({shift.sourceDropRate}%)
+                    </span>
+                  </div>
+                  {shift.candidates.length > 0 && (
+                    <div className="mt-2 pl-2 border-l-2 border-cyan-300">
+                      <p className="text-[11px] font-semibold text-cyan-700 mb-1 flex items-center gap-1">
+                        <ArrowRight size={10} />
+                        후보 키워드 (검색량 상승)
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {shift.candidates.map((c, j) => (
+                          <span
+                            key={j}
+                            className="text-[11px] px-2 py-0.5 rounded-lg bg-cyan-100 text-cyan-800"
+                          >
+                            {c.keyword}
+                            {!Number.isNaN(c.gainRate) && (
+                              <span className="ml-1 text-emerald-700 font-semibold">
+                                +{c.gainRate}%
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {shift.interpretation && (
+                    <div className="mt-2 p-2 rounded-lg bg-white/70 border border-violet-100">
+                      <p className="text-[11px] font-semibold text-violet-700 flex items-center gap-1 mb-0.5">
+                        <Sparkles size={10} />
+                        AI 해석
+                      </p>
+                      <p className="text-xs text-foreground leading-relaxed">
+                        {shift.interpretation}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* AI 키워드 발굴 */}
       <Card className="rounded-2xl overflow-hidden">

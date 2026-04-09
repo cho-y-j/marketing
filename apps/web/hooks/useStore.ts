@@ -11,7 +11,6 @@ export function useStores() {
         const { data } = await apiClient.get("/stores");
         return data;
       } catch (e: any) {
-        // 인증 안 된 상태면 빈 배열 (온보딩으로 유도)
         if (e.response?.status === 401) return [];
         throw e;
       }
@@ -45,5 +44,44 @@ export function useCreateStore() {
       return data;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stores"] }),
+  });
+}
+
+// 셋업 진행 상태 조회 (폴링용)
+export function useSetupStatus(storeId: string) {
+  return useQuery({
+    queryKey: ["setup-status", storeId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/stores/${storeId}/setup-status`);
+      return data as {
+        status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+        step: string | null;
+        error: string | null;
+        completedAt: string | null;
+        keywordCount: number;
+        competitorCount: number;
+      };
+    },
+    enabled: !!storeId,
+    // RUNNING 상태면 2초마다 폴링, 완료/실패면 중지
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === "RUNNING" || status === "PENDING") return 2000;
+      return false;
+    },
+  });
+}
+
+// 셋업 재시도
+export function useRetrySetup() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (storeId: string) => {
+      const { data } = await apiClient.post(`/stores/${storeId}/setup`);
+      return data;
+    },
+    onSuccess: (_data, storeId) => {
+      queryClient.invalidateQueries({ queryKey: ["setup-status", storeId] });
+    },
   });
 }

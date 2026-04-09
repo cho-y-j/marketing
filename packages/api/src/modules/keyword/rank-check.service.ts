@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { NaverRankCheckerProvider } from "../../providers/naver/naver-rank-checker.provider";
+import { NotificationService } from "../notification/notification.service";
 
 @Injectable()
 export class RankCheckService {
@@ -9,13 +10,14 @@ export class RankCheckService {
   constructor(
     private prisma: PrismaService,
     private rankChecker: NaverRankCheckerProvider,
+    private notificationService: NotificationService,
   ) {}
 
   // 매장의 모든 키워드 순위 체크
   async checkAllKeywordRanks(storeId: string) {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
-      include: { keywords: true },
+      include: { keywords: true, user: { select: { id: true } } },
     });
     if (!store) throw new NotFoundException("매장을 찾을 수 없습니다");
 
@@ -31,7 +33,9 @@ export class RankCheckService {
       store.naverPlaceId || undefined,
     );
 
-    // DB 업데이트 + 히스토리 저장
+    // DB 업데이트 + 히스토리 저장 + 순위 변동 알림
+    const rankChanges: Array<{ keyword: string; prev: number; curr: number; diff: number }> = [];
+
     for (const result of results) {
       const kw = store.keywords.find((k) => k.keyword === result.keyword);
       if (kw) {
@@ -55,10 +59,71 @@ export class RankCheckService {
             topPlaces: result.topPlaces,
           },
         });
+
+        // 순위 변동 감지 (이전 순위가 있고, 3단계 이상 변동 시)
+        if (kw.currentRank && result.rank) {
+          const diff = kw.currentRank - result.rank; // 양수 = 상승
+          if (Math.abs(diff) >= 3) {
+            rankChanges.push({
+              keyword: result.keyword,
+              prev: kw.currentRank,
+              curr: result.rank,
+              diff,
+            });
+          }
+        }
       }
     }
 
-    this.logger.log(`순위 체크 완료: ${store.name}`);
+    // 순위 변동 알림 발송
+    if (rankChanges.length > 0) {
+      const userId = store.user?.id;
+
+      if (userId) {
+        for (const change of rankChanges) {
+          await this.notificationService.createRankChangeAlert(
+            userId,
+            change.keyword,
+            change.prev,
+            change.curr,
+          );
+          this.logger.log(
+            `순위 변동 알림: "${change.keyword}" ${change.prev}위→${change.curr}위 (${change.diff > 0 ? "+" : ""}${change.diff})`,
+          );
+        }
+      }
+    }
+
+    // 순위 역전 감지: 경쟁사가 내 순위 위에 있는 경우
+    const competitors = await this.prisma.competitor.findMany({
+      where: { storeId },
+      select: { competitorName: true },
+    });
+    const competitorNames = new Set(competitors.map((c) => c.competitorName));
+
+    for (const result of results) {
+      if (!result.rank || !result.topPlaces) continue;
+      // 내 순위보다 위에 있는 경쟁사 찾기
+      const overtakers = result.topPlaces
+        .filter((p) => p.rank < result.rank! && competitorNames.has(p.name))
+        .map((p) => p.name);
+
+      if (overtakers.length > 0 && store.user?.id) {
+        for (const overtaker of overtakers) {
+          // CompetitorAlert에 순위 역전 기록
+          await this.prisma.competitorAlert.create({
+            data: {
+              storeId,
+              competitorName: overtaker,
+              alertType: "RANK_OVERTAKE",
+              detail: `"${result.keyword}" 검색에서 "${overtaker}"에게 순위를 뺏겼습니다 (내 ${result.rank}위)`,
+            },
+          });
+        }
+      }
+    }
+
+    this.logger.log(`순위 체크 완료: ${store.name} (변동 알림 ${rankChanges.length}건)`);
 
     return {
       storeName: store.name,

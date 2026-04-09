@@ -43,7 +43,9 @@ export function RankHistoryChart({
       title="키워드 순위 변동"
       isLoading={isLoading}
       isEmpty={!data || data.length === 0}
-      emptyMessage="순위 데이터가 없습니다. 키워드를 추가하고 순위 체크를 실행해보세요."
+      emptyMessage="키워드를 추가하고 순위 체크를 실행해보세요"
+      isInsufficient={data && data.length === 1}
+      insufficientMessage="순위 데이터 1회 수집됨 — 내일 비교 데이터가 추가됩니다"
       onPeriodChange={onPeriodChange}
     >
       <ResponsiveContainer width="100%" height={250}>
