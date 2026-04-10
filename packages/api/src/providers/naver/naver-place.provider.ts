@@ -162,35 +162,165 @@ export class NaverPlaceProvider {
     }
   }
 
-  // 플레이스 리뷰 데이터 수집
+  // 플레이스 리뷰 데이터 수집 — 사용자 네이버 토큰 사용 가능
   async getPlaceReviews(
     placeId: string,
     page = 1,
+    naverAccessToken?: string,
   ): Promise<ReviewData> {
-    try {
-      const resp = await axios.get(
-        `https://map.naver.com/p/api/boards/${placeId}/reviews`,
-        {
-          params: { page, size: 20 },
-          headers: this.headers,
-          timeout: 10000,
-        },
-      );
+    const headers: Record<string, string> = {
+      ...this.headers,
+      "User-Agent":
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      Referer: `https://m.place.naver.com/restaurant/${placeId}/review/visitor`,
+    };
 
-      const items = resp.data?.items || resp.data?.reviews || [];
-      return {
-        reviews: items.map((r: any) => ({
-          content: r.body || r.content || "",
-          date: r.created || r.date || "",
-          rating: r.rating || undefined,
-          author: r.authorName || r.nickname || r.author || "익명",
-          isReceipt: r.isReceipt ?? r.isVisitor ?? false,
-        })),
-        totalCount: resp.data?.totalCount || resp.data?.total || 0,
-      };
-    } catch (e: any) {
-      this.logger.warn(`리뷰 조회 실패: ${e.message}`);
-      return { reviews: [], totalCount: 0 };
+    // 사장님 토큰이 있으면 인증 요청 (IP 차단 회피)
+    if (naverAccessToken) {
+      headers["Authorization"] = `Bearer ${naverAccessToken}`;
     }
+
+    // 여러 API 엔드포인트 시도 (네이버가 자주 변경)
+    const endpoints = [
+      {
+        url: `https://api.place.naver.com/graphql`,
+        method: "POST" as const,
+        data: [{
+          operationName: "getVisitorReviews",
+          variables: {
+            input: {
+              businessId: placeId,
+              businessType: "restaurant",
+              page,
+              size: 20,
+              isPhotoUsed: false,
+              includeContent: true,
+              getUserStats: false,
+              platform: "mobile",
+            },
+          },
+          query: `query getVisitorReviews($input: VisitorReviewsInput) {
+            visitorReviews(input: $input) {
+              items { id body created authorNickname rating isReceipt }
+              total
+            }
+          }`,
+        }],
+        parse: (data: any) => {
+          const result = Array.isArray(data) ? data[0]?.data : data?.data;
+          const vr = result?.visitorReviews;
+          return {
+            reviews: (vr?.items || []).map((r: any) => ({
+              content: r.body || "",
+              date: r.created || "",
+              rating: r.rating || undefined,
+              author: r.authorNickname || "익명",
+              isReceipt: r.isReceipt ?? true,
+            })),
+            totalCount: vr?.total || 0,
+          };
+        },
+      },
+      {
+        url: `https://m.place.naver.com/restaurant/${placeId}/review/visitor?reviewSort=recent`,
+        method: "GET" as const,
+        data: null,
+        parse: (data: any) => {
+          const html = typeof data === "string" ? data : "";
+          // __APOLLO_STATE__에서 VisitorReview 추출
+          const apolloMatch = html.match(/window\.__APOLLO_STATE__\s*=\s*({.*?});/s);
+          if (!apolloMatch) return { reviews: [], totalCount: 0 };
+          try {
+            const apolloData = JSON.parse(apolloMatch[1]);
+            const reviews: any[] = [];
+            for (const [, v] of Object.entries(apolloData)) {
+              const item = v as any;
+              if (
+                item &&
+                typeof item === "object" &&
+                item.__typename === "VisitorReview" &&
+                item.body
+              ) {
+                reviews.push({
+                  content: item.body || "",
+                  date: item.created || "",
+                  rating: item.rating || undefined,
+                  author:
+                    (typeof item.author === "object"
+                      ? item.author?.nickname
+                      : undefined) || "방문자",
+                  isReceipt: true,
+                });
+              }
+            }
+            return { reviews: reviews.slice(0, 20), totalCount: reviews.length };
+          } catch {
+            return { reviews: [], totalCount: 0 };
+          }
+        },
+      },
+      {
+        url: `https://map.naver.com/p/api/boards/${placeId}/reviews`,
+        method: "GET" as const,
+        data: null,
+        parse: (data: any) => {
+          const items = data?.items || data?.reviews || [];
+          return {
+            reviews: items.map((r: any) => ({
+              content: r.body || r.content || "",
+              date: r.created || r.date || "",
+              rating: r.rating || undefined,
+              author: r.authorName || r.nickname || r.author || "익명",
+              isReceipt: r.isReceipt ?? r.isVisitor ?? false,
+            })),
+            totalCount: data?.totalCount || data?.total || 0,
+          };
+        },
+      },
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const requestHeaders = {
+          ...headers,
+          ...(ep.method === "POST" ? { "Content-Type": "application/json" } : {}),
+        };
+
+        const resp =
+          ep.method === "POST"
+            ? await axios.post(ep.url, ep.data, {
+                headers: requestHeaders,
+                timeout: 15000,
+              })
+            : await axios.get(ep.url, {
+                params: ep.data === null ? { page, size: 20 } : undefined,
+                headers: requestHeaders,
+                timeout: 15000,
+                // HTML 응답도 받을 수 있도록
+                transformResponse: [(data: any) => data],
+              });
+
+        let responseData = resp.data;
+        if (typeof responseData === "string" && responseData.startsWith("{")) {
+          try {
+            responseData = JSON.parse(responseData);
+          } catch {}
+        }
+
+        const result = ep.parse(responseData);
+        if (result.reviews.length > 0) {
+          this.logger.log(
+            `리뷰 ${result.reviews.length}건 수집 성공 (${ep.url.split("/")[2]})`,
+          );
+          return result;
+        }
+      } catch (e: any) {
+        this.logger.debug(`리뷰 엔드포인트 실패 [${ep.url.split("?")[0]}]: ${e.message}`);
+        continue;
+      }
+    }
+
+    this.logger.warn(`리뷰 수집 실패: 모든 엔드포인트 실패 (placeId=${placeId})`);
+    return { reviews: [], totalCount: 0 };
   }
 }

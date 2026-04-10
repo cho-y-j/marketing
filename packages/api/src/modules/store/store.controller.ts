@@ -14,6 +14,7 @@ import { StoreService } from "./store.service";
 import { CreateStoreDto, UpdateStoreDto } from "./dto/store.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { StoreSetupService } from "../../providers/data/store-setup.service";
+import { EventCollectorService } from "../../providers/data/event-collector.service";
 
 @ApiTags("매장")
 @Controller("stores")
@@ -23,6 +24,7 @@ export class StoreController {
   constructor(
     private storeService: StoreService,
     private storeSetup: StoreSetupService,
+    private eventCollector: EventCollectorService,
   ) {}
 
   @Post()
@@ -71,5 +73,17 @@ export class StoreController {
   @ApiOperation({ summary: "매장 셋업 진행 상태 조회" })
   getSetupStatus(@Param("id") id: string) {
     return this.storeSetup.getSetupStatus(id);
+  }
+
+  @Post(":id/events/collect")
+  @ApiOperation({ summary: "주변 축제/이벤트 수집 (TourAPI)" })
+  collectEvents(@Param("id") id: string) {
+    return this.eventCollector.collectForStore(id);
+  }
+
+  @Get(":id/events")
+  @ApiOperation({ summary: "현재 진행 중인 주변 축제/이벤트 조회" })
+  getEvents(@Param("id") id: string) {
+    return this.eventCollector.getActiveEventsForStore(id);
   }
 }

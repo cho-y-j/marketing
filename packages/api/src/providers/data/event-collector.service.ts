@@ -133,11 +133,28 @@ export class EventCollectorService {
     if (!store) return [];
     const region = this.extractRegion(store.address || store.district || "");
     const today = new Date();
+
+    // "충북" → "충청북도" 매핑 (짧은 표기 → 정식명)
+    const shortToFull: Record<string, string> = {
+      충북: "충청북도", 충남: "충청남도", 전북: "전라북도", 전남: "전라남도",
+      경북: "경상북도", 경남: "경상남도", 경기: "경기도", 강원: "강원",
+      서울: "서울", 부산: "부산", 대구: "대구", 인천: "인천",
+      광주: "광주", 대전: "대전", 울산: "울산", 세종: "세종", 제주: "제주",
+    };
+    const regionVariants = region
+      ? [region, shortToFull[region], ...(shortToFull[region] ? [shortToFull[region]] : [])].filter(Boolean)
+      : [];
+
     return this.prisma.seasonalEvent.findMany({
       where: {
         startDate: { lte: today },
         endDate: { gte: today },
-        ...(region ? { OR: [{ region: { contains: region } }, { region: null }] } : {}),
+        ...(regionVariants.length > 0
+          ? { OR: [
+              ...regionVariants.map((r) => ({ region: { contains: r as string } })),
+              { region: null },
+            ] }
+          : {}),
       },
       orderBy: { startDate: "asc" },
       take: 10,

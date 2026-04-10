@@ -66,4 +66,9 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsString()
   district?: string;
+
+  @ApiProperty({ required: false, description: "스마트플레이스 Biz ID" })
+  @IsOptional()
+  @IsString()
+  smartPlaceBizId?: string;
 }

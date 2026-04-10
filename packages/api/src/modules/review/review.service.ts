@@ -7,6 +7,7 @@ import {
 import { PrismaService } from "../../common/prisma.service";
 import { AIProvider } from "../../providers/ai/ai.provider";
 import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
+import { NotificationService } from "../notification/notification.service";
 import { CONTENT_REVIEW_REPLY_PROMPT } from "../../providers/ai/prompts";
 
 /**
@@ -30,6 +31,7 @@ export class ReviewService {
     private prisma: PrismaService,
     private ai: AIProvider,
     private naverPlace: NaverPlaceProvider,
+    private notifications: NotificationService,
   ) {}
 
   /**
@@ -39,7 +41,7 @@ export class ReviewService {
   async fetchReviews(storeId: string, max = 20): Promise<number> {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
-      select: { id: true, name: true, naverPlaceId: true },
+      select: { id: true, name: true, naverPlaceId: true, userId: true },
     });
     if (!store) throw new NotFoundException("매장을 찾을 수 없습니다");
     if (!store.naverPlaceId) {
@@ -48,11 +50,18 @@ export class ReviewService {
       );
     }
 
+    // 사장님 네이버 토큰이 있으면 사용 (IP 차단 회피)
+    const user = await this.prisma.user.findUnique({
+      where: { id: store.userId },
+      select: { naverAccessToken: true },
+    });
+    const naverToken = user?.naverAccessToken || undefined;
+
     let added = 0;
     const totalPages = Math.ceil(max / 20);
 
     for (let page = 1; page <= totalPages; page++) {
-      const reviewData = await this.naverPlace.getPlaceReviews(store.naverPlaceId, page);
+      const reviewData = await this.naverPlace.getPlaceReviews(store.naverPlaceId, page, naverToken);
       if (reviewData.reviews.length === 0) break;
 
       for (const review of reviewData.reviews) {
@@ -70,7 +79,8 @@ export class ReviewService {
               authorName: review.author || "익명",
               rating: review.rating ?? null,
               body: review.content,
-              postedAt: review.date ? new Date(review.date) : new Date(),
+              postedAt: this.parseKoreanDate(review.date),
+              fetchedAt: new Date(),
               replyStatus: "PENDING",
             },
           });
@@ -84,7 +94,50 @@ export class ReviewService {
     }
 
     this.logger.log(`[${store.name}] 리뷰 수집: ${added}건 추가`);
+
+    // 신규 리뷰 알림
+    if (added > 0) {
+      this.notifications
+        .create(store.userId, {
+          type: "NEW_REVIEW",
+          title: `새 리뷰 ${added}건 수집`,
+          message: `${store.name}에 새 리뷰 ${added}건이 수집되었습니다. AI 답글을 생성해보세요.`,
+        })
+        .catch((e) => this.logger.warn(`리뷰 알림 생성 실패: ${e.message}`));
+    }
+
     return added;
+  }
+
+  // 네이버 한국어 날짜 파싱: "4.4.토", "3.27.금", "2025.12.25." 등
+  private parseKoreanDate(dateStr?: string): Date {
+    if (!dateStr) return new Date();
+
+    // "2026.04.10." or "2026.4.10" 형식
+    const fullMatch = dateStr.match(/(\d{4})\.(\d{1,2})\.(\d{1,2})/);
+    if (fullMatch) {
+      return new Date(+fullMatch[1], +fullMatch[2] - 1, +fullMatch[3]);
+    }
+
+    // "4.4.토" or "3.27.금" or "12.25.수" 형식 (올해 기준)
+    const shortMatch = dateStr.match(/(\d{1,2})\.(\d{1,2})\.?/);
+    if (shortMatch) {
+      const year = new Date().getFullYear();
+      const month = +shortMatch[1];
+      const day = +shortMatch[2];
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const d = new Date(year, month - 1, day);
+        // 미래 날짜면 작년으로
+        if (d > new Date()) d.setFullYear(year - 1);
+        return d;
+      }
+    }
+
+    // ISO 형식 or 기타
+    const parsed = new Date(dateStr);
+    if (!isNaN(parsed.getTime())) return parsed;
+
+    return new Date();
   }
 
   /**
@@ -104,52 +157,97 @@ export class ReviewService {
       select: { id: true, name: true, category: true },
     });
 
+    // 일괄 처리: 모든 리뷰를 한 번에 AI에 보내서 답글 생성 (1건씩 → 일괄)
+    const reviewList = pending.map((r, i) => ({
+      index: i + 1,
+      author: r.authorName || "방문자",
+      rating: r.rating,
+      body: r.body?.slice(0, 200),
+    }));
+
+    const userPrompt = JSON.stringify({
+      store: { name: store?.name, category: store?.category },
+      reviews: reviewList,
+      instruction: `위 ${reviewList.length}건의 리뷰 각각에 대한 사장님 답글을 작성해주세요.
+JSON 배열로 응답: [{ "index": 1, "reply": "답글 내용" }, { "index": 2, "reply": "..." }, ...]
+- 각 답글은 2~3문장, 친절하고 자연스럽게
+- 매장명(${store?.name})을 자연스럽게 포함
+- 이모지 적절히 사용`,
+    });
+
     let drafted = 0;
-    for (const review of pending) {
+
+    try {
+      const aiResp = await this.ai.generate(
+        CONTENT_REVIEW_REPLY_PROMPT,
+        userPrompt,
+      );
+
+      let replies: any[] = [];
       try {
-        const userPrompt = JSON.stringify({
-          store: {
-            name: store?.name,
-            category: store?.category,
-          },
-          review: {
-            author: review.authorName,
-            rating: review.rating,
-            body: review.body,
-          },
-          instruction: "JSON 형식으로 응답: { title, body, tags, targetKeywords }",
-        });
-        const aiResp = await this.ai.generate(
-          CONTENT_REVIEW_REPLY_PROMPT,
-          userPrompt,
-        );
-        let parsed: any;
-        try {
-          const m = aiResp.content.match(/\{[\s\S]*\}/);
-          parsed = JSON.parse(m ? m[0] : aiResp.content);
-        } catch {
-          this.logger.warn(
-            `리뷰 답글 JSON 파싱 실패 review=${review.id} → 원본 텍스트 사용`,
-          );
-          parsed = { body: aiResp.content };
-        }
-        if (!parsed.body || typeof parsed.body !== "string") {
-          throw new Error("AI 답글에 body 가 없음");
-        }
-        await this.prisma.storeReview.update({
-          where: { id: review.id },
-          data: {
-            replyStatus: "DRAFTED",
-            draftReply: parsed.body,
-            draftedAt: new Date(),
-          },
-        });
-        drafted++;
-        await new Promise((r) => setTimeout(r, 500));
-      } catch (e: any) {
-        this.logger.warn(`리뷰 ${review.id} 답글 생성 실패: ${e.message}`);
+        const m = aiResp.content.match(/\[[\s\S]*\]/);
+        replies = JSON.parse(m ? m[0] : aiResp.content);
+      } catch {
+        this.logger.warn("일괄 답글 JSON 파싱 실패 → 개별 처리 폴백");
       }
+
+      // 일괄 결과가 있으면 매핑
+      if (Array.isArray(replies) && replies.length > 0) {
+        for (const review of pending) {
+          const idx = pending.indexOf(review) + 1;
+          const match = replies.find((r: any) => r.index === idx);
+          const replyText = match?.reply || match?.body;
+          if (replyText && typeof replyText === "string") {
+            await this.prisma.storeReview.update({
+              where: { id: review.id },
+              data: {
+                replyStatus: "DRAFTED",
+                draftReply: replyText,
+                draftedAt: new Date(),
+              },
+            });
+            drafted++;
+          }
+        }
+      }
+
+      // 일괄 실패한 리뷰는 개별 처리
+      if (drafted < pending.length) {
+        const remaining = pending.filter(
+          (r) => !replies?.find((_: any, i: number) => i + 1 <= drafted && pending[i]?.id === r.id),
+        );
+        for (const review of remaining) {
+          if (drafted >= pending.length) break;
+          const alreadyDrafted = await this.prisma.storeReview.findUnique({
+            where: { id: review.id },
+            select: { replyStatus: true },
+          });
+          if (alreadyDrafted?.replyStatus === "DRAFTED") continue;
+
+          try {
+            const singlePrompt = JSON.stringify({
+              store: { name: store?.name, category: store?.category },
+              review: { author: review.authorName, body: review.body?.slice(0, 200) },
+              instruction: "이 리뷰에 대한 사장님 답글을 2~3문장으로 작성. JSON: { \"reply\": \"답글\" }",
+            });
+            const resp = await this.ai.generate(CONTENT_REVIEW_REPLY_PROMPT, singlePrompt);
+            const m = resp.content.match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse(m ? m[0] : `{"reply":"${resp.content}"}`);
+            const text = parsed.reply || parsed.body || resp.content;
+            await this.prisma.storeReview.update({
+              where: { id: review.id },
+              data: { replyStatus: "DRAFTED", draftReply: text, draftedAt: new Date() },
+            });
+            drafted++;
+          } catch (e: any) {
+            this.logger.warn(`리뷰 ${review.id} 개별 답글 생성 실패: ${e.message}`);
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.error(`일괄 답글 생성 실패: ${e.message}`);
     }
+
     this.logger.log(`[${store?.name}] AI 답글 초안 ${drafted}건 작성`);
     return drafted;
   }

@@ -4,19 +4,54 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ========================================
+   디자인 시스템 — 색상 팔레트
+   모든 컴포넌트에서 이 변수만 사용할 것
+   하드코딩 색상 (text-blue-500 등) 금지
+   ======================================== */
 @theme {
-  --color-primary: #2E75B6;
-  --color-primary-dark: #1B3A5C;
-  --color-primary-light: #5B9BD5;
-  --color-accent: #FF6B35;
-  --color-success: #22C55E;
-  --color-warning: #EAB308;
+  /* 브랜드 */
+  --color-brand: #4F46E5;
+  --color-brand-light: #818CF8;
+  --color-brand-subtle: #EEF2FF;
+  --color-brand-dark: #3730A3;
+
+  /* 시맨틱 */
+  --color-success: #10B981;
+  --color-success-light: #D1FAE5;
+  --color-warning: #F59E0B;
+  --color-warning-light: #FEF3C7;
   --color-danger: #EF4444;
-  --color-background: #F8FAFC;
+  --color-danger-light: #FEE2E2;
+  --color-info: #3B82F6;
+  --color-info-light: #DBEAFE;
+
+  /* 텍스트 */
+  --color-text-primary: #111827;
+  --color-text-secondary: #6B7280;
+  --color-text-tertiary: #9CA3AF;
+
+  /* 표면 */
   --color-surface: #FFFFFF;
-  --color-text-primary: #1E293B;
-  --color-text-secondary: #64748B;
-  --color-border: #E2E8F0;
+  --color-surface-secondary: #F9FAFB;
+  --color-surface-tertiary: #F3F4F6;
+  --color-border-primary: #E5E7EB;
+  --color-border-secondary: #F3F4F6;
+
+  /* 차트 전용 (5색 — 서로 구분 쉽게) */
+  --color-chart-blue: #4F46E5;
+  --color-chart-emerald: #10B981;
+  --color-chart-amber: #F59E0B;
+  --color-chart-rose: #F43F5E;
+  --color-chart-violet: #8B5CF6;
+
+  /* 점수 (경쟁력/등급) */
+  --color-score-good: #10B981;
+  --color-score-good-bg: #D1FAE5;
+  --color-score-mid: #F59E0B;
+  --color-score-mid-bg: #FEF3C7;
+  --color-score-bad: #EF4444;
+  --color-score-bad-bg: #FEE2E2;
 }
 
 body {
@@ -25,8 +60,10 @@ body {
     system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo",
     "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji",
     "Segoe UI Symbol", sans-serif;
-  background-color: var(--color-background);
+  background-color: var(--color-surface-secondary);
   color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @theme inline {

@@ -11,6 +11,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { ChartWrapper } from "./chart-wrapper";
+import { CHART_COLORS } from "@/lib/design-system";
 
 interface ScoreDataPoint {
   date: string;
@@ -39,26 +40,44 @@ export function CompetitiveScoreChart({
       onPeriodChange={onPeriodChange}
     >
       <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-          <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-          <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+        <LineChart
+          data={data}
+          margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
+        >
+          <CartesianGrid
+            strokeDasharray="3 3"
+            stroke="var(--color-border-secondary)"
+          />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
+          />
+          <YAxis
+            domain={[0, 100]}
+            tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
+          />
           <Tooltip
             contentStyle={{
-              backgroundColor: "hsl(var(--card))",
-              border: "1px solid hsl(var(--border))",
-              borderRadius: "8px",
+              backgroundColor: "var(--color-surface)",
+              border: "1px solid var(--color-border-primary)",
+              borderRadius: "12px",
               fontSize: 12,
+              boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
             }}
             formatter={(value: any) => [`${value}점`, "경쟁력"]}
           />
-          <ReferenceLine y={70} stroke="hsl(var(--chart-2))" strokeDasharray="3 3" label={{ value: "양호", fontSize: 10 }} />
+          <ReferenceLine
+            y={70}
+            stroke={CHART_COLORS[1]}
+            strokeDasharray="3 3"
+            label={{ value: "양호", fontSize: 10 }}
+          />
           <Line
             type="monotone"
             dataKey="score"
-            stroke="hsl(var(--chart-1))"
+            stroke={CHART_COLORS[0]}
             strokeWidth={2.5}
-            dot={{ r: 3, fill: "hsl(var(--chart-1))" }}
+            dot={{ r: 3, fill: CHART_COLORS[0] }}
             activeDot={{ r: 6 }}
           />
         </LineChart>

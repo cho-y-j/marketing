@@ -47,6 +47,12 @@ export class CompetitorService {
       where: { id: competitorId, storeId },
     });
     if (!competitor) throw new NotFoundException("경쟁 매장을 찾을 수 없습니다");
+
+    // 연관 히스토리 먼저 삭제
+    await this.prisma.competitorHistory.deleteMany({
+      where: { competitorId },
+    });
+
     return this.prisma.competitor.delete({ where: { id: competitorId } });
   }
 

@@ -20,6 +20,7 @@ async function bootstrap() {
     origin: [
       "http://localhost:3000",
       "http://localhost:3001",
+      "http://1.221.158.115:3000",
       process.env.NEXTAUTH_URL || "",
     ].filter(Boolean),
     credentials: true,

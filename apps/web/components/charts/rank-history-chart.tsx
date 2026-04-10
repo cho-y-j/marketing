@@ -11,6 +11,7 @@ import {
   Legend,
 } from "recharts";
 import { ChartWrapper } from "./chart-wrapper";
+import { CHART_COLORS } from "@/lib/design-system";
 
 interface RankDataPoint {
   date: string;
@@ -23,14 +24,6 @@ interface RankHistoryChartProps {
   isLoading?: boolean;
   onPeriodChange?: (days: number) => void;
 }
-
-const COLORS = [
-  "hsl(var(--chart-1))",
-  "hsl(var(--chart-2))",
-  "hsl(var(--chart-3))",
-  "hsl(var(--chart-4))",
-  "hsl(var(--chart-5))",
-];
 
 export function RankHistoryChart({
   data,
@@ -49,41 +42,57 @@ export function RankHistoryChart({
       onPeriodChange={onPeriodChange}
     >
       <ResponsiveContainer width="100%" height={250}>
-        <LineChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+        <LineChart
+          data={data}
+          margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
+        >
+          <CartesianGrid
+            strokeDasharray="3 3"
+            stroke="var(--color-border-secondary)"
+          />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 11 }}
-            className="text-muted-foreground"
+            tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
           />
           <YAxis
             reversed
             domain={[1, "auto"]}
-            tick={{ fontSize: 11 }}
-            className="text-muted-foreground"
-            label={{ value: "순위", angle: -90, position: "insideLeft", offset: 10, fontSize: 11 }}
+            tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
+            label={{
+              value: "순위",
+              angle: -90,
+              position: "insideLeft",
+              offset: 10,
+              fontSize: 11,
+              fill: "var(--color-text-tertiary)",
+            }}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "hsl(var(--card))",
-              border: "1px solid hsl(var(--border))",
-              borderRadius: "8px",
+              backgroundColor: "var(--color-surface)",
+              border: "1px solid var(--color-border-primary)",
+              borderRadius: "12px",
               fontSize: 12,
+              boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
             }}
             formatter={(value: any, name: any) => [
               value ? `${value}위` : "순위 밖",
               name,
             ]}
           />
-          {keywords.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+          {keywords.length > 1 && (
+            <Legend
+              wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+            />
+          )}
           {keywords.map((kw, i) => (
             <Line
               key={kw}
               type="monotone"
               dataKey={kw}
-              stroke={COLORS[i % COLORS.length]}
+              stroke={CHART_COLORS[i % CHART_COLORS.length]}
               strokeWidth={2}
-              dot={{ r: 3 }}
+              dot={{ r: 3, fill: CHART_COLORS[i % CHART_COLORS.length] }}
               activeDot={{ r: 5 }}
               connectNulls
               name={kw}

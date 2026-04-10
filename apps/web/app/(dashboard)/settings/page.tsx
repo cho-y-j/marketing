@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,8 @@ import {
 } from "@/hooks/useSubscription";
 import { usePushSubscribe } from "@/hooks/usePushSubscribe";
 import { toast } from "sonner";
+import { NaverConnectCard } from "@/components/settings/naver-connect-card";
+import { SmartPlaceConnectCard } from "@/components/settings/smartplace-connect-card";
 import {
   Bell,
   BellRing,
@@ -20,11 +22,12 @@ import {
   CreditCard,
   Loader2,
   Check,
-  X,
   Trash2,
   Send,
   AlertCircle,
   LogOut,
+  Settings,
+  ArrowRight,
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -44,7 +47,7 @@ export default function SettingsPage() {
     registerKey.mutate(
       { apiKey: apiKey.trim() },
       {
-        onSuccess: (r) => {
+        onSuccess: (r: any) => {
           toast.success(`API 키 등록 완료 (${r.maskedKey})`);
           setApiKey("");
         },
@@ -109,228 +112,256 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="space-y-5 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-3xl mx-auto">
       <div>
         <h2 className="text-xl md:text-2xl font-bold tracking-tight">설정</h2>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-sm text-text-secondary mt-0.5">
           계정, 알림, API 키 관리
         </p>
       </div>
 
-      {/* === 푸시 알림 === */}
-      <Card className="rounded-2xl overflow-hidden">
-        <CardContent className="pt-5 pb-4 px-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center">
-              <BellRing size={16} className="text-blue-600" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold">웹 푸시 알림</h3>
-              <p className="text-xs text-muted-foreground">
-                매일 아침 브리핑 + 리뷰 검수 알림
-              </p>
-            </div>
+      {/* 네이버 스마트플레이스 연동 — 가장 중요 */}
+      <NaverConnectCard />
+
+      {/* 스마트플레이스 Biz ID 연결 — 리뷰 답글 바로가기 */}
+      <SmartPlaceConnectCard />
+
+      {/* 자동화 설정 바로가기 */}
+      <Link
+        href="/settings/automation"
+        className="flex items-center justify-between p-4 rounded-2xl border border-border-primary bg-surface shadow-sm hover:border-brand/20 hover:shadow-md transition-all"
+      >
+        <div className="flex items-center gap-3">
+          <div className="size-10 rounded-xl bg-brand-subtle flex items-center justify-center">
+            <Settings size={18} className="text-brand" />
           </div>
+          <div>
+            <p className="text-sm font-semibold">AI 자동화 설정</p>
+            <p className="text-xs text-text-secondary">
+              리뷰 자동 답변, 콘텐츠 자동 발행, 키워드 자동 추가
+            </p>
+          </div>
+        </div>
+        <ArrowRight size={16} className="text-text-tertiary" />
+      </Link>
 
-          {push.supported === false ? (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200">
-              <AlertCircle size={14} className="text-amber-600 mt-0.5 shrink-0" />
-              <p className="text-xs text-amber-800">
-                이 브라우저는 웹 푸시를 지원하지 않습니다 (Safari 16.4+, Chrome,
-                Edge, Firefox 사용 권장)
-              </p>
-            </div>
-          ) : push.supported === null ? (
-            <Skeleton className="h-10 w-full rounded-lg" />
-          ) : (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
-                <div>
-                  <p className="text-sm font-medium">
-                    상태:{" "}
-                    {push.subscribed ? (
-                      <span className="text-emerald-600">✓ 구독중</span>
-                    ) : (
-                      <span className="text-gray-500">미구독</span>
-                    )}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    권한: {push.permission === "granted" ? "허용됨" : push.permission === "denied" ? "거부됨" : "미요청"}
-                  </p>
-                </div>
-                {push.subscribed ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleUnsubscribe}
-                    disabled={push.busy}
-                    className="rounded-lg h-9"
-                  >
-                    {push.busy ? <Loader2 size={12} className="animate-spin" /> : "구독 해제"}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    onClick={handleSubscribe}
-                    disabled={push.busy}
-                    className="rounded-lg h-9 bg-blue-600 hover:bg-blue-700"
-                  >
-                    {push.busy ? (
-                      <Loader2 size={12} className="animate-spin mr-1.5" />
-                    ) : (
-                      <Bell size={12} className="mr-1.5" />
-                    )}
-                    구독하기
-                  </Button>
-                )}
+      {/* 푸시 알림 */}
+      <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4 md:p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="size-9 rounded-xl bg-info-light flex items-center justify-center">
+            <BellRing size={16} className="text-info" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">웹 푸시 알림</h3>
+            <p className="text-xs text-text-secondary">
+              매일 아침 브리핑 + 리뷰 검수 알림
+            </p>
+          </div>
+        </div>
+
+        {push.supported === false ? (
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-warning-light border border-warning/20">
+            <AlertCircle size={14} className="text-warning mt-0.5 shrink-0" />
+            <p className="text-xs text-text-secondary">
+              이 브라우저는 웹 푸시를 지원하지 않습니다
+            </p>
+          </div>
+        ) : push.supported === null ? (
+          <Skeleton className="h-10 w-full rounded-xl" />
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 rounded-xl bg-surface-secondary">
+              <div>
+                <p className="text-sm font-medium">
+                  상태:{" "}
+                  {push.subscribed ? (
+                    <span className="text-success">구독중</span>
+                  ) : (
+                    <span className="text-text-tertiary">미구독</span>
+                  )}
+                </p>
+                <p className="text-[11px] text-text-tertiary mt-0.5">
+                  권한:{" "}
+                  {push.permission === "granted"
+                    ? "허용됨"
+                    : push.permission === "denied"
+                      ? "거부됨"
+                      : "미요청"}
+                </p>
               </div>
-
-              {push.subscribed && (
+              {push.subscribed ? (
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleTestPush}
-                  disabled={testing}
-                  className="w-full rounded-lg h-9"
+                  onClick={handleUnsubscribe}
+                  disabled={push.busy}
+                  className="rounded-xl h-9"
                 >
-                  {testing ? (
+                  {push.busy ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    "구독 해제"
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={handleSubscribe}
+                  disabled={push.busy}
+                  className="rounded-xl h-9 bg-brand hover:bg-brand-dark"
+                >
+                  {push.busy ? (
                     <Loader2 size={12} className="animate-spin mr-1.5" />
                   ) : (
-                    <Send size={12} className="mr-1.5" />
+                    <Bell size={12} className="mr-1.5" />
                   )}
-                  테스트 알림 보내기
+                  구독하기
                 </Button>
               )}
+            </div>
 
-              {push.error && (
-                <div className="flex items-start gap-2 p-2 rounded-lg bg-rose-50 border border-rose-200">
-                  <AlertCircle size={12} className="text-rose-600 mt-0.5 shrink-0" />
-                  <p className="text-[11px] text-rose-800">{push.error}</p>
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            {push.subscribed && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTestPush}
+                disabled={testing}
+                className="w-full rounded-xl h-9"
+              >
+                {testing ? (
+                  <Loader2 size={12} className="animate-spin mr-1.5" />
+                ) : (
+                  <Send size={12} className="mr-1.5" />
+                )}
+                테스트 알림 보내기
+              </Button>
+            )}
 
-      {/* === Anthropic API 키 (프리미엄) === */}
-      <Card className="rounded-2xl overflow-hidden">
-        <CardContent className="pt-5 pb-4 px-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-9 h-9 rounded-xl bg-violet-100 flex items-center justify-center">
-              <Key size={16} className="text-violet-600" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold">Anthropic API 키 (프리미엄)</h3>
-              <p className="text-xs text-muted-foreground">
-                내 API 키로 실시간 분석 (서버에 AES-256-GCM 암호화 저장)
-              </p>
-            </div>
-          </div>
-
-          {isLoading ? (
-            <Skeleton className="h-20 w-full rounded-lg" />
-          ) : sub?.hasApiKey ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-emerald-50 border border-emerald-200">
-                <div>
-                  <p className="text-xs font-medium text-emerald-800 flex items-center gap-1.5">
-                    <Check size={12} /> 등록됨
-                  </p>
-                  <p className="text-sm font-mono text-emerald-900 mt-0.5">
-                    {sub.anthropicApiKeyMasked}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleDeleteKey}
-                  disabled={deleteKey.isPending}
-                  className="rounded-lg h-9 text-rose-600 hover:bg-rose-50"
-                >
-                  {deleteKey.isPending ? (
-                    <Loader2 size={12} className="animate-spin" />
-                  ) : (
-                    <Trash2 size={12} />
-                  )}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <Input
-                  type="password"
-                  placeholder="sk-ant-api03-..."
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="rounded-lg h-10 font-mono text-xs"
+            {push.error && (
+              <div className="flex items-start gap-2 p-2 rounded-xl bg-danger-light border border-danger/20">
+                <AlertCircle
+                  size={12}
+                  className="text-danger mt-0.5 shrink-0"
                 />
-                <Button
-                  onClick={handleRegisterKey}
-                  disabled={registerKey.isPending || !apiKey.trim()}
-                  className="rounded-lg h-10 bg-violet-600 hover:bg-violet-700"
-                >
-                  {registerKey.isPending ? (
-                    <Loader2 size={12} className="animate-spin" />
-                  ) : (
-                    "등록"
-                  )}
-                </Button>
+                <p className="text-[11px] text-text-secondary">{push.error}</p>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                등록 시 Anthropic API 에 ping 으로 키 유효성 검증 후 암호화 저장합니다.
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* API 키 */}
+      <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4 md:p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="size-9 rounded-xl bg-brand-subtle flex items-center justify-center">
+            <Key size={16} className="text-brand" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Anthropic API 키</h3>
+            <p className="text-xs text-text-secondary">
+              내 API 키로 실시간 분석 (AES-256-GCM 암호화)
+            </p>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <Skeleton className="h-20 w-full rounded-xl" />
+        ) : sub?.hasApiKey ? (
+          <div className="flex items-center justify-between p-3 rounded-xl bg-success-light border border-success/20">
+            <div>
+              <p className="text-xs font-medium text-success flex items-center gap-1.5">
+                <Check size={12} /> 등록됨
+              </p>
+              <p className="text-sm font-mono mt-0.5">
+                {sub.anthropicApiKeyMasked}
               </p>
             </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* === 구독 정보 === */}
-      <Card className="rounded-2xl overflow-hidden">
-        <CardContent className="pt-5 pb-4 px-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center">
-              <CreditCard size={16} className="text-amber-600" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDeleteKey}
+              disabled={deleteKey.isPending}
+              className="rounded-xl h-9 text-danger hover:bg-danger-light"
+            >
+              {deleteKey.isPending ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Trash2 size={12} />
+              )}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder="sk-ant-api03-..."
+                value={apiKey}
+                onChange={(e: any) => setApiKey(e.target.value)}
+                className="rounded-xl h-10 font-mono text-xs"
+              />
+              <Button
+                onClick={handleRegisterKey}
+                disabled={registerKey.isPending || !apiKey.trim()}
+                className="rounded-xl h-10 bg-brand hover:bg-brand-dark"
+              >
+                {registerKey.isPending ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  "등록"
+                )}
+              </Button>
             </div>
-            <div>
-              <h3 className="text-sm font-bold">구독 정보</h3>
-              <p className="text-xs text-muted-foreground">현재 플랜과 만료일</p>
+            <p className="text-[11px] text-text-tertiary">
+              등록 시 Anthropic API에 ping으로 키 유효성을 검증합니다
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* 구독 정보 */}
+      <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4 md:p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="size-9 rounded-xl bg-warning-light flex items-center justify-center">
+            <CreditCard size={16} className="text-warning" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">구독 정보</h3>
+            <p className="text-xs text-text-secondary">현재 플랜과 만료일</p>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <Skeleton className="h-16 w-full rounded-xl" />
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between p-3 rounded-xl bg-surface-secondary">
+              <span className="text-xs text-text-secondary">현재 플랜</span>
+              <span className="text-sm font-bold">
+                {sub?.subscriptionPlan === "PREMIUM"
+                  ? "프리미엄"
+                  : sub?.subscriptionPlan === "BASIC"
+                    ? "기본"
+                    : "무료"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-surface-secondary">
+              <span className="text-xs text-text-secondary">만료일</span>
+              <span className="text-sm">
+                {sub?.subscriptionEndAt
+                  ? new Date(sub.subscriptionEndAt).toLocaleDateString("ko-KR")
+                  : "-"}
+              </span>
             </div>
           </div>
-
-          {isLoading ? (
-            <Skeleton className="h-16 w-full rounded-lg" />
-          ) : (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
-                <span className="text-xs text-muted-foreground">현재 플랜</span>
-                <span className="text-sm font-bold">
-                  {sub?.subscriptionPlan === "PREMIUM"
-                    ? "💎 프리미엄"
-                    : sub?.subscriptionPlan === "BASIC"
-                      ? "⭐ 기본"
-                      : "🆓 무료"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
-                <span className="text-xs text-muted-foreground">만료일</span>
-                <span className="text-sm">
-                  {sub?.subscriptionEndAt
-                    ? new Date(sub.subscriptionEndAt).toLocaleDateString()
-                    : "-"}
-                </span>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        )}
+      </div>
 
       {/* 로그아웃 */}
       <Button
         variant="ghost"
         onClick={handleLogout}
-        className="w-full rounded-xl h-11 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+        className="w-full rounded-xl h-11 text-danger hover:bg-danger-light"
       >
         <LogOut size={14} className="mr-2" />
         로그아웃

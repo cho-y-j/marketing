@@ -24,6 +24,12 @@ model User {
   // API 키 (프리미엄 사용자)
   anthropicApiKey  String?  // 암호화 저장
 
+  // 네이버 스마트플레이스 연동
+  naverAccessToken   String?
+  naverRefreshToken  String?
+  naverTokenExpiresAt DateTime?
+  naverConnectedAt   DateTime?
+
   // 관계
   stores          Store[]
   notifications   Notification[]
@@ -58,6 +64,9 @@ model Store {
 
   // 매출 관련
   avgOrderValue   Int?     // 객단가 (원) — ROI 계산용
+
+  // 스마트플레이스 연동
+  smartPlaceBizId String?  // 스마트플레이스 Biz ID (리뷰 관리 바로가기용)
 
   // 마케팅 등급
   marketingGrade  String   @default("BRONZE") // BRONZE | SILVER | GOLD | DIAMOND

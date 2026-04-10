@@ -33,20 +33,20 @@ export function EmptyState({
     <div className={cn("py-10 px-4 text-center", className)}>
       <div
         className={cn(
-          "w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4",
+          "size-14 rounded-2xl flex items-center justify-center mx-auto mb-4",
           variant === "building"
-            ? "bg-gradient-to-br from-blue-100 to-violet-100"
-            : "bg-muted",
+            ? "bg-brand-subtle"
+            : "bg-surface-tertiary",
         )}
       >
         {variant === "building" ? (
-          <Loader2 size={22} className="text-blue-500 animate-spin" />
+          <Loader2 size={22} className="text-brand animate-spin" />
         ) : (
-          <Icon size={22} className="text-muted-foreground" />
+          <Icon size={22} className="text-text-tertiary" />
         )}
       </div>
-      <p className="text-sm font-semibold text-foreground">{title}</p>
-      <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-[260px] mx-auto">
+      <p className="text-sm font-semibold text-text-primary">{title}</p>
+      <p className="text-xs text-text-secondary mt-1 leading-relaxed max-w-[260px] mx-auto">
         {description}
       </p>
       {(ctaLabel || secondaryLabel) && (
@@ -66,9 +66,11 @@ export function EmptyState({
               size="sm"
               onClick={onCta}
               disabled={ctaLoading}
-              className="rounded-xl h-9 text-xs bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 shadow-md"
+              className="rounded-xl h-9 text-xs bg-brand hover:bg-brand-dark"
             >
-              {ctaLoading && <Loader2 size={12} className="animate-spin mr-1.5" />}
+              {ctaLoading && (
+                <Loader2 size={12} className="animate-spin mr-1.5" />
+              )}
               {ctaLabel}
             </Button>
           )}

@@ -5,60 +5,65 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   BarChart3,
-  Users,
+  Swords,
   Search,
-  FileText,
+  FileEdit,
   Settings,
   PlusCircle,
   Store,
   Sparkles,
-  MessageSquareReply,
+  MessageSquareText,
+  Crown,
+  CalendarDays,
+  FileBarChart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { href: "/", label: "대시보드", icon: LayoutDashboard, color: "text-blue-500" },
-  { href: "/stores", label: "내 매장", icon: Store, color: "text-violet-500" },
-  { href: "/analysis", label: "매장 분석", icon: BarChart3, color: "text-orange-500" },
-  { href: "/competitors", label: "경쟁 비교", icon: Users, color: "text-rose-500" },
-  { href: "/keywords", label: "키워드", icon: Search, color: "text-emerald-500" },
-  { href: "/content", label: "콘텐츠", icon: FileText, color: "text-purple-500" },
-  { href: "/reviews", label: "리뷰 답글", icon: MessageSquareReply, color: "text-cyan-500" },
-  { href: "/settings", label: "설정", icon: Settings, color: "text-gray-500" },
+  { href: "/", label: "대시보드", icon: LayoutDashboard },
+  { href: "/stores", label: "내 매장", icon: Store },
+  { href: "/analysis", label: "매장 분석", icon: BarChart3 },
+  { href: "/competitors", label: "경쟁 비교", icon: Swords },
+  { href: "/keywords", label: "키워드", icon: Search },
+  { href: "/reviews", label: "리뷰 관리", icon: MessageSquareText },
+  { href: "/content", label: "콘텐츠", icon: FileEdit },
+  { href: "/events", label: "시즌 이벤트", icon: CalendarDays },
+  { href: "/reports", label: "성과 리포트", icon: FileBarChart },
+  { href: "/settings", label: "설정", icon: Settings },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden md:flex w-64 flex-col border-r bg-gradient-to-b from-card to-card/80 h-screen sticky top-0">
+    <aside className="hidden md:flex w-[240px] flex-col border-r border-border-primary bg-surface h-screen sticky top-0">
       {/* 로고 */}
-      <div className="p-5 border-b">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
-            <Sparkles size={18} className="text-white" />
+      <div className="px-4 py-4 border-b border-border-primary">
+        <Link href="/" className="flex items-center gap-2.5">
+          <div className="size-8 rounded-lg bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center">
+            <Sparkles size={16} className="text-white" />
           </div>
           <div>
-            <h1 className="text-base font-bold tracking-tight">마케팅 AI</h1>
-            <p className="text-[11px] text-muted-foreground leading-none">매장 마케팅 매니저</p>
+            <h1 className="text-sm font-bold tracking-tight text-text-primary">마케팅 AI</h1>
+            <p className="text-[10px] text-text-tertiary leading-none">매장 마케팅 매니저</p>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* 매장 등록 */}
       <div className="px-3 pt-4">
         <Link
           href="/stores/new"
-          className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg active:scale-[0.98]"
+          className="flex items-center justify-center gap-2 h-9 rounded-xl text-xs font-semibold bg-brand text-white hover:bg-brand-dark transition-colors"
         >
-          <PlusCircle size={16} />
+          <PlusCircle size={14} />
           매장 등록
         </Link>
       </div>
 
       {/* 네비게이션 */}
-      <nav className="flex-1 px-3 pt-4 space-y-0.5">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 mb-2">메뉴</p>
+      <nav className="flex-1 px-3 pt-4 space-y-0.5 overflow-y-auto">
+        <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-widest px-3 mb-2">메뉴</p>
         {navItems.map((item) => {
           const isActive =
             item.href === "/"
@@ -69,31 +74,33 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all",
+                "flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors",
                 isActive
-                  ? "bg-primary/10 text-primary shadow-sm"
-                  : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
+                  ? "bg-brand-subtle text-brand font-semibold"
+                  : "text-text-secondary hover:bg-surface-tertiary hover:text-text-primary font-medium",
               )}
             >
-              <item.icon size={18} className={isActive ? "text-primary" : item.color} />
+              <item.icon size={16} strokeWidth={isActive ? 2.2 : 1.8} />
               {item.label}
-              {isActive && (
-                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary" />
-              )}
             </Link>
           );
         })}
       </nav>
 
-      {/* 하단 프로 배너 */}
+      {/* 하단 PRO 배너 */}
       <div className="p-3">
-        <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200/50 p-3.5">
-          <p className="text-xs font-semibold text-amber-800">PRO 업그레이드</p>
-          <p className="text-[11px] text-amber-600 mt-0.5 leading-snug">무제한 키워드 추적 + AI 리뷰 답글</p>
-          <button className="mt-2 text-[11px] font-semibold text-amber-700 hover:text-amber-900 transition-colors">
-            자세히 보기 →
-          </button>
-        </div>
+        <Link
+          href="/settings"
+          className="block rounded-xl bg-gradient-to-br from-brand-subtle to-violet-50 border border-brand/10 p-3 hover:border-brand/20 transition-colors"
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <Crown size={14} className="text-brand" />
+            <span className="text-xs font-semibold text-brand">PRO 업그레이드</span>
+          </div>
+          <p className="text-[10px] text-text-secondary leading-relaxed">
+            무제한 키워드 추적 + AI 리뷰 자동 답글
+          </p>
+        </Link>
       </div>
     </aside>
   );
