@@ -7,11 +7,15 @@ RUN npm install -g pnpm
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
+COPY packages/typescript-config/package.json packages/typescript-config/
+COPY packages/eslint-config/package.json packages/eslint-config/
 RUN pnpm install --frozen-lockfile
 
 # 소스 복사 + 빌드
 COPY apps/web/ apps/web/
 COPY packages/shared/ packages/shared/
+COPY packages/typescript-config/ packages/typescript-config/
+COPY packages/eslint-config/ packages/eslint-config/
 RUN pnpm --filter web build
 
 # 프로덕션 이미지

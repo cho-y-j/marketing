@@ -4,7 +4,7 @@ WORKDIR /app
 RUN npm install -g pnpm
 
 # 의존성 설치
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/api/package.json packages/api/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
@@ -12,7 +12,7 @@ RUN pnpm install --frozen-lockfile
 # 소스 복사 + 빌드
 COPY packages/api/ packages/api/
 COPY packages/shared/ packages/shared/
-RUN cd packages/api && npx prisma generate && pnpm build
+RUN cd packages/api && pnpm prisma generate && pnpm build
 
 # 프로덕션 이미지
 FROM node:20-alpine
