@@ -17,10 +17,13 @@ RUN cd packages/api && pnpm prisma generate && pnpm build
 # pnpm deploy로 프로덕션 의존성 올바르게 추출
 RUN pnpm --filter api deploy /app/deployed --prod
 
-# .prisma/client 복사 (prisma generate 결과물)
-RUN PRISMA_DIR=$(find /app/node_modules/.pnpm -path '*/.prisma/client' -type d | head -1) && \
-    mkdir -p /app/deployed/node_modules/.prisma && \
-    cp -rL "$PRISMA_DIR" /app/deployed/node_modules/.prisma/
+# .prisma/client 복사 (prisma generate 결과물을 모든 위치에)
+RUN PRISMA_SRC=$(find /app/node_modules/.pnpm -path '*/.prisma/client' -type d | head -1) && \
+    for TARGET_DIR in $(find /app/deployed/node_modules -path '*/.prisma/client' -type d 2>/dev/null); do \
+      cp -rL "$PRISMA_SRC"/* "$TARGET_DIR/" 2>/dev/null || true; \
+    done && \
+    mkdir -p /app/deployed/node_modules/.prisma/client && \
+    cp -rL "$PRISMA_SRC"/* /app/deployed/node_modules/.prisma/client/
 
 # 프로덕션 이미지
 FROM node:20-alpine
