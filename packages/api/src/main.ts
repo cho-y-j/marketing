@@ -17,14 +17,35 @@ async function bootstrap() {
 
   // CORS 설정
   app.enableCors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://localhost:3200",
-      "http://1.221.158.115:3000",
-      "http://1.221.158.115:3200",
-      process.env.NEXTAUTH_URL || "",
-    ].filter(Boolean),
+    origin: (origin, callback) => {
+      // 같은 서버에서 오는 요청, 로컬 개발, 서버 IP 모두 허용
+      const allowed = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3200",
+        "http://1.221.158.115:3000",
+        "http://1.221.158.115:3200",
+        process.env.NEXTAUTH_URL || "",
+      ].filter(Boolean);
+      if (!origin || allowed.includes(origin)) {
+        callback(null, true);
+      } else {
+        // 같은 호스트의 다른 포트도 허용 (프로덕션 배포 시)
+        try {
+          const url = new URL(origin);
+          const nextauthUrl = process.env.NEXTAUTH_URL
+            ? new URL(process.env.NEXTAUTH_URL)
+            : null;
+          if (nextauthUrl && url.hostname === nextauthUrl.hostname) {
+            callback(null, true);
+          } else {
+            callback(null, false);
+          }
+        } catch {
+          callback(null, false);
+        }
+      }
+    },
     credentials: true,
   });
 

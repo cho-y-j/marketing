@@ -1,6 +1,11 @@
 import axios from "axios";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4003";
+// 브라우저: 현재 호스트의 4000 포트로 API 접근
+// 서버(SSR): 환경변수 또는 Docker 내부 주소
+const API_URL =
+  typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:4000`
+    : process.env.API_URL || "http://localhost:4003";
 
 export const apiClient = axios.create({
   baseURL: API_URL,
