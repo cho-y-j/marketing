@@ -14,14 +14,13 @@ COPY packages/api/ packages/api/
 COPY packages/shared/ packages/shared/
 RUN cd packages/api && pnpm prisma generate && pnpm build
 
-# node_modules를 flat하게 풀기 (symlink → 실제 파일)
-# .prisma/client는 pnpm 깊은 경로에 있으므로 find로 찾아서 복사
-RUN mkdir -p /app/prod_modules && \
-    cp -rL /app/node_modules/.pnpm/node_modules/* /app/prod_modules/ 2>/dev/null || true && \
-    cp -rL /app/packages/api/node_modules/* /app/prod_modules/ 2>/dev/null || true && \
-    PRISMA_DIR=$(find /app/node_modules/.pnpm -path '*/.prisma/client' -type d | head -1) && \
-    mkdir -p /app/prod_modules/.prisma && \
-    cp -rL "$PRISMA_DIR" /app/prod_modules/.prisma/
+# pnpm deploy로 프로덕션 의존성 올바르게 추출
+RUN pnpm --filter api deploy /app/deployed --prod
+
+# .prisma/client 복사 (prisma generate 결과물)
+RUN PRISMA_DIR=$(find /app/node_modules/.pnpm -path '*/.prisma/client' -type d | head -1) && \
+    mkdir -p /app/deployed/node_modules/.prisma && \
+    cp -rL "$PRISMA_DIR" /app/deployed/node_modules/.prisma/
 
 # 프로덕션 이미지
 FROM node:20-alpine
@@ -29,9 +28,9 @@ FROM node:20-alpine
 WORKDIR /app
 
 COPY --from=builder /app/packages/api/dist ./dist
-COPY --from=builder /app/packages/api/package.json ./
 COPY --from=builder /app/packages/api/prisma ./prisma
-COPY --from=builder /app/prod_modules ./node_modules
+COPY --from=builder /app/deployed/node_modules ./node_modules
+COPY --from=builder /app/deployed/package.json ./
 
 EXPOSE 4000
 ENV NODE_ENV=production
