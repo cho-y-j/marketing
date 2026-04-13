@@ -23,7 +23,11 @@ RUN npm install -g pnpm
 COPY --from=builder /app/packages/api/dist ./dist
 COPY --from=builder /app/packages/api/package.json ./
 COPY --from=builder /app/packages/api/prisma ./prisma
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/node_modules/.pnpm ./node_modules/.pnpm
+COPY --from=builder /app/packages/api/node_modules ./node_modules_api
+
+# pnpm symlink 구조 대신 flat하게 복사
+RUN cp -rL /app/node_modules_api/* /app/node_modules/ 2>/dev/null || true && rm -rf /app/node_modules_api
 
 EXPOSE 4000
 ENV NODE_ENV=production
