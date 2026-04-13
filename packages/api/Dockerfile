@@ -15,9 +15,11 @@ COPY packages/shared/ packages/shared/
 RUN cd packages/api && pnpm prisma generate && pnpm build
 
 # node_modules를 flat하게 풀기 (symlink → 실제 파일)
-RUN mkdir -p /app/prod_modules && \
+RUN mkdir -p /app/prod_modules/.prisma && \
     cp -rL /app/node_modules/.pnpm/node_modules/* /app/prod_modules/ 2>/dev/null || true && \
-    cp -rL /app/packages/api/node_modules/* /app/prod_modules/ 2>/dev/null || true
+    cp -rL /app/packages/api/node_modules/* /app/prod_modules/ 2>/dev/null || true && \
+    cp -rL /app/node_modules/.pnpm/node_modules/.prisma/* /app/prod_modules/.prisma/ 2>/dev/null || true && \
+    cp -rL /app/packages/api/node_modules/.prisma/* /app/prod_modules/.prisma/ 2>/dev/null || true
 
 # 프로덕션 이미지
 FROM node:20-alpine
