@@ -20,7 +20,9 @@ async function bootstrap() {
     origin: [
       "http://localhost:3000",
       "http://localhost:3001",
+      "http://localhost:3200",
       "http://1.221.158.115:3000",
+      "http://1.221.158.115:3200",
       process.env.NEXTAUTH_URL || "",
     ].filter(Boolean),
     credentials: true,
@@ -37,7 +39,7 @@ async function bootstrap() {
   SwaggerModule.setup("api/docs", app, document);
 
   const port = process.env.PORT || 4000;
-  await app.listen(port);
+  await app.listen(port, "0.0.0.0");
   console.log(`API 서버 실행 중: http://localhost:${port}`);
   console.log(`Swagger 문서: http://localhost:${port}/api/docs`);
 }
