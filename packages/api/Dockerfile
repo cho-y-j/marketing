@@ -14,15 +14,10 @@ COPY packages/api/ packages/api/
 COPY packages/shared/ packages/shared/
 RUN cd packages/api && pnpm prisma generate && pnpm build
 
-# 프로덕션 의존성만 설치
-FROM node:20-alpine AS deps
-
-WORKDIR /app
-RUN npm install -g pnpm
-
-COPY --from=builder /app/packages/api/package.json ./
-COPY --from=builder /app/pnpm-lock.yaml ./
-RUN pnpm install --prod --no-frozen-lockfile
+# node_modules를 flat하게 풀기 (symlink → 실제 파일)
+RUN mkdir -p /app/prod_modules && \
+    cp -rL /app/node_modules/.pnpm/node_modules/* /app/prod_modules/ 2>/dev/null || true && \
+    cp -rL /app/packages/api/node_modules/* /app/prod_modules/ 2>/dev/null || true
 
 # 프로덕션 이미지
 FROM node:20-alpine
@@ -32,7 +27,7 @@ WORKDIR /app
 COPY --from=builder /app/packages/api/dist ./dist
 COPY --from=builder /app/packages/api/package.json ./
 COPY --from=builder /app/packages/api/prisma ./prisma
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/prod_modules ./node_modules
 
 EXPOSE 4000
 ENV NODE_ENV=production
