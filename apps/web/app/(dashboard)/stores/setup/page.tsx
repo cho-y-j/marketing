@@ -173,6 +173,43 @@ function SetupPage() {
         </CardContent>
       </Card>
 
+      {/* 분석 대기 중 할 수 있는 액션 */}
+      {(phase === "setup" || phase === "analysis") && (
+        <Card className="mt-4">
+          <CardContent className="py-4">
+            <p className="text-xs font-medium text-muted-foreground mb-3">
+              분석이 진행되는 동안 미리 설정해보세요
+            </p>
+            <div className="space-y-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start text-left h-auto py-2.5"
+                onClick={() => router.push(`/keywords?storeId=${storeId}`)}
+              >
+                <Search size={14} className="mr-2 shrink-0 text-primary" />
+                <div>
+                  <span className="font-medium text-xs">키워드 직접 추가하기</span>
+                  <span className="block text-xs text-muted-foreground">자동 생성 외에 추적하고 싶은 키워드를 추가</span>
+                </div>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start text-left h-auto py-2.5"
+                onClick={() => router.push(`/competitors?storeId=${storeId}`)}
+              >
+                <Users size={14} className="mr-2 shrink-0 text-primary" />
+                <div>
+                  <span className="font-medium text-xs">비교할 경쟁업체 추가</span>
+                  <span className="block text-xs text-muted-foreground">직접 비교하고 싶은 매장을 검색해서 추가</span>
+                </div>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {phase === "done" && (
         <Button className="w-full mt-4" size="lg" onClick={() => router.push("/")}>
           대시보드에서 확인하기 <ArrowRight size={16} className="ml-2" />

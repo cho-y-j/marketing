@@ -38,6 +38,8 @@ export function useCreateStore() {
       name: string;
       naverPlaceUrl?: string;
       category?: string;
+      subCategory?: string;
+      address?: string;
       district?: string;
     }) => {
       const { data } = await apiClient.post("/stores", dto);

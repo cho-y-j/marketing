@@ -69,16 +69,25 @@ export class StoreSetupService {
       const category = placeInfo?.category || store.category || "";
       const district = this.extractDistrict(address) || store.district || "";
 
-      // 2단계: AI 키워드 자동 생성
-      await this.updateSetupStatus(storeId, "RUNNING", "AI가 키워드를 생성하는 중...");
-      const keywords = await this.generateSmartKeywords(store.name, address, category, district);
-      this.logger.log(`AI 키워드 ${keywords.length}개 생성: ${keywords.join(", ")}`);
+      // 2단계: 룰 테이블 기반 키워드 생성 + AI 보완
+      await this.updateSetupStatus(storeId, "RUNNING", "키워드를 생성하는 중...");
+      const ruleKeywords = await this.generateKeywordsFromRules(category, district, address);
+      const aiKeywords = await this.generateSmartKeywords(store.name, address, category, district);
+      // 룰 키워드 우선, AI 키워드는 중복 제거 후 추가
+      const ruleSet = new Set(ruleKeywords);
+      const keywords = [...ruleKeywords, ...aiKeywords.filter(k => !ruleSet.has(k))];
+      this.logger.log(`키워드 ${keywords.length}개 생성 (룰: ${ruleKeywords.length}, AI: ${aiKeywords.length}): ${keywords.join(", ")}`);
 
       let keywordCount = 0;
       for (const kw of keywords) {
         try {
+          const isFromRule = ruleKeywords.includes(kw);
           const created = await this.prisma.storeKeyword.create({
-            data: { storeId, keyword: kw, type: "AI_RECOMMENDED" },
+            data: {
+              storeId,
+              keyword: kw,
+              type: isFromRule ? "MAIN" : "AI_RECOMMENDED",
+            },
           });
           await this.fetchVolume(created.id, kw);
           keywordCount++;
@@ -272,6 +281,66 @@ export class StoreSetupService {
     return `${city} ${dong}`.trim();
   }
 
+  // 업종별 룰 테이블 기반 키워드 생성
+  private async generateKeywordsFromRules(
+    category: string,
+    district: string,
+    address: string,
+  ): Promise<string[]> {
+    if (!category) return [];
+
+    // 카테고리에서 업종 매핑 (예: "음식점 > 한식 > 소고기" → 소고기 관련 키워드)
+    const categoryLower = category.toLowerCase();
+    const rules = await this.prisma.keywordRule.findMany({
+      where: { isActive: true },
+      orderBy: { priority: "desc" },
+    });
+
+    // 카테고리 텍스트와 매칭되는 룰 찾기
+    const matched = rules.filter((rule) => {
+      const industryName = rule.industryName.toLowerCase();
+      const sub = (rule.subCategory || "").toLowerCase();
+      return (
+        categoryLower.includes(industryName) ||
+        categoryLower.includes(sub) ||
+        industryName.includes(categoryLower.split(">").pop()?.trim() || "")
+      );
+    });
+
+    if (matched.length === 0) {
+      // 매칭 실패 시 일반 맛집 룰로 폴백
+      const fallbackRules = rules.filter(
+        (r) => r.industry === "korean_food",
+      );
+      matched.push(...fallbackRules);
+    }
+
+    // 지역명 추출
+    const addressParts = address.split(" ");
+    const city = addressParts[1]?.replace(/시$/, "") || "";
+    const dong =
+      addressParts.find(
+        (p) => p.endsWith("동") || p.endsWith("읍") || p.endsWith("면"),
+      ) || "";
+    const region = district || city;
+
+    // 패턴에 지역 대입하여 키워드 생성
+    const keywords: string[] = [];
+    for (const rule of matched) {
+      let kw = rule.pattern
+        .replace("{지역}", region)
+        .replace("{동명}", dong || region);
+      // 빈 지역 방지
+      kw = kw.replace(/\+$/, "").replace(/^\+/, "").trim();
+      if (kw.length >= 2 && !kw.includes("{")) {
+        keywords.push(kw.replace("+", " "));
+      }
+    }
+
+    // 중복 제거
+    return [...new Set(keywords)];
+  }
+
   // AI가 실제 주소/카테고리 기반으로 키워드 생성
   private async generateSmartKeywords(
     storeName: string,
@@ -352,15 +421,24 @@ JSON 배열로만 응답해:
         })
         .slice(0, 5);
 
-      // 경쟁매장 저장
+      // 경쟁매장 저장 + Place API로 상세 데이터 수집
       for (const name of places) {
         try {
+          // 경쟁사 플레이스 정보 조회
+          let placeData: any = null;
+          try {
+            placeData = await this.naverPlace.searchAndGetPlaceInfo(name);
+          } catch {}
+
           await this.prisma.competitor.create({
             data: {
               storeId,
               competitorName: name,
+              competitorPlaceId: placeData?.id || undefined,
               category: category || undefined,
               type: "AUTO",
+              receiptReviewCount: placeData?.visitorReviewCount || undefined,
+              blogReviewCount: placeData?.blogReviewCount || undefined,
             },
           });
         } catch {}

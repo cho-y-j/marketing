@@ -16,6 +16,7 @@ import { AIModule } from "./providers/ai/ai.module";
 import { NaverModule } from "./providers/naver/naver.module";
 import { DataModule } from "./providers/data/data.module";
 import { ActionModule } from "./modules/action/action.module";
+import { AdminModule } from "./modules/admin/admin.module";
 import { JobsModule } from "./jobs/jobs.module";
 
 @Module({
@@ -40,6 +41,7 @@ import { JobsModule } from "./jobs/jobs.module";
     SubscriptionModule,
     NotificationModule,
     ActionModule,
+    AdminModule,
     JobsModule,
   ],
   controllers: [],

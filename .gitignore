@@ -41,3 +41,13 @@ yarn-error.log*
 secrets/
 *-firebase-adminsdk-*.json
 *service-account*.json
+
+# Server deploy files
+.env.server
+docker-compose.server.yml
+
+# Claude Code local memory
+.claude/
+
+# Reference files (adlog HTML)
+adlog/

@@ -13,6 +13,7 @@ import { useTrafficShift, useRecordVolumes } from "@/hooks/useTrafficShift";
 import { apiClient } from "@/lib/api-client";
 import { getKeywordTypeConfig, getTrendStyle, formatNumber, CHART_COLORS } from "@/lib/design-system";
 import { toast } from "sonner";
+import { RankGridTable } from "@/components/keywords/rank-grid-table";
 import { TrendingUp, TrendingDown, Minus, Plus, Search, Loader2, RefreshCw, BarChart3, Hash, ArrowUpRight, ArrowDownRight, Sparkles, Lightbulb, ArrowRight, Activity } from "lucide-react";
 
 export default function KeywordsPage() {
@@ -198,6 +199,9 @@ export default function KeywordsPage() {
           />
         );
       })()}
+
+      {/* 일별 순위 추이 그리드 */}
+      {storeId && <RankGridTable storeId={storeId} />}
 
       {/* 키워드 목록 */}
       {isLoading ? (

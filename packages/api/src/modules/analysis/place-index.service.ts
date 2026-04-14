@@ -61,7 +61,7 @@ export class PlaceIndexService {
     // StoreAnalysis 업데이트
     await this.prisma.storeAnalysis.update({
       where: { id: latest.id },
-      data: { n1Score: n1, n2Score: n2, n3Score: n3 },
+      data: { trafficScore: n1, engagementScore: n2, satisfactionScore: n3 },
     });
 
     this.logger.log(

@@ -5,6 +5,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
@@ -12,6 +13,7 @@ import { CompetitorService } from "./competitor.service";
 import { CreateCompetitorDto } from "./dto/competitor.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { PrismaService } from "../../common/prisma.service";
+import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 
 @ApiTags("경쟁 매장")
 @Controller("stores/:storeId/competitors")
@@ -21,7 +23,25 @@ export class CompetitorController {
   constructor(
     private competitorService: CompetitorService,
     private prisma: PrismaService,
+    private naverPlace: NaverPlaceProvider,
   ) {}
+
+  @Get("search")
+  @ApiOperation({ summary: "경쟁업체 검색 (존재여부 검증)" })
+  async searchCompetitor(@Query("name") name: string) {
+    if (!name) return [];
+    const info = await this.naverPlace.searchAndGetPlaceInfo(name);
+    if (!info) return [];
+    return {
+      name: info.name,
+      placeId: info.id,
+      category: info.category,
+      address: info.roadAddress || info.address,
+      visitorReviewCount: info.visitorReviewCount,
+      blogReviewCount: info.blogReviewCount,
+      saveCount: info.saveCount,
+    };
+  }
 
   @Get()
   @ApiOperation({ summary: "경쟁 매장 목록" })

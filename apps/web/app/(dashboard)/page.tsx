@@ -3,63 +3,62 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TodayBriefingCard } from "@/components/dashboard/today-briefing-card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { OnboardingCard } from "@/components/dashboard/onboarding-card";
-import { AiActionsCard } from "@/components/dashboard/ai-actions-card";
-import { CompetitorSummary } from "@/components/dashboard/competitor-summary";
-import { KeywordTrendChart } from "@/components/dashboard/keyword-trend-chart";
-import { RankHistoryChart } from "@/components/charts/rank-history-chart";
 import { SetupProgressCard } from "@/components/dashboard/setup-progress-card";
-import { GradeBenchmarkCard } from "@/components/dashboard/grade-benchmark-card";
-import { ROICard } from "@/components/dashboard/roi-card";
-import { CompetitorAlertCard } from "@/components/dashboard/competitor-alert-card";
-import { WeeklyPerformanceCard } from "@/components/dashboard/weekly-performance-card";
-import { AiActivityBanner } from "@/components/dashboard/ai-activity-banner";
-import { AiWorkSummary } from "@/components/dashboard/ai-work-summary";
-import { StatCard } from "@/components/common/stat-card";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
-import { useStore, useCreateStore } from "@/hooks/useStore";
-import { useTodayBriefing, useGenerateBriefing } from "@/hooks/useBriefing";
-import { useLatestAnalysis, useRunAnalysis } from "@/hooks/useAnalysis";
-import { useKeywords } from "@/hooks/useKeywords";
-import { useCompetitors } from "@/hooks/useCompetitors";
-import { useRankHistory } from "@/hooks/useRankHistory";
+import { useCreateStore } from "@/hooks/useStore";
+import { useDashboard } from "@/hooks/useDashboard";
 import { toast } from "sonner";
 import {
-  Search,
-  Sparkles,
-  Swords,
-  MessageSquareText,
-  BarChart3,
-  Loader2,
   TrendingUp,
   TrendingDown,
+  Minus,
+  AlertTriangle,
+  AlertCircle,
+  Info,
   ArrowRight,
-  FileEdit,
-  Zap,
+  Search,
+  MessageSquare,
+  FileText,
+  Users,
+  ChevronRight,
 } from "lucide-react";
 import { useEffect } from "react";
-import { formatNumber } from "@/lib/design-system";
+
+const levelConfig = {
+  HIGH: { label: "경쟁력 높음", color: "text-green-600", bg: "bg-green-50 border-green-200" },
+  MEDIUM: { label: "경쟁력 보통", color: "text-amber-600", bg: "bg-amber-50 border-amber-200" },
+  LOW: { label: "경쟁력 낮음", color: "text-red-600", bg: "bg-red-50 border-red-200" },
+};
+
+const severityIcon = {
+  critical: AlertTriangle,
+  warning: AlertCircle,
+  info: Info,
+};
+
+const severityStyle = {
+  critical: "border-red-200 bg-red-50",
+  warning: "border-amber-200 bg-amber-50",
+  info: "border-blue-200 bg-blue-50",
+};
+
+const actionIcon: Record<string, any> = {
+  REVIEW: MessageSquare,
+  KEYWORD: Search,
+  CONTENT: FileText,
+  COMPETITOR: Users,
+  ANALYSIS: Search,
+};
 
 export default function DashboardPage() {
   const router = useRouter();
-  const {
-    storeId,
-    stores,
-    isLoading: storesLoading,
-    hasStores,
-    hasToken,
-  } = useCurrentStoreId();
-  const { data: store } = useStore(storeId);
-  const { data: briefing } = useTodayBriefing(storeId);
-  const { data: analysis, isLoading: analysisLoading } =
-    useLatestAnalysis(storeId);
-  const runAnalysis = useRunAnalysis(storeId);
-  const generateBriefing = useGenerateBriefing(storeId);
+  const { storeId, isLoading: storesLoading, hasStores, hasToken } = useCurrentStoreId();
   const createStore = useCreateStore();
-  const { data: keywords } = useKeywords(storeId);
-  const { data: competitors } = useCompetitors(storeId);
-  const { data: rankData } = useRankHistory(storeId, 7);
+  const { data: dashboard, isLoading: dashLoading } = useDashboard(storeId);
 
   useEffect(() => {
     if (!hasToken) router.push("/login");
@@ -69,14 +68,10 @@ export default function DashboardPage() {
 
   if (storesLoading) {
     return (
-      <div className="space-y-4 max-w-5xl mx-auto">
-        <Skeleton className="h-10 w-48 rounded-xl" />
-        <Skeleton className="h-48 w-full rounded-2xl" />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-24 rounded-2xl" />
-          ))}
-        </div>
+      <div className="space-y-4 max-w-4xl mx-auto">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-32 w-full rounded-xl" />
+        <Skeleton className="h-48 w-full rounded-xl" />
       </div>
     );
   }
@@ -87,15 +82,10 @@ export default function DashboardPage() {
         onSubmit={(d) =>
           createStore.mutate(d, {
             onSuccess: (data: any) => {
-              toast.success("매장이 등록되었습니다! AI 분석을 시작합니다.");
-              router.push(
-                `/stores/setup?id=${data.id}&name=${encodeURIComponent(data.name)}`,
-              );
+              toast.success("매장이 등록되었습니다!");
+              router.push(`/stores/setup?id=${data.id}&name=${encodeURIComponent(data.name)}`);
             },
-            onError: (e: any) =>
-              toast.error(
-                e.response?.data?.message || "매장 등록에 실패했습니다",
-              ),
+            onError: (e: any) => toast.error(e.response?.data?.message || "등록 실패"),
           })
         }
         isLoading={createStore.isPending}
@@ -103,252 +93,240 @@ export default function DashboardPage() {
     );
   }
 
-  const score = store?.competitiveScore ?? analysis?.competitiveScore ?? 0;
-  const kwList = keywords ?? [];
-  const compList = competitors ?? [];
-  const aiRecs: any[] =
-    (analysis?.recommendations as any[]) ??
-    (analysis?.aiAnalysis as any)?.recommendations ??
-    [];
+  // 셋업 진행 중이면 셋업 카드만 표시
+  if (storeId && !dashboard && !dashLoading) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-4">
+        <SetupProgressCard storeId={storeId} />
+      </div>
+    );
+  }
 
-  const upCount = kwList.filter((k: any) => k.trendDirection === "UP").length;
-  const downCount = kwList.filter(
-    (k: any) => k.trendDirection === "DOWN",
-  ).length;
+  if (dashLoading || !dashboard) {
+    return (
+      <div className="space-y-4 max-w-4xl mx-auto">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-32 w-full rounded-xl" />
+        <Skeleton className="h-48 w-full rounded-xl" />
+      </div>
+    );
+  }
 
-  const ranked = kwList.filter((k: any) => k.currentRank != null);
-  const unranked = kwList.filter((k: any) => k.currentRank == null);
-  const chartKeywords = [...ranked, ...unranked]
-    .slice(0, 5)
-    .map((k: any) => k.keyword);
-
-  const handleRunAnalysis = () => {
-    toast.info("AI 분석을 시작합니다...");
-    runAnalysis.mutate(undefined, {
-      onSuccess: () => toast.success("AI 분석 완료!"),
-      onError: (e: any) =>
-        toast.error(
-          "분석 실패: " + (e.response?.data?.message || e.message),
-        ),
-    });
-  };
+  const { store, status, problems, actions, keywordRanks, competitorComparison, myMetrics } = dashboard;
+  const level = levelConfig[status.level];
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* 환영 헤더 */}
-      <div>
-        <h2 className="text-xl md:text-2xl font-bold tracking-tight">
-          {store?.name || "대시보드"}
-        </h2>
-        <p className="text-sm text-text-secondary mt-0.5">
-          {store?.address || "AI가 매장 마케팅을 분석하고 있습니다"}
-        </p>
-      </div>
-
+    <div className="space-y-5 max-w-4xl mx-auto">
       {/* 셋업 진행 */}
       {storeId && <SetupProgressCard storeId={storeId} />}
 
-      {/* 분석 미실행 배너 */}
-      {storeId && !analysis && !analysisLoading && (
-        <div className="flex items-center gap-3 p-4 rounded-2xl bg-brand-subtle border border-brand/10">
-          <div className="size-10 rounded-xl bg-brand/10 flex items-center justify-center shrink-0">
-            <Sparkles size={18} className="text-brand" />
+      {/* === 1. 현재 상태 요약 === */}
+      <div className={`rounded-xl border-2 p-5 ${level.bg}`}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold">{store.name}</h2>
+            <p className="text-sm text-muted-foreground">{store.category} · {store.address}</p>
           </div>
-          <div className="flex-1">
-            <p className="text-sm font-semibold">
-              아직 AI 분석이 실행되지 않았습니다
-            </p>
-            <p className="text-xs text-text-secondary mt-0.5">
-              첫 분석을 실행하면 경쟁력 점수, AI 추천, 키워드 트렌드가 표시됩니다
-            </p>
+          <div className="text-right">
+            <div className={`text-2xl font-black ${level.color}`}>
+              {status.avgRank ? `평균 ${status.avgRank}위` : "순위 미확인"}
+            </div>
+            <Badge variant={status.level === "HIGH" ? "default" : status.level === "MEDIUM" ? "secondary" : "destructive"}>
+              {level.label}
+            </Badge>
           </div>
-          <button
-            onClick={handleRunAnalysis}
-            disabled={runAnalysis.isPending}
-            className="shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-brand hover:bg-brand-dark transition-colors disabled:opacity-50"
-          >
-            {runAnalysis.isPending ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              "분석 실행"
-            )}
-          </button>
+        </div>
+
+        {/* 핵심 수치 한 줄 */}
+        <div className="grid grid-cols-4 gap-3 mt-4">
+          <MiniStat label="추적 키워드" value={status.totalKeywords} unit="개" />
+          <MiniStat label="경쟁 매장" value={status.totalCompetitors} unit="개" />
+          <MiniStat label="내 리뷰" value={status.myReviews} unit="개" />
+          <MiniStat label="경쟁사 평균" value={status.avgCompetitorReviews} unit="개" />
+        </div>
+      </div>
+
+      {/* === 2. 부족점 진단 === */}
+      {problems.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-bold text-muted-foreground">지금 부족한 것</h3>
+          {problems.map((p, i) => {
+            const Icon = severityIcon[p.severity];
+            return (
+              <div key={i} className={`rounded-lg border p-4 ${severityStyle[p.severity]}`}>
+                <div className="flex items-start gap-3">
+                  <Icon size={18} className="shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-semibold text-sm">{p.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{p.description}</p>
+                  </div>
+                  {p.metric && (
+                    <div className="text-right shrink-0">
+                      <div className="text-lg font-black text-red-600">{p.metric.current}{p.metric.unit}</div>
+                      <div className="text-xs text-muted-foreground">목표 {p.metric.target}{p.metric.unit}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* 등급 + 경쟁력 점수 + 벤치마크 */}
-      {storeId && <GradeBenchmarkCard storeId={storeId} score={score} />}
-
-      {/* AI 활동 배너 — 승인 대기, 리뷰 답글 대기, 콘텐츠 대기 */}
-      {storeId && <AiActivityBanner storeId={storeId} />}
-
-      {/* 오늘 장사 브리핑 */}
-      <TodayBriefingCard
-        briefing={briefing ?? null}
-        isLoading={generateBriefing.isPending}
-        onGenerate={() =>
-          generateBriefing.mutate(undefined, {
-            onSuccess: () => toast.success("브리핑이 생성되었습니다!"),
-            onError: (e: any) =>
-              toast.error(
-                e.response?.data?.message || "브리핑 생성에 실패했습니다",
-              ),
-          })
-        }
-      />
-
-      {/* 경쟁사 알림 */}
-      {storeId && <CompetitorAlertCard storeId={storeId} />}
-
-      {/* ROI + 주간 성과 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {storeId && <ROICard storeId={storeId} />}
-        {storeId && <WeeklyPerformanceCard storeId={storeId} />}
-      </div>
-
-      {/* AI가 해준 일 */}
-      {storeId && <AiWorkSummary storeId={storeId} />}
-
-      {/* 요약 수치 카드 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard
-          icon={Search}
-          variant="brand"
-          label="추적 키워드"
-          value={kwList.length}
-          unit="개"
-          sub={
-            (upCount > 0 || downCount > 0) && (
-              <div className="flex items-center gap-2 text-[11px]">
-                {upCount > 0 && (
-                  <span className="text-success font-medium flex items-center gap-0.5">
-                    <TrendingUp size={10} />
-                    {upCount}
-                  </span>
-                )}
-                {downCount > 0 && (
-                  <span className="text-danger font-medium flex items-center gap-0.5">
-                    <TrendingDown size={10} />
-                    {downCount}
-                  </span>
-                )}
-              </div>
-            )
-          }
-        />
-        <StatCard
-          icon={Swords}
-          variant="danger"
-          label="경쟁 매장"
-          value={compList.length}
-          unit="개"
-        />
-        <StatCard
-          icon={MessageSquareText}
-          variant="info"
-          label="방문자 리뷰"
-          value={formatNumber(analysis?.receiptReviewCount ?? null) || "-"}
-          sub={
-            analysis?.blogReviewCount != null && (
-              <p className="text-[11px] text-text-tertiary">
-                블로그 {formatNumber(analysis.blogReviewCount)}
-              </p>
-            )
-          }
-        />
-        <StatCard
-          icon={BarChart3}
-          variant="warning"
-          label="일 검색량"
-          value={formatNumber(analysis?.dailySearchVolume ?? null) || "-"}
-          unit="/일"
-        />
-      </div>
-
-      {/* 경쟁 현황 + 키워드 트렌드 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <CompetitorSummary competitors={compList} />
-        <KeywordTrendChart keywords={kwList} />
-      </div>
-
-      {/* AI 추천 액션 */}
-      <AiActionsCard
-        recommendations={aiRecs}
-        isLoading={analysisLoading}
-        onRunAnalysis={handleRunAnalysis}
-        analysisRunning={runAnalysis.isPending}
-      />
-
-      {/* 순위 변동 차트 */}
-      {chartKeywords.length > 0 && (
-        <RankHistoryChart
-          data={rankData ?? []}
-          keywords={chartKeywords}
-          isLoading={false}
-        />
-      )}
-
-      {/* AI 핵심 기능 바로가기 */}
-      <div>
-        <h3 className="text-sm font-semibold text-text-secondary mb-3">AI가 대신 해드려요</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            {
-              href: "/reviews",
-              icon: MessageSquareText,
-              label: "리뷰 AI 답글",
-              desc: "새 리뷰 수집 → AI 초안 → 1탭 승인",
-              variant: "info" as const,
-            },
-            {
-              href: "/content",
-              icon: FileEdit,
-              label: "AI 콘텐츠 생성",
-              desc: "블로그·SNS·플레이스 소식 자동 작성",
-              variant: "success" as const,
-            },
-            {
-              href: "/competitors",
-              icon: Swords,
-              label: "경쟁사 AI 감시",
-              desc: "리뷰 급증·순위 역전 자동 감지 + 대응",
-              variant: "danger" as const,
-            },
-            {
-              href: "/analysis",
-              icon: Sparkles,
-              label: "AI 종합 분석",
-              desc: "경쟁력 점수·강점·약점·추천 액션",
-              variant: "warning" as const,
-            },
-          ].map((item) => {
-            const variantColors = {
-              brand: "bg-brand-subtle text-brand",
-              success: "bg-success-light text-success",
-              info: "bg-info-light text-info",
-              warning: "bg-warning-light text-warning",
-              danger: "bg-danger-light text-danger",
-            };
+      {/* === 3. 오늘 해야 할 것 === */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-bold text-muted-foreground">오늘 해야 할 것</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {actions.map((action, i) => {
+            const Icon = actionIcon[action.type] || Search;
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded-2xl border border-border-primary bg-surface p-4 shadow-sm hover:shadow-md hover:border-brand/20 transition-all group"
-              >
-                <div
-                  className={`size-10 rounded-xl ${variantColors[item.variant]} flex items-center justify-center mb-3`}
-                >
-                  <item.icon size={20} />
-                </div>
-                <p className="text-sm font-semibold">{item.label}</p>
-                <p className="text-[11px] text-text-tertiary mt-1 leading-relaxed">
-                  {item.desc}
-                </p>
+              <Link key={i} href={action.href}>
+                <Card className="hover:border-primary/40 hover:shadow-md transition-all cursor-pointer h-full">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                        <Icon size={16} className="text-primary" />
+                      </div>
+                      <span className="text-xs font-bold text-primary">#{i + 1}</span>
+                    </div>
+                    <p className="font-semibold text-sm">{action.title}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{action.description}</p>
+                  </CardContent>
+                </Card>
               </Link>
             );
           })}
         </div>
       </div>
+
+      {/* === 4. 키워드별 내 순위 === */}
+      {keywordRanks.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-bold text-muted-foreground">키워드별 내 순위</h3>
+            <Link href="/keywords" className="text-xs text-primary flex items-center gap-0.5">
+              전체 보기 <ChevronRight size={12} />
+            </Link>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 font-medium">키워드</th>
+                    <th className="text-center px-3 py-2.5 font-medium">현재 순위</th>
+                    <th className="text-center px-3 py-2.5 font-medium">변동</th>
+                    <th className="text-right px-4 py-2.5 font-medium">월검색량</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keywordRanks.map((kw, i) => (
+                    <tr key={i} className="border-t hover:bg-muted/30">
+                      <td className="px-4 py-2.5">
+                        <span className="font-medium">{kw.keyword}</span>
+                        {kw.type === "MAIN" && (
+                          <Badge variant="outline" className="ml-1.5 text-[10px] py-0">핵심</Badge>
+                        )}
+                      </td>
+                      <td className="text-center px-3 py-2.5">
+                        <span className={`font-bold ${
+                          kw.currentRank == null ? "text-muted-foreground" :
+                          kw.currentRank <= 10 ? "text-blue-600" :
+                          kw.currentRank <= 30 ? "text-red-600" : "text-foreground"
+                        }`}>
+                          {kw.currentRank != null ? `${kw.currentRank}위` : "-"}
+                        </span>
+                      </td>
+                      <td className="text-center px-3 py-2.5">
+                        {kw.change != null ? (
+                          <span className={`inline-flex items-center gap-0.5 text-xs font-semibold ${
+                            kw.change > 0 ? "text-green-600" : kw.change < 0 ? "text-red-600" : "text-muted-foreground"
+                          }`}>
+                            {kw.change > 0 ? <TrendingUp size={12} /> : kw.change < 0 ? <TrendingDown size={12} /> : <Minus size={12} />}
+                            {kw.change > 0 ? `+${kw.change}` : kw.change}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </td>
+                      <td className="text-right px-4 py-2.5 text-muted-foreground">
+                        {kw.monthlyVolume ? kw.monthlyVolume.toLocaleString() : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* === 5. 경쟁사 비교 === */}
+      {competitorComparison.length > 0 && myMetrics && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-bold text-muted-foreground">경쟁사 비교</h3>
+            <Link href="/competitors" className="text-xs text-primary flex items-center gap-0.5">
+              상세 보기 <ChevronRight size={12} />
+            </Link>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 font-medium">매장</th>
+                    <th className="text-center px-3 py-2.5 font-medium">방문자리뷰</th>
+                    <th className="text-center px-3 py-2.5 font-medium">블로그리뷰</th>
+                    <th className="text-center px-3 py-2.5 font-medium">차이</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* 내 매장 */}
+                  <tr className="border-t bg-primary/5">
+                    <td className="px-4 py-2.5 font-bold">
+                      {store.name}
+                      <Badge className="ml-1.5 text-[10px] py-0">나</Badge>
+                    </td>
+                    <td className="text-center px-3 py-2.5 font-bold">
+                      {(myMetrics.receiptReviewCount ?? 0).toLocaleString()}
+                    </td>
+                    <td className="text-center px-3 py-2.5 font-bold">
+                      {(myMetrics.blogReviewCount ?? 0).toLocaleString()}
+                    </td>
+                    <td className="text-center px-3 py-2.5">-</td>
+                  </tr>
+                  {/* 경쟁사 */}
+                  {competitorComparison.map((c, i) => {
+                    const reviewDiff = c.receiptReviewCount - (myMetrics.receiptReviewCount ?? 0);
+                    return (
+                      <tr key={i} className="border-t hover:bg-muted/30">
+                        <td className="px-4 py-2.5">{c.name}</td>
+                        <td className="text-center px-3 py-2.5">{c.receiptReviewCount.toLocaleString()}</td>
+                        <td className="text-center px-3 py-2.5">{c.blogReviewCount.toLocaleString()}</td>
+                        <td className={`text-center px-3 py-2.5 font-semibold text-xs ${
+                          reviewDiff > 0 ? "text-red-600" : reviewDiff < 0 ? "text-green-600" : ""
+                        }`}>
+                          {reviewDiff > 0 ? `+${reviewDiff}` : reviewDiff === 0 ? "동일" : reviewDiff}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, unit }: { label: string; value: number; unit: string }) {
+  return (
+    <div className="text-center">
+      <div className="text-lg font-black">{value.toLocaleString()}<span className="text-xs font-normal text-muted-foreground ml-0.5">{unit}</span></div>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   Req,
   UseGuards,
 } from "@nestjs/common";
@@ -15,6 +16,8 @@ import { CreateStoreDto, UpdateStoreDto } from "./dto/store.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { StoreSetupService } from "../../providers/data/store-setup.service";
 import { EventCollectorService } from "../../providers/data/event-collector.service";
+import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
+import { DashboardService } from "./dashboard.service";
 
 @ApiTags("매장")
 @Controller("stores")
@@ -25,7 +28,35 @@ export class StoreController {
     private storeService: StoreService,
     private storeSetup: StoreSetupService,
     private eventCollector: EventCollectorService,
+    private naverPlace: NaverPlaceProvider,
+    private dashboard: DashboardService,
   ) {}
+
+  @Get("dashboard/:storeId")
+  @ApiOperation({ summary: "대시보드 종합 데이터 (한 번의 호출로)" })
+  getDashboard(@Param("storeId") storeId: string) {
+    return this.dashboard.getDashboardData(storeId);
+  }
+
+  @Get("place-preview")
+  @ApiOperation({ summary: "플레이스 URL/매장명으로 매장 정보 미리보기" })
+  async placePreview(
+    @Query("url") url?: string,
+    @Query("name") name?: string,
+  ) {
+    if (url) {
+      const placeId = this.naverPlace.extractPlaceIdFromUrl(url);
+      if (placeId) {
+        const info = await this.naverPlace.getPlaceDetail(placeId);
+        if (info) return { ...info, placeId };
+      }
+    }
+    if (name) {
+      const info = await this.naverPlace.searchAndGetPlaceInfo(name);
+      if (info) return info;
+    }
+    return null;
+  }
 
   @Post()
   @ApiOperation({ summary: "매장 등록" })
