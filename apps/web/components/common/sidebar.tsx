@@ -16,20 +16,42 @@ import {
   Crown,
   CalendarDays,
   FileBarChart,
+  Shield,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/", label: "대시보드", icon: LayoutDashboard },
-  { href: "/stores", label: "내 매장", icon: Store },
-  { href: "/analysis", label: "매장 분석", icon: BarChart3 },
-  { href: "/competitors", label: "경쟁 비교", icon: Swords },
-  { href: "/keywords", label: "키워드", icon: Search },
-  { href: "/reviews", label: "리뷰 관리", icon: MessageSquareText },
-  { href: "/content", label: "콘텐츠", icon: FileEdit },
-  { href: "/events", label: "시즌 이벤트", icon: CalendarDays },
-  { href: "/reports", label: "성과 리포트", icon: FileBarChart },
-  { href: "/settings", label: "설정", icon: Settings },
+const navGroups = [
+  {
+    label: "홈",
+    items: [
+      { href: "/", label: "오늘 해야 할 것", icon: LayoutDashboard },
+      { href: "/stores", label: "내 매장", icon: Store },
+    ],
+  },
+  {
+    label: "내 매장 상태",
+    items: [
+      { href: "/analysis", label: "매장 분석", icon: BarChart3 },
+      { href: "/competitors", label: "경쟁 비교", icon: Swords },
+    ],
+  },
+  {
+    label: "마케팅 실행",
+    items: [
+      { href: "/keywords", label: "키워드", icon: Search },
+      { href: "/content", label: "콘텐츠", icon: FileEdit },
+      { href: "/reviews", label: "리뷰 관리", icon: MessageSquareText },
+      { href: "/events", label: "시즌 이벤트", icon: CalendarDays },
+    ],
+  },
+  {
+    label: "성과 확인",
+    items: [
+      { href: "/reports", label: "리포트", icon: FileBarChart },
+      { href: "/foreign-market", label: "외국인 상권", icon: Globe },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -61,30 +83,66 @@ export function Sidebar() {
         </Link>
       </div>
 
-      {/* 네비게이션 */}
-      <nav className="flex-1 px-3 pt-4 space-y-0.5 overflow-y-auto">
-        <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-widest px-3 mb-2">메뉴</p>
-        {navItems.map((item) => {
-          const isActive =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors",
-                isActive
-                  ? "bg-brand-subtle text-brand font-semibold"
-                  : "text-text-secondary hover:bg-surface-tertiary hover:text-text-primary font-medium",
-              )}
-            >
-              <item.icon size={16} strokeWidth={isActive ? 2.2 : 1.8} />
-              {item.label}
-            </Link>
-          );
-        })}
+      {/* 그룹별 네비게이션 */}
+      <nav className="flex-1 px-3 pt-3 overflow-y-auto">
+        {navGroups.map((group) => (
+          <div key={group.label} className="mb-3">
+            <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-widest px-3 mb-1.5">
+              {group.label}
+            </p>
+            <div className="space-y-0.5">
+              {group.items.map((item) => {
+                const isActive =
+                  item.href === "/"
+                    ? pathname === "/"
+                    : pathname.startsWith(item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      "flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors",
+                      isActive
+                        ? "bg-brand-subtle text-brand font-semibold"
+                        : "text-text-secondary hover:bg-surface-tertiary hover:text-text-primary font-medium",
+                    )}
+                  >
+                    <item.icon size={16} strokeWidth={isActive ? 2.2 : 1.8} />
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        {/* 설정 + 관리자 */}
+        <div className="border-t border-border-primary pt-3 mt-2 space-y-0.5">
+          <Link
+            href="/settings"
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors",
+              pathname.startsWith("/settings")
+                ? "bg-brand-subtle text-brand font-semibold"
+                : "text-text-secondary hover:bg-surface-tertiary hover:text-text-primary font-medium",
+            )}
+          >
+            <Settings size={16} strokeWidth={pathname.startsWith("/settings") ? 2.2 : 1.8} />
+            설정
+          </Link>
+          <Link
+            href="/admin/users"
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors",
+              pathname.startsWith("/admin")
+                ? "bg-brand-subtle text-brand font-semibold"
+                : "text-text-secondary hover:bg-surface-tertiary hover:text-text-primary font-medium",
+            )}
+          >
+            <Shield size={16} strokeWidth={pathname.startsWith("/admin") ? 2.2 : 1.8} />
+            관리자
+          </Link>
+        </div>
       </nav>
 
       {/* 하단 PRO 배너 */}

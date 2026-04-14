@@ -113,7 +113,7 @@ export default function DashboardPage() {
   }
 
   const { store, status, problems, actions, keywordRanks, competitorComparison, myMetrics, marketingPhase } = dashboard as any;
-  const level = levelConfig[status.level];
+  const level = levelConfig[status.level as keyof typeof levelConfig] || levelConfig.LOW;
 
   return (
     <div className="space-y-5 max-w-4xl mx-auto">
@@ -164,10 +164,10 @@ export default function DashboardPage() {
       {problems.length > 0 && (
         <div className="space-y-2">
           <h3 className="text-sm font-bold text-muted-foreground">지금 부족한 것</h3>
-          {problems.map((p, i) => {
-            const Icon = severityIcon[p.severity];
+          {problems.map((p: any, i: number) => {
+            const Icon = severityIcon[p.severity as keyof typeof severityIcon] || Info;
             return (
-              <div key={i} className={`rounded-lg border p-4 ${severityStyle[p.severity]}`}>
+              <div key={i} className={`rounded-lg border p-4 ${severityStyle[p.severity as keyof typeof severityStyle] || ""}`}>
                 <div className="flex items-start gap-3">
                   <Icon size={18} className="shrink-0 mt-0.5" />
                   <div className="flex-1">
@@ -191,7 +191,7 @@ export default function DashboardPage() {
       <div className="space-y-2">
         <h3 className="text-sm font-bold text-muted-foreground">오늘 해야 할 것</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {actions.map((action, i) => {
+          {actions.map((action: any, i: number) => {
             const Icon = actionIcon[action.type] || Search;
             return (
               <Link key={i} href={action.href}>
@@ -237,7 +237,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {keywordRanks.map((kw, i) => (
+                  {keywordRanks.map((kw: any, i: number) => (
                     <tr key={i} className="border-t hover:bg-muted/30">
                       <td className="px-4 py-2.5">
                         <span className="font-medium">{kw.keyword}</span>
@@ -314,7 +314,7 @@ export default function DashboardPage() {
                     <td className="text-center px-3 py-2.5">-</td>
                   </tr>
                   {/* 경쟁사 */}
-                  {competitorComparison.map((c, i) => {
+                  {competitorComparison.map((c: any, i: number) => {
                     const reviewDiff = c.receiptReviewCount - (myMetrics.receiptReviewCount ?? 0);
                     return (
                       <tr key={i} className="border-t hover:bg-muted/30">

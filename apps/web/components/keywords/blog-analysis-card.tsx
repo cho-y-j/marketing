@@ -91,8 +91,8 @@ export function BlogAnalysisCard({ storeId }: { storeId: string }) {
         ) : (
           <div className="space-y-2">
             {summary.results.map((r: any, i: number) => {
-              const rec = recommendationConfig[r.recommendation] || recommendationConfig.HOLD;
-              const comp = competitionConfig[r.competitionLevel] || competitionConfig.MEDIUM;
+              const rec = (recommendationConfig as any)[r.recommendation] || recommendationConfig.HOLD;
+              const comp = (competitionConfig as any)[r.competitionLevel] || competitionConfig.MEDIUM;
               const RecIcon = rec.icon;
 
               return (

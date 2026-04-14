@@ -136,10 +136,11 @@ export class AIProvider {
   }
 
   /**
-   * 사용자 API 키로 호출 (프리미엄 전용)
+   * 고객 API Key 우선 사용 (생성형 작업: 블로그/댓글 등)
+   * 고객 키가 있으면 고객 키로 호출, 없으면 서비스 키 폴백
    */
   async callWithUserKey(
-    apiKey: string,
+    apiKey: string | null | undefined,
     systemPrompt: string,
     userPrompt: string,
     options?: { temperature?: number; maxTokens?: number },
@@ -147,18 +148,27 @@ export class AIProvider {
     const temp = options?.temperature ?? 0.3;
     const maxTokens = options?.maxTokens ?? 4096;
 
-    const result = await this.callClaudeApi(
-      systemPrompt,
-      userPrompt,
-      temp,
-      maxTokens,
-      apiKey,
-    );
-    return {
-      content: result,
-      provider: "claude_api_user",
-      model: "claude-sonnet-4-20250514",
-    };
+    if (apiKey) {
+      try {
+        const result = await this.callClaudeApi(
+          systemPrompt,
+          userPrompt,
+          temp,
+          maxTokens,
+          apiKey,
+        );
+        return {
+          content: result,
+          provider: "claude_api_user",
+          model: "claude-sonnet-4-20250514",
+        };
+      } catch (e: any) {
+        this.logger.warn(`고객 API Key 호출 실패: ${e.message} — 서비스 키로 폴백`);
+      }
+    }
+
+    // 폴백: 기존 5단계 로직
+    return this.call(systemPrompt, userPrompt, options);
   }
 
   // ===== CLI 호출 =====

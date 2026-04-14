@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ConsultationCTA } from "@/components/common/consultation-cta";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useLatestAnalysis, useRunAnalysis } from "@/hooks/useAnalysis";
@@ -310,6 +311,16 @@ export default function AnalysisPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* === 전문 상담 CTA === */}
+      {problems.length > 0 && (
+        <ConsultationCTA
+          type="GENERAL"
+          storeId={storeId}
+          title="전문가의 도움이 필요하신가요?"
+          description="매장 상황에 맞는 마케팅 전략을 전문가가 직접 제안해드립니다."
+        />
       )}
     </div>
   );

@@ -18,6 +18,7 @@ import { StoreSetupService } from "../../providers/data/store-setup.service";
 import { EventCollectorService } from "../../providers/data/event-collector.service";
 import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 import { DashboardService } from "./dashboard.service";
+import { PrismaService } from "../../common/prisma.service";
 
 @ApiTags("매장")
 @Controller("stores")
@@ -30,6 +31,7 @@ export class StoreController {
     private eventCollector: EventCollectorService,
     private naverPlace: NaverPlaceProvider,
     private dashboard: DashboardService,
+    private prisma: PrismaService,
   ) {}
 
   @Get("dashboard/:storeId")
@@ -116,5 +118,29 @@ export class StoreController {
   @ApiOperation({ summary: "현재 진행 중인 주변 축제/이벤트 조회" })
   getEvents(@Param("id") id: string) {
     return this.eventCollector.getActiveEventsForStore(id);
+  }
+
+  @Post("consultation")
+  @ApiOperation({ summary: "전문 상담 신청" })
+  createConsultation(
+    @Body() body: {
+      name: string;
+      phone: string;
+      type: string;
+      message?: string;
+      storeId?: string;
+    },
+    @Req() req: any,
+  ) {
+    return this.prisma.consultationRequest.create({
+      data: {
+        name: body.name,
+        phone: body.phone,
+        type: body.type,
+        message: body.message,
+        storeId: body.storeId,
+        userId: req.user?.id,
+      },
+    });
   }
 }
