@@ -4,6 +4,7 @@ import { KeywordService } from "./keyword.service";
 import { RankCheckService } from "./rank-check.service";
 import { KeywordDiscoveryService } from "./keyword-discovery.service";
 import { TrafficShiftService } from "./traffic-shift.service";
+import { BlogAnalysisService } from "./blog-analysis.service";
 import { CreateKeywordDto } from "./dto/keyword.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 
@@ -17,6 +18,7 @@ export class KeywordController {
     private rankCheckService: RankCheckService,
     private discoveryService: KeywordDiscoveryService,
     private trafficShift: TrafficShiftService,
+    private blogAnalysis: BlogAnalysisService,
   ) {}
 
   @Get()
@@ -114,5 +116,19 @@ export class KeywordController {
       storeId,
       threshold ? parseFloat(threshold) : -15,
     );
+  }
+
+  @Post("blog-analysis")
+  @ApiOperation({ summary: "블로그 상위노출 분석 실행 (전체 키워드)" })
+  runBlogAnalysis(@Param("storeId") storeId: string) {
+    // 비동기 실행 — 바로 응답
+    this.blogAnalysis.analyzeAllKeywords(storeId).catch(() => {});
+    return { message: "블로그 분석이 시작되었습니다", storeId };
+  }
+
+  @Get("blog-analysis")
+  @ApiOperation({ summary: "블로그 상위노출 분석 결과 조회" })
+  getBlogAnalysis(@Param("storeId") storeId: string) {
+    return this.blogAnalysis.getSummary(storeId);
   }
 }

@@ -112,13 +112,27 @@ export default function DashboardPage() {
     );
   }
 
-  const { store, status, problems, actions, keywordRanks, competitorComparison, myMetrics } = dashboard;
+  const { store, status, problems, actions, keywordRanks, competitorComparison, myMetrics, marketingPhase } = dashboard as any;
   const level = levelConfig[status.level];
 
   return (
     <div className="space-y-5 max-w-4xl mx-auto">
       {/* 셋업 진행 */}
       {storeId && <SetupProgressCard storeId={storeId} />}
+
+      {/* 마케팅 단계 배너 */}
+      {marketingPhase && (
+        <div className="rounded-xl border bg-white p-4 flex items-center gap-3">
+          <Badge variant={
+            marketingPhase.code === "REVIEW_FIRST" ? "destructive" :
+            marketingPhase.code === "TRAFFIC_NEEDED" ? "secondary" :
+            marketingPhase.code === "OPTIMIZATION" ? "default" : "outline"
+          }>
+            {marketingPhase.label}
+          </Badge>
+          <p className="text-xs text-muted-foreground flex-1">{marketingPhase.description}</p>
+        </div>
+      )}
 
       {/* === 1. 현재 상태 요약 === */}
       <div className={`rounded-xl border-2 p-5 ${level.bg}`}>
@@ -191,6 +205,9 @@ export default function DashboardPage() {
                     </div>
                     <p className="font-semibold text-sm">{action.title}</p>
                     <p className="text-xs text-muted-foreground mt-1">{action.description}</p>
+                    {(action as any).reason && (
+                      <p className="text-[10px] text-primary/70 mt-1.5 border-t pt-1.5">{(action as any).reason}</p>
+                    )}
                   </CardContent>
                 </Card>
               </Link>

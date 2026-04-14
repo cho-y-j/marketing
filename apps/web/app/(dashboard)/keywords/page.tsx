@@ -14,6 +14,7 @@ import { apiClient } from "@/lib/api-client";
 import { getKeywordTypeConfig, getTrendStyle, formatNumber, CHART_COLORS } from "@/lib/design-system";
 import { toast } from "sonner";
 import { RankGridTable } from "@/components/keywords/rank-grid-table";
+import { BlogAnalysisCard } from "@/components/keywords/blog-analysis-card";
 import { TrendingUp, TrendingDown, Minus, Plus, Search, Loader2, RefreshCw, BarChart3, Hash, ArrowUpRight, ArrowDownRight, Sparkles, Lightbulb, ArrowRight, Activity } from "lucide-react";
 
 export default function KeywordsPage() {
@@ -283,6 +284,9 @@ export default function KeywordsPage() {
           })}
         </div>
       )}
+
+      {/* 블로그 상위노출 분석 */}
+      {storeId && <BlogAnalysisCard storeId={storeId} />}
 
       {/* === 검색 트래픽 이동 분석 === */}
       <div className="rounded-2xl border border-border-primary bg-surface shadow-sm">
