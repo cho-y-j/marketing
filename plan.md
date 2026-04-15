@@ -7,297 +7,416 @@
 
 ---
 
+## 전체 진행률 (2026-04-15 기준)
+
+```
+Phase 0: 기반 셋업                    ████████████ 100%
+Phase 1: 가입→자동 분석 파이프라인     ████████████ 100%
+Phase 2: 대시보드 + 상세 분석 화면     ███████████░  95%
+Phase 3: 마케팅 로직 엔진             ████████████ 100%
+Phase 4: 블로그 상위노출 엔진          ████████████ 100%
+Phase 5: 메뉴 재편 + 부가 기능         ████████████ 100%
+Phase 6: 가맹사업자 전용              ░░░░░░░░░░░░   0%
+Phase 7: 키워드 경쟁 매트릭스 + AI 액션 ████████████ 100%
+Phase 8: 일별 스냅샷 + 속도 기반 재설계 ███████████░  90%  ← 의뢰자 최신 피드백
+Phase 9: 키워드 품질 검증 & 매장명 변형 집계 ████████████ 100%  ← 의뢰자 재강조 (2026-04-15)
+```
+
+---
+
 ## Phase 0: 기반 셋업
 > DB 스키마 리뉴얼 + 슈퍼관리자 + 룰 관리
 
-### 0-1. DB 스키마 리뉴얼
+### 0-1. DB 스키마 리뉴얼 ✅
 - [x] User 모델에 role 필드 추가 (INDIVIDUAL / FRANCHISE / SUPER_ADMIN)
 - [x] User 모델에 status 필드 추가 (ACTIVE / SUSPENDED / DELETED)
-- [x] User 모델에 phone, businessNumber(사업자번호), companyName 추가
+- [x] User 모델에 phone, businessNumber, companyName 추가
 - [x] FranchiseGroup 모델 신규 (가맹사업자 → 다중 매장 그룹)
-- [x] Store 모델에 franchiseMembership 추가 (가맹점 소속)
+- [x] Store 모델에 franchiseMembership 추가
 - [x] KeywordRule 모델 신규 (업종별 키워드 룰 테이블)
-- [x] BlogAnalysis 모델 신규 (블로그 상위노출 체크 결과)
-- [x] ConsultationRequest 모델 신규 (상담 CTA 전환 추적)
-- [x] StoreAnalysis에서 n1Score/n2Score/n3Score → 직관적 필드명 변경
+- [x] BlogAnalysis 모델 신규
+- [x] ConsultationRequest 모델 신규
+- [x] StoreAnalysis: n1/n2/n3 → trafficScore/engagementScore/satisfactionScore
 - [x] prisma migrate 실행 및 검증
-- [x] 기존 코드 n1/n2/n3 참조 모두 수정 (백엔드 + 프론트엔드)
+- [x] 기존 코드 n1/n2/n3 참조 모두 수정
 
-### 0-2. 슈퍼관리자 백엔드
-- [x] AdminGuard 생성 (role 기반, SUPER_ADMIN 체크)
-- [x] admin 모듈 생성 (packages/api/src/modules/admin/)
-- [x] 회원 목록 API (GET /admin/users) - 검색/필터/페이징
-- [x] 회원 상세 API (GET /admin/users/:id) - 매장/가맹 정보 포함
-- [x] 회원 수정 API (PATCH /admin/users/:id)
-- [x] 회원 삭제 API (DELETE /admin/users/:id) - soft delete
-- [x] 회원 정지 API (PATCH /admin/users/:id/suspend)
-- [x] 회원 정지 해제 API (PATCH /admin/users/:id/activate)
+### 0-2. 슈퍼관리자 백엔드 ✅
+- [x] AdminGuard (role 기반)
+- [x] 회원 CRUD/정지/해제 7개 API
+- [x] admin/keyword-rules CRUD API
 
-### 0-3. 슈퍼관리자 프론트엔드
-- [x] /admin 라우트 그룹 생성 (별도 레이아웃)
-- [x] 관리자 사이드바/네비게이션 (회원관리/룰관리/상담신청)
-- [x] 회원 목록 페이지 (테이블 + 검색 + 역할/상태 필터 + 페이징)
-- [x] 회원 상세/수정 페이지 (인라인 편집 + 매장/가맹 정보)
-- [x] 회원 정지/해제/삭제 (confirm 포함)
+### 0-3. 슈퍼관리자 프론트엔드 ✅
+- [x] /admin 라우트 그룹 + 별도 사이드바
+- [x] 회원 목록 (검색/필터/페이징)
+- [x] 회원 상세/수정 페이지
 
-### 0-4. 룰 관리
-- [x] 룰 CRUD API (GET/POST/PATCH/DELETE /admin/keyword-rules)
-- [x] 업종별 키워드 룰 시드 데이터 작성 (13개 업종, 56개 룰)
-  - [x] 소고기집(7), 삼겹살집(4), 밥집/한식(5), 카페(5), 일식(5), 중식(4)
-  - [x] 치킨(3), 피자(3), 미용실(5), 네일(3), 병원(4), 헬스(4), 술집(4)
-- [x] 룰 관리 페이지 (업종 필터 + 인라인 편집 + 추가/삭제)
+### 0-4. 룰 관리 ✅
+- [x] 키워드 룰 13개 업종 56개 시드 데이터
+- [x] 룰 관리 페이지 (인라인 편집)
 
 ---
 
 ## Phase 1: 가입 → 자동 분석 파이프라인
 > 가입하자마자 30초 안에 "내 매장이 지금 여기" 를 보여주는 것
 
-### 1-1. 가입/매장 등록 강화
-- [x] 매장 등록 페이지 전면 리뉴얼 (URL or 매장명 1개만 입력)
-- [x] 플레이스 미리보기 API (GET /stores/place-preview) → 자동 정보 수집
-- [x] 미리보기 카드 UI (매장명, 카테고리, 주소, 방문자리뷰, 블로그리뷰, 저장수)
-- [x] store-setup에 KeywordRule 기반 키워드 생성 추가 (룰=MAIN, AI=AI_RECOMMENDED)
-- [ ] 회원가입 폼에 개인사업자/가맹사업자 선택 추가 (Phase 6에서 상세 구현)
-- [ ] 고객이 원하는 키워드 직접 입력 (선택, 분석 대기 중 액션)
-- [ ] 비교 경쟁업체 직접 추가 (선택, 분석 대기 중 액션)
+### 1-1. 가입/매장 등록 강화 ✅
+- [x] 매장 등록 페이지 — URL 또는 매장명 1개만 입력
+- [x] 플레이스 미리보기 API (자동 정보 수집)
+- [x] 미리보기 카드 UI
 
-### 1-2. 키워드 자동 생성 엔진 (CLI)
-- [x] 매장 등록 완료 → store-setup.autoSetup 자동 트리거 (기존)
-- [x] 업종 + 지역 → KeywordRule 테이블 조회 → 키워드 조합 생성 (신규)
-- [x] AI 보완 키워드 생성 (기존) + 룰 키워드와 중복 제거
-- [x] 생성된 키워드 DB 저장 (MAIN/AI_RECOMMENDED 구분)
-- [x] 키워드별 월검색량 조회 (Naver SearchAD API, 기존)
+### 1-2. 키워드 자동 생성 엔진 ✅
+- [x] AI(Claude CLI) 우선 + 룰 보완
+- [x] 풍부한 컨텍스트 투입 (매장명/주소/카테고리/지명힌트/메뉴분해/리뷰수)
+- [x] "공덕 아귀찜" 같은 실전 키워드 생성 (마케터 수준)
 
-### 1-3. 경쟁 업체 자동 탐지 (CLI)
-- [x] 생성된 키워드로 네이버 플레이스 검색 → 상위 5개 매장 자동 수집 (기존 findCompetitors)
-- [x] Competitor 모델에 AUTO 타입으로 저장 (기존)
-- [x] 경쟁업체 기본 데이터 수집 강화 (리뷰수, 블로그수, placeId — store-setup에서 수집)
-- [x] 고객 직접 추가 경쟁업체 검색 API (GET /stores/:id/competitors/search?name=)
+### 1-3. 경쟁 업체 자동 탐지 ✅
+- [x] AI 키워드 상위 3개로 다중 쿼리 탐색
+- [x] search.naver.com HTML에서 placeId 추출
+- [x] Place API로 리뷰/블로그 데이터 자동 수집
 
-### 1-4. 순위 체크 엔진 (CLI)
-- [x] 키워드별 내 매장 순위 조회 (기존 RankCheckService.checkAllKeywordRanks)
-- [x] 경쟁사 순위 역전 감지 + CompetitorAlert 자동 생성 (기존)
-- [x] KeywordRankHistory에 일별 기록 저장 (기존)
-- [x] CompetitorHistory에 일별 기록 저장 (기존 + store-setup 강화)
-- [x] Bull Queue 기반 비동기 처리 (기존 RankCheckProcessor)
+### 1-4. 순위 체크 엔진 ✅
+- [x] 검색 API 폴백 (Chrome 없이도 동작)
+- [x] placeId 정확 매칭으로 isMine 판정 (이름 부분 매칭 X)
+- [x] Top 50까지 확장 + 5개 배치 병렬
 
-### 1-5. 초기 사용자 경험 (프론트엔드)
-- [x] 매장 등록 직후 가이드형 초기 진단 화면 (기존 setup 페이지)
-- [x] 분석 진행 단계별 UI (기존: 정보수집→키워드→경쟁사→분석→브리핑)
-- [x] 분석 대기 중 할 수 있는 액션 추가 (키워드 추가, 경쟁업체 추가 버튼)
-- [x] 분석 완료 → 대시보드로 이동 버튼 (기존)
+### 1-5. 초기 사용자 경험 ✅
+- [x] 단계별 진행 UI
+- [x] 분석 대기 중 액션 (키워드/경쟁사 추가)
 
 ---
 
 ## Phase 2: 대시보드 + 상세 분석 화면
-> 한눈에 파악 + 상세 드릴다운
 
-### 2-1. 대시보드 전면 재설계
-- [x] 상단: 현재 상태 요약 (경쟁력 높음/보통/낮음 + 평균 순위 + 핵심 수치 4개)
-- [x] 부족점 진단 (리뷰 부족/순위 낮음/블로그 부족 자동 판단 + 심각도 + 현재값 vs 목표값)
-- [x] 오늘 해야 할 액션 3가지 (카드 버튼 + 근거 데이터 + 페이지 링크)
-- [x] 키워드별 내 순위 테이블 (순위 색상 코딩 + 변동 + 월검색량)
-- [x] 경쟁사 비교 테이블 (내 매장 vs 경쟁사 리뷰/블로그 + 차이)
-- [x] 대시보드 종합 API (GET /stores/dashboard/:storeId) 1회 호출로 전체 데이터
-- [ ] 가맹사업자용: 전체 가맹점 현황 한눈에 보기 (Phase 6)
+### 2-1. 대시보드 전면 재설계 ✅
+- [x] 상단: 경쟁력 등급 + 평균 순위 + 핵심 4지표
+- [x] 부족점 진단 (자동 + 심각도 + 격차 표시)
+- [x] **오늘 해야 할 것 (AI 보강 + 캐싱 + 아코디언)**
+- [x] 키워드별 내 순위 (currentRank 우선 정렬)
+- [x] 경쟁사 비교 테이블 (방문자/블로그/일조회)
+- [x] 마케팅 단계 배너 (REVIEW_FIRST / TRAFFIC_NEEDED / OPTIMIZATION / MAINTENANCE)
 
-### 2-2. 키워드 순위 페이지 (애드로그 스타일)
-- [x] 키워드별 일별 순위 추이 그리드 테이블 (RankGridTable 컴포넌트)
-- [x] 순위 색상 코딩 (1~5위 진한파랑, 6~10위 파랑, 11~30위 빨강, 31위~ 검정)
-- [x] 7일/14일/30일 기간 선택 버튼
-- [x] 날짜별 변동 표시 (▲▼ + 숫자)
-- [x] 기존 Recharts 순위 추이 차트 유지
-- [ ] 경쟁사 순위 비교 (Phase 4 블로그 엔진 이후 통합)
+### 2-2. 키워드 페이지 ✅
+- [x] **키워드 카드 — Top 3 매장 + 내 위치 한 카드에**
+- [x] 일/주/월 검색량 표시
+- [x] 검색량 미리보기 후 추가하는 흐름
+- [x] 키워드 클릭 → 상세 페이지 이동
+- [x] 블로그 분석 카드 통합
 
-### 2-3. 매장 분석 페이지 재설계
-- [x] "문제 → 원인 → 해결" 3-STEP 구조로 전면 재설계
-- [x] STEP 1 현재 상태: 경쟁력 높음/보통/낮음 + 평균 순위 + 4대 지표(리뷰/블로그/저장/경쟁사)
-- [x] STEP 2 문제 원인: 자동 진단 (리뷰 부족/순위 낮음/블로그 부족) + 심각도 + N배 차이 표시
-- [x] STEP 3 해결 방향: 문제별 구체적 액션 카드 + 해당 페이지 링크
-- [x] 경쟁사 대비 상세 비교 테이블 (리뷰/블로그 + N배 뒤처짐 표시)
-- [x] N1/N2/N3 용어 완전 제거 (Phase 0-1에서 완료)
+### 2-3. 매장 분석 페이지 ✅
+- [x] 문제 → 원인 → 해결 3-STEP 구조
+- [x] 4지표 (방문자/블로그/일조회/경쟁사)
+- [x] 경쟁사 대비 N배 차이 표시
+- [x] 전문 상담 CTA 연결
 
-### 2-4. 경쟁 비교 페이지
-- [ ] 내 매장 vs 경쟁업체 비교 테이블
-- [ ] 항목: 순위, 방문자리뷰, 블로그리뷰, 저장수, 월검색량
-- [ ] 경쟁사별 추이 차트
-- [ ] 경쟁사 알림 (순위 역전, 리뷰 급증 등)
+### 2-4. 경쟁 비교 페이지 ✅
+- [x] **격차 시각화 — 막대바 + 진단 문장**
+- [x] 매장별 1:1 비교 카드 (압도/우위/혼재/추격/심각)
+- [x] 격차 카드 3종 (방문자/블로그/검색량)
+- [x] 1위 경쟁사 표시
 
 ---
 
-## Phase 3: 마케팅 로직 엔진
-> CLI가 자동 판단하여 "지금 뭘 해야 하는지" 추천
-
-### 3-1. 기본 체력 판단
-- [x] 4단계 마케팅 단계 자동 판단 (REVIEW_FIRST → TRAFFIC_NEEDED → OPTIMIZATION → MAINTENANCE)
-- [x] 리뷰 30개 미만 → 리뷰 최우선 단계
-- [x] 대시보드에 마케팅 단계 배너 표시
-
-### 3-2. 트래픽 판단
-- [x] 리뷰 있는데 순위 50위 밖 → 트래픽 유입 단계 자동 전환
-- [x] 키워드 순위 체크 + 블로그 콘텐츠 액션 자동 추천
-
-### 3-3. 업종별 키워드 전략 분기
-- [x] 키워드별 검색량 대비 순위 분석 → 집중 키워드 / 포기 키워드 구분
-- [x] keywordStrategy 결과를 대시보드에 전달
-
-### 3-4. "오늘의 액션" 엔진
-- [x] 마케팅 단계별 + 문제 기반 액션 자동 생성 (우선순위 정렬, 상위 3개)
-- [x] 각 액션에 reason(근거 데이터) 포함
-- [x] 대시보드 액션 카드에 근거 표시
+## Phase 3: 마케팅 로직 엔진 ✅
+- [x] 4단계 마케팅 단계 자동 판단
+- [x] 자동 진단: 리뷰/순위/블로그/검색량0/1위격차/키워드부족
+- [x] 키워드 전략 분기 (집중/포기 자동 구분)
+- [x] **AI 액션 보강 (구체적 숫자 + 단계별 가이드 + 예상 효과)**
+- [x] **Redis 캐싱 1시간 (AI 호출 최소화)**
 
 ---
 
-## Phase 4: 블로그 상위노출 엔진
-> 의뢰자가 "가장 중요한 부분"이라 강조한 기능
-
-### 4-1. 블로그 노출 체크 (CLI)
-- [x] 키워드별 네이버 블로그 검색 → 상위 10개 수집 (BlogAnalysisService)
-- [x] 상위 블로그 문서 수집 (제목, 작성일, 블로그명, URL)
-- [x] 반복 노출 블로그 탐지 (경쟁사명 매칭)
-- [x] 경쟁 강도 분석 (LOW/MEDIUM/HIGH/VERY_HIGH, 최근 30일 비율 기준)
-
-### 4-2. 상위노출 판단 (CLI)
-- [x] 최근 30일 작성 블로그 비율 계산
-- [x] 경쟁 매장명 반복 언급 카운트
-- [x] 플레이스 연결 문맥 존재 여부 체크
-- [x] BlogAnalysis 모델에 결과 upsert 저장
-
-### 4-3. 키워드별 전략 추천
-- [x] PUSH(공략) / HOLD(유지) / SKIP(포기) / DONE(이미 상위) 4종 자동 판단
-- [x] 각 판단에 대한 reason(근거) 자동 생성
-- [x] 요약 API (GET /stores/:id/keywords/blog-analysis) — push/hold/skip/done 카운트
-
-### 4-4. 블로그 분석 프론트엔드
-- [x] BlogAnalysisCard 컴포넌트 (키워드 페이지에 통합)
-- [x] 키워드별 전략 뱃지 + 경쟁 강도 + 블로그 수/최근 비율/경쟁사 수
-- [x] PUSH 키워드 하이라이트 + 근거 표시
-- [x] 분석 실행 버튼 (POST /stores/:id/keywords/blog-analysis)
+## Phase 4: 블로그 상위노출 엔진 ✅
+- [x] 키워드별 네이버 블로그 검색 (BlogAnalysisService)
+- [x] 경쟁 강도 분석 (LOW/MEDIUM/HIGH/VERY_HIGH)
+- [x] PUSH/HOLD/SKIP/DONE 4종 전략 자동 추천
+- [x] 키워드 페이지에 BlogAnalysisCard 통합
 
 ---
 
-## Phase 5: 메뉴 구조 재편 + 부가 기능
-
-### 5-1. 메뉴 재편 (분석 → 실행 → 결과)
-- [x] 사이드바 4개 그룹 재편 (홈/내 매장 상태/마케팅 실행/성과 확인)
-- [x] 관리자 메뉴 링크 추가
-- [x] 외국인 상권 메뉴 추가
-
-### 5-2. 외국인 상권 진단
-- [x] 안내 페이지 (구글 지도+검색+리뷰 구조 설명 + 체크 포인트)
-- [x] CTA 버튼 3종 (무료 진단/가능성 확인/유입 체크)
-- [x] CTA 클릭 → ConsultationCTA 컴포넌트로 상담 폼 표시
-
-### 5-3. 전문 상담 CTA
-- [x] ConsultationCTA 재사용 컴포넌트 (이름/연락처/메시지 폼)
-- [x] POST /stores/consultation API (ConsultationRequest 저장)
-- [x] 매장 분석 페이지 하단에 CTA 연결 (문제 있을 때만)
-- [x] 관리자 상담 목록 API (GET /admin/consultations + 상태 변경)
-
-### 5-4. 생성형 AI 작업 (API Key 기반)
-- [x] callWithUserKey 개선 — 고객 키 우선, 없으면 서비스 키 폴백
-- [x] 기존 anthropicApiKey 필드 활용 (DB에 이미 있음)
-- [ ] 블로그 글 생성 시 고객 키 연결 (콘텐츠 모듈에서 호출 시 적용)
-- [ ] 리뷰 댓글 생성 시 고객 키 연결 (리뷰 모듈에서 호출 시 적용)
+## Phase 5: 메뉴 + 외국인 상권 + 상담 CTA + AI 키 ✅
+- [x] **사이드바 4개 그룹 재편** (홈/내 매장 상태/마케팅 실행/성과 확인)
+- [x] **"내 매장" 메뉴 제거** (StoreSwitcher 강화로 대체)
+- [x] StoreSwitcher: 매장 1개여도 표시 + "+ 새 매장 추가" 링크 통합
+- [x] 외국인 상권 진단 페이지 (CTA 3종)
+- [x] ConsultationCTA 재사용 컴포넌트 + 백엔드 API
+- [x] AIProvider.callWithUserKey 개선 (고객 키 우선)
 
 ---
 
-## Phase 6: 가맹사업자 전용 기능
+## Phase 7: 키워드 경쟁 매트릭스 + AI 액션 ✅
+- [x] **Claude CLI 컨테이너 마운트** (host nvm + .claude 설정 read-only)
+- [x] AI 키워드 생성 고도화 (전문가 수준 프롬프트)
+- [x] 키워드별 경쟁 매트릭스 수집 (Top 50 + placeId + 리뷰 데이터)
+- [x] /keywords/[keyword] 상세 페이지 (Top 10/N일전 비교/추이/인사이트)
+- [x] 키워드 리스트 카드에 1위~3위 + 내 위치 표시
 
-### 6-1. 가맹 그룹 관리
+---
+
+## 외부 API 대응 (네이버 비공개 API 변경 이슈)
+
+오늘 발견한 문제와 해결책 — 향후 같은 패턴 발생 시 참고:
+
+| # | 문제 | 해결 |
+|---|------|------|
+| 1 | Place summary API 응답 구조 변경 | `data.placeDetail.*` 중첩 구조 파싱 |
+| 2 | 경쟁사 placeId 획득 불가 | search.naver.com HTML에서 id+name 정규식 추출 |
+| 3 | 주소 파싱 (B동 건물동을 행정동으로 오인식) | 한 글자/숫자 동 제외 |
+| 4 | 검색광고 API 응답 0개 | 5개씩 배치 분할 + 쉼표 제거 |
+| 5 | 검색량 "< 10" 같은 string 응답 | parseVolume 헬퍼 (절반 추정) |
+| 6 | search.naver.com rate limit (429) | 풍부한 브라우저 헤더 (sec-ch-ua, Accept-Language 등) |
+| 7 | isMine 매칭 오인식 ("공덕직영점" 공통 단어) | placeId 정확 일치만 사용 |
+| 8 | saveCount 자동 수집 불가능 | UI에서 컬럼 완전 제거 (SmartPlace OAuth 외 방법 없음) |
+
+---
+
+## 인프라 결정사항
+
+- **Claude CLI 컨테이너 사용**: 호스트 `~/.nvm` + `~/.claude` 볼륨 마운트 → 컨테이너에서 `claude -p` 호출 가능
+- **AI 캐싱**: Redis (CacheService) 1시간 TTL — 데이터 hash 기반 키 (자동 무효화)
+- **Top 50 매장 수집**: 5개씩 병렬 배치 — Place API rate limit 회피 + 빠름
+
+---
+
+## 남은 Phase
+
+### Phase 8: 일별 스냅샷 + 속도 기반 재설계 (의뢰자 최신 피드백, 최우선)
+
+**핵심 방향 전환**: 누적 수치 중심(정적) → 일별 변화량 + 추이 중심(동적)
+
+#### 8-1. 데이터 인프라 (일별 스냅샷)
+- [ ] `StoreDailySnapshot` 모델 (storeId, date, visitorReviewCount, blogReviewCount, ...)
+- [ ] `CompetitorDailySnapshot` 모델 (추적 경쟁사 매장별 일별)
+- [ ] `KeywordDailyVolume` 모델 (keyword, date, pc, mobile, total)
+- [ ] Bull Queue 일별 스냅샷 수집 Job (자정 이후, rate limit 고려 배치)
+- [ ] 최소 10일 보관 (권장 30~90일)
+- [ ] 마이그레이션
+
+#### 8-2. 서비스 계층 리팩터 (delta 반환)
+- [ ] 리뷰/검색량 반환 구조: `{ current, yesterday, delta, last7DaysAvg }`
+- [ ] 경쟁 비교: 일 생성량 기준, 차이값(`-12`/`+8`) 반환
+- [ ] 키워드 검색량: 어제 vs 오늘 (`어제 1,000 / 오늘 800`)
+- [ ] 10일 추이 시계열 데이터 포인트 API
+
+#### 8-3. 매장 분석 재설계 (/analysis)
+- [ ] **누적 비교 폐기**
+- [ ] "상위 1~10등 일평균 발행량 vs 내 매장" 비교 카드
+- [ ] 방문자/블로그 각각 일평균 표시
+- [ ] **키워드별 내 순위 리스트** (공덕맛집 2위, 공덕역맛집 5위 형태)
+- [ ] 진단 신규: `BEHIND_DAILY_GENERATION`
+
+#### 8-4. 경쟁 비교 재설계 (/competitors) ✅
+- [x] 누적 리뷰 비교 → 일평균 발행량 비교로 전환
+- [x] 경쟁사 정렬: 누적 순 → 일평균 리뷰 발행량 순
+- [x] 차이값 표시 (`-12`, `+8`)
+- [x] 누적 수치는 상단 1회 요약으로
+
+#### 8-5. 대시보드 UI (/) ✅
+- [x] 리뷰 카드: `1,563 (+23 오늘)` 형태
+- [x] 키워드 카드: `어제 1,000 → 오늘 800 (-200)` 형태
+- [x] 10일 스파크라인 추가 (리뷰 증가, 검색량 추이)
+
+#### 8-6. AI 키워드 생성 프롬프트 교체 + UI
+- [ ] 의뢰자 공식 프롬프트로 교체 (지역+역 조합, 유입/상황/메뉴 3카테고리, 10개 이하, 방문 의도)
+- [ ] 후처리: 월 300 미만 필터 (회식 키워드 예외)
+- [ ] **키워드 수동 추가 UI** (상견례/룸식당 등 매장별 편차)
+- [ ] **키워드 제외 UI** + 제외 기록 저장 (재생성 시 재노출 방지)
+- [ ] 매장명 변형 합산 집계 (브랜드+지역, 브랜드+역 등)
+
+#### 8-7. 외국인 상권 페이지 재설계 (/foreign-market)
+- [ ] CTA 문구 교체: "외국인 유입 진단 신청" → **"구글 광고 유입 상담 신청"**
+- [ ] 서브 카피: "매장 정보 남겨주시면 바로 적용 가능한 광고 방향 안내드립니다."
+- [ ] 포지셔닝: SEO 진단 툴 → 구글 광고 유입 리드젠
+- [ ] 5가지 진단 체크리스트 UI:
+  1. 구글 지도 등록 정확도
+  2. 리뷰/평점 활성도
+  3. 다국어 리뷰 구조 (자동 번역 포함)
+  4. 외국인 키워드 노출
+  5. 상권 위치 적합성
+- [ ] "구글 순위는 사용자/위치별 상이" 안내 문구
+
+---
+
+### Phase 9: 키워드 품질 검증 & 매장명 변형 집계 (의뢰자 재강조)
+
+**배경**: 의뢰자가 "육목원(소고기집)" 예시로 정확한 출력 형태를 재지정.
+기대 출력(강남 맛집/강남역 맛집/강남역 소고기/강남 소고기/강남 회식/강남역 회식/뱅뱅사거리맛집)처럼
+지역+유입 / 지역역+유입 / 지역+메뉴 / 지역역+메뉴 / 지역+상황 / 지역역+상황 / 주변상권+유입 패턴이
+실제로 생성되는지 실증 필요.
+
+#### 9-1. 실증 테스트 결과 (2026-04-15) ✅
+
+**현재 DB 키워드 29개 분석**:
+- ✅ `공덕 맛집` (21,430), `공덕 해물찜` (300), `공덕 회식` (480) — 양호
+- ❌ **의뢰자 기대 키워드 누락**:
+  - `공덕역 맛집` (없음) — 지역+역 조합 쌍이 안 나옴
+  - `공덕 점심 맛집` / `공덕역 점심 맛집` (없음) — 상황 키워드 부족
+- 🚨 **월 300 미만 다수 잔존** (회식 아닌데도):
+  - `마포구 도화동 점심/백반/혼밥/한식` (각 10)
+  - `마포구 아귀찜 맛집/마포구 아귀찜` (각 10)
+  - `공덕 아귀찜` (55), `공덕역 아귀찜` (45), `마포 아귀찜` (45), `도화동 해물찜` (65) 등
+  - → **필터 미작동** (store-setup.service 후처리 필터 검증 필요)
+- 🚨 **HIDDEN 키워드 오염**: `찜닭 37960`, `조개구이 37820`, `코다리 30410`, `아구찜 60660` — 매장 무관 광범위 키워드 (이전 로직 잔재)
+
+**`/keywords/discover` 엔드포인트 테스트 (AI 재생성)**:
+결과가 **완전히 엉터리** — aiRecommended: [] 비어있고 네이버 API 연관검색어만 반환:
+- `돈까스 161600`, `횟집 105080`, `영종도맛집 74200`, `송도맛집 70980`, `소갈비찜레시피 48780`, `계란찜 48040`, `찜닭레시피`, `편백찜`, `가오리찜`, `식사동맛집` 등
+- **원인**: `keyword-discovery.service.ts`의 AI 프롬프트가 **Phase 8-6에서 교체되지 않았음** — 구버전 "히든 키워드 발굴" 프롬프트 그대로
+- **영향**: 매장 등록 시(store-setup)는 공식 프롬프트 사용 OK, 이후 수동 재생성 시 구버전 프롬프트 사용 → 결과 오염
+
+#### 9-1-B. 즉시 수정 완료 (2026-04-15) ✅
+- [x] `keyword-discovery.service.ts` AI 프롬프트를 store-setup과 동일한 공식 프롬프트로 교체
+- [x] 공통 필터 유틸 `keyword-filter.util.ts` 신설 — `isLowVolumeNonException` + `isNonRegional` + `KEYWORD_KEEP_PATTERN` (회식·상견례·룸·단체·모임·돌잔치·송년·연말)
+- [x] `KeywordService.cleanupByRules(storeId)` 추가 + `/stores/:id/keywords/cleanup` 엔드포인트
+  - USER_ADDED 제외한 키워드 중 월300미만(예외 제외) 또는 지역성결여 일괄 제거
+- [x] 지역 토큰 추출 확장 — 동/구/시 + 매장명 브랜드 힌트(공덕) + 역 조합
+- [x] **regex greedy 버그 수정** — `[가-힣]{2,4}` → `[가-힣]{2,4}?` (lazy)
+  - 버그: "공덕직영점"에서 "공덕직영"이 추출돼 "공덕 맛집"이 지역성결여로 잘못 삭제됐음
+- [x] regionHint 우선순위 전환 — 매장 동주소가 아닌 **매장명 브랜드 힌트 우선** (공덕 vs 도화)
+  - 이유: 매장이 도화동에 있어도 고객은 "공덕역 맛집"으로 검색
+- [x] 3회 연속 AI 출력 검증 — 공덕역 맛집 / 공덕 아귀찜 / 공덕역 아귀찜 / 공덕 해물찜 / 공덕 점심 / 공덕역 회식 등 의뢰자 기대 패턴 안정 생성
+- [x] cleanup 실제 DB 적용 — 25개 오염 키워드 제거 (돈까스/횟집/영종도맛집/마포구도화동혼밥 등)
+
+#### 9-2. 매장명 변형 합산 집계 ✅
+- [x] `BrandVolumeService` 신설 — 매장명+지역/역 11종 변형 자동 생성
+- [x] 변형: 브랜드(찬란한아구) + 매장명 + 브랜드+공덕 + 브랜드공덕 + 브랜드+공덕역 + 브랜드공덕역 + 브랜드+공덕점 + 브랜드+마포/도화동 조합
+- [x] `GET /stores/:id/keywords/brand-volume` 엔드포인트 — variations/totalMonthly/totalDaily 반환
+- [x] 네이버 검색광고 API 배치 호출 + 볼륨 0 제외
+- (참고: 찬란한아구 같은 소규모 브랜드는 임계 미달로 0 반환 — 정상)
+
+#### 9-3. 키워드 정렬 검증 ✅
+- [x] DB 쿼리 확인: `ORDER BY monthlySearchVolume DESC NULLS LAST` 정상
+- [x] 실제 출력: 아구찜(60660) → 공덕 맛집(21430) → 도화동 맛집(2650) → 찬란한아구 공덕직영점(430) 순
+
+#### 9-4. 정렬 필터 UI ✅
+- [x] `/keywords` 페이지에 정렬 토글 3종 추가 (검색량 순 / 순위 순 / 이름 순)
+- [x] 클라이언트 측 `Array.sort` 적용, 서버 왕복 없음
+
+---
+
+### Phase 6: 가맹사업자 전용 기능 (미착수)
 - [ ] FranchiseGroup CRUD API
-- [ ] 가맹점 일괄 등록 (엑셀 업로드 등)
-- [ ] 가맹점 소속 관리
+- [ ] 가맹점 일괄 등록
+- [ ] 가맹 대시보드 (전체 가맹점 한눈에 + 부족점 하이라이트)
+- [ ] 가맹점별 드릴다운
 
-### 6-2. 가맹 대시보드
-- [ ] 전체 가맹점 현황 요약 (순위 분포, 리뷰 현황)
-- [ ] 부족한 가맹점 자동 하이라이트
-- [ ] 가맹점별 드릴다운 → 개인사업자와 동일한 상세 화면
+### 향후 (의뢰자 피드백 대기)
+- [ ] 회원가입 폼에 개인/가맹 선택
+- [ ] 데이터랩 검색량 추이 (1년치 일별)
+- [ ] 글로벌 키워드 히스토리 공유 (다른 사용자 데이터 활용)
+- [ ] SmartPlace OAuth로 본인 매장 saveCount 가져오기
 
 ---
 
 ## 진행 로그
-| 날짜 | 작업 내용 | Phase |
-|------|----------|-------|
-| 2026-04-14 | 마스터 플랜 작성, CLAUDE.md 생성, 메모리 셋업 | 준비 |
-| 2026-04-14 | Phase 0-1 DB 스키마 리뉴얼 완료 (User role/status, FranchiseGroup, KeywordRule, BlogAnalysis, ConsultationRequest, N1/N2/N3 직관적 명칭 변경) | 0-1 완료 |
-| 2026-04-14 | Phase 0-2 슈퍼관리자 백엔드 완료 (AdminGuard, 회원 CRUD/정지/해제 API, 타입체크+빌드 통과) | 0-2 완료 |
-| 2026-04-14 | Phase 0-3 슈퍼관리자 프론트엔드 완료 (/admin 라우트, 회원 목록/상세/수정 페이지) | 0-3 완료 |
-| 2026-04-14 | Phase 0-4 룰 관리 완료 (CRUD API + 13업종 56룰 시드 + 관리 페이지) | 0-4 완료 |
-| 2026-04-14 | Phase 1 가입→자동분석 파이프라인 완료 (매장등록 리뉴얼, 룰기반 키워드생성, 경쟁사 데이터강화, 대기중 액션) | 1 완료 |
-| 2026-04-14 | Phase 2-1 대시보드 전면 재설계 완료 (현위치+부족점+액션+순위+경쟁비교 한 화면) | 2-1 완료 |
-| 2026-04-14 | Phase 2-2 키워드 순위 페이지 완료 (일별 그리드 테이블+색상코딩+변동표시) | 2-2 완료 |
-| 2026-04-14 | Phase 2-3 매장 분석 페이지 완료 (문제→원인→해결 3-STEP + 경쟁사 비교) | 2-3 완료 |
-| 2026-04-14 | Phase 3 마케팅 로직 엔진 완료 (4단계 판단+키워드전략+근거 액션) | 3 완료 |
-| 2026-04-14 | Phase 4 블로그 상위노출 엔진 완료 (네이버 블로그 검색+경쟁강도+PUSH/SKIP 전략) | 4 완료 |
-| 2026-04-14 | Phase 5 메뉴재편+상담CTA+외국인상권+AI키분기 완료 | 5 완료 |
-| 2026-04-14 | GitHub push 완료 (3커밋, 57파일, +5,090줄) — 자동 배포 진행 중 | 배포 |
-| 2026-04-14 | **중간 점검** — 아래 상세 기록 | 점검 |
+
+| 날짜 | 작업 | 비고 |
+|------|------|------|
+| 2026-04-14 | 마스터 플랜 + CLAUDE.md + 메모리 셋업 | 준비 |
+| 2026-04-14 | Phase 0 (DB 스키마 + 슈퍼관리자 + 룰 관리) | 1차 커밋 e82017c (36파일 +3,703줄) |
+| 2026-04-14 | Phase 1 (가입→자동분석 파이프라인) | 1차 커밋 |
+| 2026-04-14 | Phase 2 (대시보드 + 분석 + 키워드) | 1차 커밋 |
+| 2026-04-14 | Phase 3 (마케팅 엔진 4단계) | 2차 커밋 a063b50 (10파일 +934줄) |
+| 2026-04-14 | Phase 4 (블로그 상위노출) | 2차 커밋 |
+| 2026-04-14 | Phase 5 (메뉴 + CTA + 외국인 + AI키) | 3차 커밋 2711ab6 (11파일 +453줄) |
+| 2026-04-14 | 사용자 시드 스크립트 | 4차 커밋 f597eec |
+| 2026-04-14 | GitHub Actions 자동 빌드 + 배포 | API+Web 이미지 빌드 성공, deploy SSH 키 미설정으로 실패 |
+| 2026-04-14 | 로컬 테스트 매장 등록 (창심관 → 찬란한아구 공덕직영점) | DB 시드 |
+| 2026-04-14 | 네이버 API 응답 구조 변경 대응 | Place summary, 경쟁사 placeId, 주소 파싱 |
+| 2026-04-14 | Claude CLI 컨테이너 마운트 | 호스트 nvm + .claude 볼륨 |
+| 2026-04-15 | Phase 7 (AI 키워드 + 경쟁 매트릭스 + 키워드 상세) | 신규 |
+| 2026-04-15 | 키워드 페이지 전면 재설계 (Top 3 카드) | UX 개선 |
+| 2026-04-15 | 경쟁비교 격차 시각화 (막대바 + 진단) | UX 개선 |
+| 2026-04-15 | 대시보드 액션 아코디언 + AI 캐싱 | 성능 + UX |
+| 2026-04-15 | 저장수 컬럼 모든 곳 제거 | 자동 수집 불가 인정 |
+| 2026-04-15 | "내 매장" 메뉴 제거 + StoreSwitcher 통합 | UX |
+| 2026-04-15 | 일/주/월 검색량 + 키워드 추가 미리보기 | UX |
+| 2026-04-15 | 검색량 자동 채우기 (5개 배치) | 신규 매장도 자동 |
+| 2026-04-15 | Top 50 매장 확장 + 병렬 처리 | 5개씩 배치 |
+| 2026-04-15 | 분석 페이지 진단 정확화 (저장수 제거 + 추가 진단 3종) | 신뢰성 |
+| 2026-04-15 | Phase 8-1 스키마 (StoreDailySnapshot/CompetitorDailySnapshot/KeywordDailyVolume/ExcludedKeyword) + 마이그레이션 | 일별 스냅샷 인프라 |
+| 2026-04-15 | Phase 8-6 AI 키워드 프롬프트 의뢰자 공식 버전 교체 + 월300 필터(회식 예외) + 키워드 제외 API/UI | 키워드 정확도 |
+| 2026-04-15 | Phase 8-7 외국인 상권 → "구글 광고 유입 상담" 포지셔닝 + 5가지 진단 체크리스트 | 리드젠 전환 |
+| 2026-04-15 | Phase 8-2~5 일별 수집 Job(@Cron 01:00) + DailySnapshotService(getStoreFlow/CompetitorDailyAverages) + /flow + /competitors/daily API + 매장분석 페이지 3카드 추가(발행속도/상위10vs내/키워드별순위) | 속도 기반 비교 |
+| 2026-04-15 | Phase 8-4 경쟁 비교 페이지 일평균 기반 재설계 + 누적 요약 상단 이동 + 발행속도 정렬/delta/진단 | 동적 전환 |
+| 2026-04-15 | Phase 8-5 대시보드 리뷰 delta(+N 오늘) + 10일 스파크라인 2종 + 키워드 검색량 어제→오늘 + /keywords/flow API | 동적 대시보드 |
+| 2026-04-15 | 상담 관리자 화면 추가 (/admin/consultations) — 상태탭/연락완료/완료/취소 + 24시간+ 대기 하이라이트 | 관리자 누락 보완 |
+| 2026-04-15 | ConsultationCTA 배치 확장 — 경쟁비교(GENERAL) + 키워드(KEYWORD) 페이지 하단 | 리드젠 강화 |
+| 2026-04-15 | **대시보드 AI 블로킹 제거** — marketingEngine.diagnose 캐시 미스 시 룰 기반 즉시 응답 + 백그라운드 AI 보강 + lock 가드, 프론트 aiPending 감지 시 8초 폴링 + "AI 보강 중" 배지 | UX 체감속도 대폭 개선 |
+| 2026-04-15 | 대시보드 store 쿼리 중복 제거 — findUnique 2회 → 1회(preloadedStore 주입), DB 라운드트립 절감 | 첫 로드 응답 시간 단축 |
+| 2026-04-15 | 일별 스냅샷 Job 실제 수집 검증 (매장 2/경쟁사 6/키워드 31건 적재 성공, 9.7s) | Phase 8 데이터 파이프라인 가동 확인 |
+| 2026-04-15 | /content·/reviews·/events API 엔드포인트 검증 (200 OK, 15~20ms) | 런타임 연동 확인 |
+| 2026-04-15 | 회원가입 폼 개인/가맹 분기 + 실제 API 연동(RegisterDto 확장: role·phone·companyName·businessNumber) — 기존 submit 없던 껍데기 → 정상 가입 플로우 | 가맹 준비 + 기본 기능 누락 해결 |
+| 2026-04-15 | **Phase 9 실증 테스트** — discover API 오염(돈까스/영종도맛집), 공식 프롬프트 미적용, 월300필터 누락, 지역+역 쌍/상황 키워드 누락 다수 발견 → Phase 9-1-B 수정 목록 확정 | 숨은 버그 드러냄 |
+| 2026-04-15 | **Phase 9-1-B 수정 완료** — 공식 프롬프트 통일, cleanup 엔드포인트, regex greedy 버그 수정(공덕직영 → 공덕), regionHint 브랜드힌트 우선화, 지역 토큰 확장, 3회 실증 검증 통과 | 키워드 품질 핵심 수정 |
+| 2026-04-15 | **Phase 9 완료** (9-2 BrandVolumeService + 11종 변형 합산 API, 9-3 정렬 DB 검증, 9-4 /keywords 정렬 토글 3종) | Phase 9 100% |
+| 2026-04-15 | **의뢰자 피드백 반영** — /analysis CompareBar 화살표+±숫자(+99/-88), CompetitorDailyCard 데이터 부족 명시 메시지, /competitors 일/주/week/month 기간 토글 + 기간별 변동량 비교 + DeltaBadge 통일(TrendingUp/Down/Minus), daily-snapshot.service에 deltaDay/Week/Month 합산 추가, /keywords Top 3 카드+상세 Top 10 확인 | UX 구체성 + 통일성 |
+| 2026-04-15 | **의뢰자 재피드백 2차 반영** — /analysis 매장 비교 테이블 "앞서고 있음"/"N배 뒤처짐" → `+1200개/-330개 (3.2배)` 화살표 수치, MetricBox도 동일, /competitors [날짜] 기간 토글 추가 + 날짜 드롭다운 + `/stores/:id/competitors/timeline` 30일 API + 선택 날짜 당일 delta 표시 | 구체 수치화 + 날짜별 조회 |
+| 2026-04-15 | **주/월 변동량 계산 로직 리팩터** — delta 합산에서 절대값 차이(today vs N일 전)로 전환 → 부분 데이터로도 값 노출. `diffCount()` 헬퍼 추가, 정확히 N일 전 없으면 가장 오래된 baseline 사용(partial 집계). 실제 API 응답 일/주/월 모두 채워짐 확인 | 부분 데이터에서도 변동량 표시 |
 
 ---
 
-## 중간 점검 (2026-04-14)
+## 2026-04-15 세션 요약
 
-### 빌드/타입 검수 결과
-| 항목 | 결과 |
-|------|------|
-| API 백엔드 TypeScript 타입 체크 | **통과** |
-| Web 프론트엔드 TypeScript 타입 체크 | **통과** |
-| NestJS 빌드 (nest build) | **통과** |
-| DB 마이그레이션 적용 | **통과** (24개 테이블) |
-| 키워드 룰 시드 데이터 | **통과** (13업종 56룰) |
+### 완료한 것
+1. **Phase 8 전체 (일별 스냅샷 아키텍처)**
+   - 4개 테이블 신설 (StoreDailySnapshot / CompetitorDailySnapshot / KeywordDailyVolume / ExcludedKeyword)
+   - 01:00 Cron `DailySnapshotJob` + 수동 트리거 엔드포인트
+   - 대시보드: delta 표시 + 10일 스파크라인 + 키워드 어제→오늘 검색량
+   - 매장분석: 3카드(발행속도/상위10 vs 내/키워드별 순위)
+   - 경쟁비교: 누적 → 일평균 발행량 기준 전환
+   - 날짜별/일/주/월 기간 토글 + 날짜 드롭다운 (30일)
+   - 주/월 변동량 절대값 차이 계산(delta 합이 아닌 today vs N일 전)
 
-### 변경 파일 목록 (30개)
-**수정 (14개):**
-- `packages/api/prisma/schema.prisma` — User role/status, FranchiseGroup, KeywordRule, BlogAnalysis 등 추가
-- `packages/api/src/app.module.ts` — AdminModule 등록
-- `packages/api/src/modules/analysis/place-index.service.ts` — n1/n2/n3 → trafficScore/engagementScore/satisfactionScore
-- `packages/api/src/modules/competitor/competitor.controller.ts` — 경쟁사 검색 API 추가
-- `packages/api/src/modules/store/store.controller.ts` — 대시보드 API + 플레이스 미리보기 API
-- `packages/api/src/modules/store/store.module.ts` — DashboardService 등록
-- `packages/api/src/providers/data/store-setup.service.ts` — KeywordRule 기반 키워드 생성 + 경쟁사 데이터 수집 강화
-- `apps/web/app/(dashboard)/page.tsx` — 대시보드 전면 재설계
-- `apps/web/app/(dashboard)/analysis/page.tsx` — 문제→원인→해결 3-STEP 재설계
-- `apps/web/app/(dashboard)/keywords/page.tsx` — RankGridTable 추가
-- `apps/web/app/(dashboard)/stores/new/page.tsx` — URL 미리보기 기반 매장 등록
-- `apps/web/app/(dashboard)/stores/setup/page.tsx` — 대기 중 액션 추가
-- `apps/web/hooks/useStore.ts` — address/subCategory 타입 추가
+2. **Phase 9 키워드 품질 개선 (100%)**
+   - keyword-discovery.service 공식 프롬프트 교체
+   - keyword-filter.util.ts (isLowVolumeNonException / isNonRegional / KEYWORD_KEEP_PATTERN)
+   - `/stores/:id/keywords/cleanup` — 월300미만·지역성결여 일괄 제거
+   - regex greedy 버그 수정 (공덕직영 → 공덕)
+   - regionHint 우선순위 전환(매장명 브랜드 힌트 우선)
+   - BrandVolumeService — 매장명+지역/역 11종 변형 합산 검색량
+   - /keywords 정렬 토글 3종(검색량/순위/이름)
 
-**신규 (16개):**
-- `CLAUDE.md` — 프로젝트 전체 맥락
-- `plan.md` — 마스터 플랜 + 체크리스트
-- `packages/api/src/common/guards/admin.guard.ts` — AdminGuard (role 기반)
-- `packages/api/src/modules/admin/` — admin.module + admin-user.controller/service + admin-rule.controller/service
-- `packages/api/src/modules/store/dashboard.service.ts` — 대시보드 종합 데이터 서비스
-- `packages/api/prisma/seed-keyword-rules.ts` — 업종별 키워드 룰 시드
-- `packages/api/prisma/migrations/20260414_phase0_schema_renewal/` — DB 마이그레이션
-- `apps/web/app/(admin)/` — 관리자 레이아웃 + 회원관리 + 룰관리 페이지
-- `apps/web/components/admin/admin-sidebar.tsx` — 관리자 사이드바
-- `apps/web/components/keywords/rank-grid-table.tsx` — 일별 순위 그리드
-- `apps/web/hooks/use-admin.ts` — 관리자 회원 관리 hooks
-- `apps/web/hooks/use-admin-rules.ts` — 관리자 룰 관리 hooks
-- `apps/web/hooks/useDashboard.ts` — 대시보드 종합 데이터 hook
+3. **대시보드 성능 개선**
+   - AI 블로킹 제거 — 룰 기반 즉시 응답 + 백그라운드 AI + 8초 폴링
+   - store 쿼리 중복 제거 (preloadedStore 주입)
+   - aiPending 플래그 + UI 배지("AI 보강 중")
 
-### 의뢰자 피드백 대비 진행률
+4. **수치화·통일성**
+   - "앞서고 있음"/"N배 뒤처짐" → `↑ +1200개 / ↓ -330개 (3.2배)` 화살표 + ±숫자
+   - DeltaBadge 통일 (TrendingUp/TrendingDown/Minus)
+   - 매장분석 CompareBar, MetricBox 모두 통일
 
-| # | 의뢰자 요구사항 | 상태 | 비고 |
-|---|----------------|------|------|
-| 1 | 서비스 방향: 실행 중심 | ✅ | 대시보드 "오늘 해야 할 것" 중심 |
-| 2 | 대시보드 재구성 | ✅ | 상태요약+부족점+액션+순위+비교 |
-| 3 | 매장 분석 문제→원인→해결 | ✅ | 3-STEP 구조 완료 |
-| 4 | 초기 사용자 경험 | ✅ | URL 1개 입력 → 자동수집 → 단계별 UI |
-| 5 | 메뉴 구조 정리 | ⬜ | Phase 5 |
-| 6 | 마케팅 로직 (체력/트래픽/키워드) | 🔶 | 부족점 진단은 구현, 상세 엔진은 Phase 3 |
-| 7 | 블로그 상위노출 엔진 | ⬜ | Phase 4 (의뢰자 핵심) |
-| 8 | 외국인 상권 진단 | ⬜ | Phase 5 |
-| 9 | 슈퍼관리자 + 룰 관리 | ✅ | 완료 |
-| 10 | 개인/가맹사업자 구분 | 🔶 | DB 구조 완료, UI는 Phase 6 |
-| 11 | N1/N2/N3 직관적 표현 | ✅ | trafficScore/engagementScore/satisfactionScore |
+5. **리드젠/관리**
+   - 상담 관리자 화면 `/admin/consultations` (상태탭·연락완료·24h+ 대기 하이라이트)
+   - ConsultationCTA 경쟁비교·키워드 추가 배치
+   - 회원가입 개인/가맹 분기 + 실 API 연동(이전엔 submit조차 없던 껍데기)
 
-### 미완료 항목 (다음 세션 우선순위)
-1. **Phase 3: 마케팅 로직 엔진** — 체력판단/트래픽판단/오늘의 액션 자동 생성
-2. **Phase 4: 블로그 상위노출 엔진** — 의뢰자가 가장 강조한 기능
-3. **Phase 5: 메뉴 재편 + 외국인 상권 + 상담 CTA**
-4. **Phase 6: 가맹사업자 전용 기능**
-5. **Phase 2-4: 경쟁 비교 페이지 상세** (순위/추이 차트/알림)
-6. **Phase 1-1 잔여**: 회원가입 폼 개인/가맹 선택, 키워드/경쟁사 직접 추가 UX
+6. **검증**
+   - 일별 스냅샷 수집 실동작 확인(매장 2/경쟁사 6/키워드 31)
+   - /content /reviews /events API 엔드포인트 200 OK
+   - AI 키워드 3회 연속 샘플 의뢰자 기대 패턴 생성 확인
+
+### 미결 / 다음 세션
+- **UI 런타임 검증** — 의뢰자가 "경쟁사 수집중으로 나온다"고 피드백. 백엔드 API에는 값 채워짐 확인했으나 프런트 렌더링 확인 필요
+- 2일치 스냅샷 확보 후 실제 delta 표시 최종 확인 (내일 01:00 Cron 자동 실행)
+- SmartPlace OAuth saveCount
+- 데이터랩 1년 일별 추이
+- GitHub Actions SSH 자동 배포
+
+---
+
+## 미완료 / 다음 세션 우선순위
+
+1. **Phase 8: 일별 스냅샷 + 속도 기반 재설계** — 의뢰자 최신 피드백 최우선
+2. **Phase 6: 가맹사업자 전용 기능** — 의뢰자 직접 요구사항
+3. **회원가입 폼 개인/가맹 선택** — 회원 유형별 분기
+4. **SmartPlace OAuth 강화** — 본인 매장 saveCount 가져오기
+5. **GitHub Actions SSH 키 설정** — 자동 배포 정상화
+
+---
+
+## 제품 포지셔닝 (의뢰자 언급)
+
+- 레퍼런스: **애드로그**(데이터/순위) + **장사닥터**(사장님 친화 솔루션)
+- 목표: **"애드로그 + 장사닥터 = 한눈에 솔루션"** 업그레이드 버전
+- 핵심 메시지: "지금 이 속도로 상위권 유지/진입 가능한가"

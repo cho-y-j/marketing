@@ -58,43 +58,66 @@ export class KeywordDiscoveryService {
       }
     }
 
-    // 2. AI 히든 키워드 추천
+    // 2. AI 키워드 추천 — 의뢰자(마케팅 전문가) 공식 프롬프트 (store-setup과 동일)
+    //    지역+역 쌍 + 3카테고리(유입/상황/메뉴) + 10개 이하 + 방문 의도
     let aiKeywords: string[] = [];
     try {
-      const aiPrompt = `매장 정보:
+      // 지역 힌트 — 매장명 브랜드 힌트(공덕) 우선, 없으면 동/구
+      // (이유: 매장이 '도화동'에 있어도 고객은 '공덕역 맛집'으로 검색 — 브랜드 지명이 유입 핵심)
+      const brandLocationHint = store.name.match(/([가-힣]{2,4}?)(직영점|역점|지점|점)/)?.[1];
+      const dong = district.split(/\s+/).find((p) => /[가-힣]{2,}동$/.test(p))?.replace(/동$/, "");
+      const gu = district.split(/\s+/).find((p) => /[가-힣]{2,}구$/.test(p))?.replace(/구$/, "");
+      const regionHint = brandLocationHint || dong || gu || district;
+
+      const categoryParts = category
+        .split(/[>,]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 2);
+
+      const systemPrompt = `특정 매장 기준으로 검색 키워드를 구성해줘.
+단순 검색량 기준이 아니라, 실제 고객 유입 흐름을 반영해서 키워드를 만들어줘.
+
+조건은 아래 기준을 반드시 지켜줘.
+
+1. 지역 키워드는 '지역명' + '지역명+역' 형태를 모두 포함할 것
+2. 키워드는 반드시 아래 3가지 구조로 나눌 것
+   - 유입 키워드 (예: 맛집)
+   - 상황 키워드 (예: 점심, 술집 등)
+   - 메뉴 키워드 (예: 대표 음식명)
+3. 각 카테고리를 균형 있게 포함하여 총 10개 이하로 구성할 것
+4. 고객 검색 흐름을 반영할 것 (유입 → 상황 → 메뉴 선택 단계)
+5. 실제 매장 방문으로 이어질 가능성이 높은 구조로 구성할 것
+6. 업종이 명확한 경우, '고기집'과 같은 포괄적인 키워드는 제외하고 대표 메뉴 또는 세부 카테고리 키워드 중심으로 구성할 것
+7. 단순 정보 탐색이 아닌, 실제 방문 의도가 있는 키워드만 포함할 것
+8. 유사 의미 키워드는 중복되지 않도록 최적화할 것
+9. 기존 키워드와 중복되지 않는 신규 키워드만 제안할 것
+
+※ 출력은 설명 없이 키워드만 JSON 배열 형태로 제공할 것. 예: ["공덕 맛집", "공덕역 맛집", "공덕 아구찜"]`;
+
+      const userPrompt = `매장 정보:
 - 매장명: ${store.name}
+- 지역명(역명 조합 기준): ${regionHint || "-"}
 - 주소: ${store.address || ""}
 - 카테고리: ${category}
-- 지역: ${district}
-- ��존 키워드: ${[...existingKeywords].join(", ")}
-- 경쟁매장: ${store.competitors.map((c) => c.competitorName).join(", ")}
+- 대표 메뉴/세부 카테고리: ${categoryParts.join(", ") || "-"}
+- 기존 키워드(중복 제외): ${[...existingKeywords].slice(0, 20).join(", ") || "-"}
 
-이 ���장이 아직 추적하지 않는 "히든 키워드"를 발굴해줘.
-히든 키워드 = 검색량은 적지만 전환율이 높은 키워드, 또는 경쟁자가 놓치고 있는 틈새 키워드.
+위 조건을 지켜서 키워드 JSON 배열만 응답.`;
 
-규칙:
-1. 기존 키워드와 중복 금지
-2. 반드시 실제 주소 기반 (${district})
-3. 구체적�� 상황 키워드 포함 (예: "가경동 점심 추천", "청주 회식장소")
-4. 시즌/이벤트 키워드 포함 (현재 4월)
-5. 5~8개 추천
-
-JSON 배열로만 응답:
-["키워드1", "키워드2", ...]`;
-
-      const response = await this.ai.analyze(
-        "너는 네이버 플레이스 SEO 전문가이자 히든 키워드 발굴 전문가다.",
-        aiPrompt,
-      );
+      const response = await this.ai.analyze(systemPrompt, userPrompt);
       const match = response.content.match(/\[[\s\S]*\]/);
       if (match) {
         const parsed = JSON.parse(match[0]);
-        aiKeywords = parsed.filter((k: string) =>
-          typeof k === "string" && k.length >= 2 && !existingKeywords.has(k),
-        );
+        aiKeywords = parsed
+          .filter((k: any) => typeof k === "string")
+          .map((k: string) => k.trim().replace(/,/g, ""))
+          .filter((k: string) =>
+            k.length >= 2 && k.length <= 30 && !existingKeywords.has(k),
+          );
+        this.logger.log(`AI 키워드 생성 [${response.provider}]: ${aiKeywords.length}개 — ${aiKeywords.join(" / ")}`);
       }
     } catch (e: any) {
-      this.logger.warn(`AI 히든 키워드 생성 실패: ${e.message}`);
+      this.logger.warn(`AI 키워드 생성 실패: ${e.message}`);
     }
 
     // AI 키워드 검색량 조회

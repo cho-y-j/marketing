@@ -10,14 +10,19 @@ export class DashboardService {
   ) {}
 
   async getDashboardData(storeId: string) {
+    // 대시보드/진단이 같은 store를 쓰므로 한 번만 조회 (keywords는 모두 로드, 진단용 공용)
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       include: {
         analyses: { take: 1, orderBy: { analyzedAt: "desc" } },
-        keywords: { orderBy: { monthlySearchVolume: "desc" } },
+        keywords: {
+          orderBy: [
+            { currentRank: { sort: "asc", nulls: "last" } },
+            { monthlySearchVolume: "desc" },
+          ],
+        },
         competitors: {
           orderBy: { receiptReviewCount: "desc" },
-          take: 10,
         },
       },
     });
@@ -45,8 +50,8 @@ export class DashboardService {
     if (avgRank && avgRank <= 10) competitiveLevel = "HIGH";
     else if (avgRank && avgRank <= 30) competitiveLevel = "MEDIUM";
 
-    // === 2~3. 마케팅 엔진으로 부족점 + 액션 자동 생성 ===
-    const diagnosis = await this.marketingEngine.diagnose(storeId);
+    // === 2~3. 마케팅 엔진으로 부족점 + 액션 자동 생성 (store 재사용) ===
+    const diagnosis = await this.marketingEngine.diagnose(storeId, store);
     const { problems, actions: topActions, keywordStrategy } = diagnosis;
 
     // === 4. 키워드 순위 현황 (상위 5개) ===
@@ -66,6 +71,7 @@ export class DashboardService {
       name: c.competitorName,
       receiptReviewCount: c.receiptReviewCount ?? 0,
       blogReviewCount: c.blogReviewCount ?? 0,
+      dailySearchVolume: c.dailySearchVolume ?? 0,
       type: c.type,
     }));
 
@@ -92,6 +98,7 @@ export class DashboardService {
       },
       problems,
       actions: topActions,
+      aiPending: diagnosis.aiPending ?? false,
       keywordStrategy,
       keywordRanks,
       competitorComparison,
@@ -99,6 +106,7 @@ export class DashboardService {
         ? {
             receiptReviewCount: analysis.receiptReviewCount,
             blogReviewCount: analysis.blogReviewCount,
+            dailySearchVolume: analysis.dailySearchVolume,
             saveCount: analysis.saveCount,
             trafficScore: analysis.trafficScore,
             engagementScore: analysis.engagementScore,

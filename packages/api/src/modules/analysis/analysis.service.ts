@@ -72,6 +72,7 @@ export class AnalysisService {
     const liveData = await this.collectMyStoreData(
       store.name,
       store.naverPlaceId ?? undefined,
+      store.keywords.map((k) => k.keyword),
     );
     this.logger.log(
       `내 매장 실데이터 [${liveData.source}]: 영수증=${liveData.receiptReviewCount} 블로그=${liveData.blogReviewCount} 검색=${liveData.dailySearchVolume}/일${
@@ -319,6 +320,7 @@ export class AnalysisService {
   private async collectMyStoreData(
     storeName: string,
     naverPlaceId?: string,
+    targetKeywords: string[] = [],
   ): Promise<{
     receiptReviewCount: number | null;
     blogReviewCount: number | null;
@@ -333,15 +335,40 @@ export class AnalysisService {
     let saveCount: number | null = null;
     let dataError: string | undefined;
 
-    // 1. 검색광고 API → 일 검색량
+    // 1. 검색광고 API → 대표 키워드들의 일 검색량 합산
+    // 네이버 검색광고 API는 hintKeywords 최대 5개만 받으므로 5개씩 배치 호출
+    // 쉼표(,) 포함 키워드는 파싱 충돌 → 쉼표 제거
     try {
-      const stats = await this.searchad.getKeywordStats([
-        storeName.replace(/\s+/g, ""),
-      ]);
-      if (stats.length > 0) {
-        dailySearchVolume = Math.round(
-          this.searchad.getTotalMonthlySearch(stats[0]) / 30,
-        );
+      const rawKeywords = targetKeywords.length > 0
+        ? targetKeywords.slice(0, 10).map((k) => k.replace(/\s+/g, "").replace(/,/g, ""))
+        : [storeName.replace(/\s+/g, "").replace(/,/g, "")];
+      const uniqueKeywords = [...new Set(rawKeywords.filter(Boolean))];
+
+      // 5개씩 배치 분할
+      const batches: string[][] = [];
+      for (let i = 0; i < uniqueKeywords.length; i += 5) {
+        batches.push(uniqueKeywords.slice(i, i + 5));
+      }
+
+      const requestedSet = new Set(uniqueKeywords);
+      let totalMonthly = 0;
+      for (const batch of batches) {
+        try {
+          const stats = await this.searchad.getKeywordStats(batch);
+          const ourStats = stats.filter((s) => requestedSet.has(s.relKeyword));
+          totalMonthly += ourStats.reduce(
+            (sum, s) => sum + this.searchad.getTotalMonthlySearch(s),
+            0,
+          );
+        } catch (e: any) {
+          this.logger.warn(`검색광고 배치 실패 [${batch.join(",")}]: ${e.message}`);
+        }
+        // Rate limit 완화를 위해 배치간 지연
+        await new Promise((r) => setTimeout(r, 300));
+      }
+
+      if (totalMonthly > 0) {
+        dailySearchVolume = Math.round(totalMonthly / 30);
       }
     } catch (e: any) {
       this.logger.warn(`검색광고 API 실패 [${storeName}]: ${e.message}`);

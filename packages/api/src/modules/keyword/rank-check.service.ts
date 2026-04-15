@@ -229,4 +229,127 @@ export class RankCheckService {
       checkedAt: result.checkedAt,
     };
   }
+
+  /**
+   * 키워드별 경쟁 매트릭스 (Top 10 매장 + 내 위치 + 추이 + 인사이트)
+   * compareDays: N일전 vs 오늘 비교 (1, 5, 7, 14, 30, 60)
+   */
+  async getKeywordCompetition(storeId: string, keyword: string, compareDays = 1) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      include: { keywords: { where: { keyword } } },
+    });
+    if (!store) throw new NotFoundException("매장을 찾을 수 없습니다");
+
+    // 1. 최신 RankHistory 조회 (없으면 지금 체크)
+    let latest = await this.prisma.keywordRankHistory.findFirst({
+      where: { storeId, keyword },
+      orderBy: { checkedAt: "desc" },
+    });
+
+    let topPlaces: any[] = (latest?.topPlaces as any[]) || [];
+
+    // 풍부한 데이터(visitorReviewCount 등)가 없으면 즉시 재체크
+    const hasRichData = topPlaces.length > 0 && topPlaces.some((p) => p.visitorReviewCount != null);
+    if (!hasRichData) {
+      const result = await this.rankChecker.checkPlaceRank(
+        keyword, store.name, store.naverPlaceId || undefined,
+      );
+      latest = await this.prisma.keywordRankHistory.create({
+        data: {
+          storeId, keyword,
+          rank: result.rank,
+          totalResults: result.totalResults,
+          topPlaces: result.topPlaces as any,
+        },
+      });
+      topPlaces = result.topPlaces;
+    }
+
+    // 2. 일별 추이 (최근 60일)
+    const since = new Date();
+    since.setDate(since.getDate() - 60);
+    const histories = await this.prisma.keywordRankHistory.findMany({
+      where: { storeId, keyword, checkedAt: { gte: since } },
+      orderBy: { checkedAt: "asc" },
+      select: { rank: true, checkedAt: true, topPlaces: true },
+    });
+    const trend = histories.map((h) => ({
+      date: h.checkedAt.toISOString().split("T")[0],
+      rank: h.rank,
+    }));
+
+    // 3. N일전 비교 — compareDays 일 전의 RankHistory 조회하여 변동량 계산
+    const compareDate = new Date();
+    compareDate.setDate(compareDate.getDate() - compareDays);
+    compareDate.setHours(0, 0, 0, 0);
+    const comparePrev = await this.prisma.keywordRankHistory.findFirst({
+      where: {
+        storeId, keyword,
+        checkedAt: { gte: compareDate, lt: new Date(compareDate.getTime() + 24 * 60 * 60 * 1000) },
+      },
+      orderBy: { checkedAt: "desc" },
+    });
+    const prevTopPlaces = (comparePrev?.topPlaces as any[]) || [];
+    // 각 매장의 N일전 순위 매핑 (placeId 우선, 이름 폴백)
+    const prevRankMap = new Map<string, number>();
+    for (const p of prevTopPlaces) {
+      if (p.placeId) prevRankMap.set(p.placeId, p.rank);
+      prevRankMap.set(p.name, p.rank);
+    }
+    // topPlaces에 변동량 추가
+    topPlaces = topPlaces.map((p: any) => {
+      const prevRank = (p.placeId && prevRankMap.get(p.placeId)) || prevRankMap.get(p.name);
+      const rankChange = prevRank ? prevRank - p.rank : null; // 양수=상승, 음수=하락
+      return {
+        ...p,
+        prevRank: prevRank || null,
+        rankChange,
+        isHot: rankChange != null && rankChange >= 10,
+      };
+    });
+
+    // 3. 내 매장 정보
+    const myKeyword = store.keywords[0];
+    const myRankInTopPlaces = topPlaces.find((p: any) => p.isMine);
+
+    // 4. 인사이트 자동 생성
+    const insights: string[] = [];
+    const myRank = myKeyword?.currentRank || myRankInTopPlaces?.rank;
+    if (myRank) {
+      insights.push(`현재 ${myRank}위에 노출되고 있습니다`);
+      const top1 = topPlaces.find((p: any) => p.rank === 1);
+      if (top1 && !top1.isMine) {
+        if (top1.visitorReviewCount != null && myRankInTopPlaces?.visitorReviewCount != null) {
+          const ratio = (myRankInTopPlaces.visitorReviewCount / Math.max(top1.visitorReviewCount, 1)).toFixed(1);
+          if (myRankInTopPlaces.visitorReviewCount > top1.visitorReviewCount) {
+            insights.push(`방문자 리뷰는 1위(${top1.name}) 대비 ${ratio}배 많음 — 강점`);
+          } else {
+            insights.push(`방문자 리뷰가 1위(${top1.name})의 ${ratio}배 — 격차 해소 필요`);
+          }
+        }
+        if (top1.blogReviewCount != null && myRankInTopPlaces?.blogReviewCount != null) {
+          if (myRankInTopPlaces.blogReviewCount < top1.blogReviewCount * 0.7) {
+            insights.push(`블로그 리뷰가 1위(${top1.blogReviewCount}건) 대비 부족 — 콘텐츠 작업 필요`);
+          }
+        }
+      }
+    } else {
+      insights.push(`아직 ${topPlaces.length}위 안에 노출되지 않음 — 키워드 전략 개선 필요`);
+    }
+
+    return {
+      keyword,
+      checkedAt: latest?.checkedAt,
+      myRank,
+      monthlyVolume: myKeyword?.monthlySearchVolume,
+      totalResults: latest?.totalResults,
+      topPlaces,
+      myMetrics: myRankInTopPlaces || null,
+      trend,
+      insights,
+      compareDays,
+      compareDate: comparePrev?.checkedAt || null,
+    };
+  }
 }

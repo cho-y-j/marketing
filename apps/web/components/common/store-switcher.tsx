@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useStores } from "@/hooks/useStore";
 import { useActiveStore } from "@/hooks/useActiveStore";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Store, Check } from "lucide-react";
+import Link from "next/link";
+import { ChevronDown, Store, Check, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface StoreSwitcherProps {
@@ -57,18 +58,16 @@ export function StoreSwitcher({ compact }: StoreSwitcherProps) {
             )}
           </div>
         )}
-        {stores && stores.length > 1 && (
-          <ChevronDown
-            size={14}
-            className={cn(
-              "text-text-tertiary transition-transform",
-              open && "rotate-180",
-            )}
-          />
-        )}
+        <ChevronDown
+          size={14}
+          className={cn(
+            "text-text-tertiary transition-transform",
+            open && "rotate-180",
+          )}
+        />
       </button>
 
-      {open && stores && stores.length > 1 && (
+      {open && stores && stores.length > 0 && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
@@ -78,9 +77,9 @@ export function StoreSwitcher({ compact }: StoreSwitcherProps) {
             )}
           >
             <div className="px-4 py-2.5 border-b border-border-primary">
-              <p className="text-xs font-semibold text-text-tertiary">매장 전환</p>
+              <p className="text-xs font-semibold text-text-tertiary">매장 관리</p>
             </div>
-            <div className="p-1.5">
+            <div className="p-1.5 max-h-80 overflow-y-auto">
               {stores.map((s: any) => (
                 <button
                   key={s.id}
@@ -117,6 +116,16 @@ export function StoreSwitcher({ compact }: StoreSwitcherProps) {
                   )}
                 </button>
               ))}
+            </div>
+            <div className="border-t border-border-primary p-1.5">
+              <Link
+                href="/stores/new"
+                onClick={() => setOpen(false)}
+                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-brand hover:bg-brand-subtle transition-colors font-medium"
+              >
+                <Plus size={16} />
+                새 매장 추가
+              </Link>
             </div>
           </div>
         </>

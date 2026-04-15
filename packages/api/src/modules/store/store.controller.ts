@@ -18,6 +18,8 @@ import { StoreSetupService } from "../../providers/data/store-setup.service";
 import { EventCollectorService } from "../../providers/data/event-collector.service";
 import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 import { DashboardService } from "./dashboard.service";
+import { DailySnapshotService } from "./daily-snapshot.service";
+import { DailySnapshotJob } from "../../jobs/daily-snapshot.job";
 import { PrismaService } from "../../common/prisma.service";
 
 @ApiTags("매장")
@@ -31,6 +33,8 @@ export class StoreController {
     private eventCollector: EventCollectorService,
     private naverPlace: NaverPlaceProvider,
     private dashboard: DashboardService,
+    private dailySnapshot: DailySnapshotService,
+    private dailySnapshotJob: DailySnapshotJob,
     private prisma: PrismaService,
   ) {}
 
@@ -40,22 +44,77 @@ export class StoreController {
     return this.dashboard.getDashboardData(storeId);
   }
 
+  // Phase 8 — 매장 일별 흐름 (현재/어제/delta/7일평균/10일 시계열)
+  @Get(":storeId/flow")
+  @ApiOperation({ summary: "매장 일별 흐름 — 리뷰 증가량 + 7일 평균 + 10일 추이" })
+  getStoreFlow(@Param("storeId") storeId: string) {
+    return this.dailySnapshot.getStoreFlow(storeId);
+  }
+
+  // Phase 8 — 매장 추적 키워드 전체 오늘/어제 검색량 (대시보드용)
+  @Get(":storeId/keywords/flow")
+  @ApiOperation({ summary: "키워드별 오늘/어제 검색량 맵" })
+  getKeywordsFlow(@Param("storeId") storeId: string) {
+    return this.dailySnapshot.getKeywordsFlowForStore(storeId);
+  }
+
+  // Phase 8 — 경쟁사 일평균 발행량 (속도 기반 비교용)
+  @Get(":storeId/competitors/daily")
+  @ApiOperation({ summary: "경쟁사 일평균 발행량 — 상위 1~10등 vs 내 매장" })
+  getCompetitorDaily(@Param("storeId") storeId: string) {
+    return this.dailySnapshot.getCompetitorDailyAverages(storeId, 10);
+  }
+
+  @Get(":storeId/competitors/timeline")
+  @ApiOperation({ summary: "경쟁사 30일 타임라인 — 날짜별 발행량 조회용" })
+  getCompetitorTimeline(@Param("storeId") storeId: string) {
+    return this.dailySnapshot.getCompetitorTimeline(storeId, 10);
+  }
+
+  // Phase 8 — 일별 스냅샷 즉시 수집 (테스트/백필용)
+  @Post(":storeId/snapshot/run")
+  @ApiOperation({ summary: "일별 스냅샷 즉시 수집 (cron 대기 없이 트리거)" })
+  async runSnapshot() {
+    await this.dailySnapshotJob.runDaily();
+    return { ok: true };
+  }
+
   @Get("place-preview")
   @ApiOperation({ summary: "플레이스 URL/매장명으로 매장 정보 미리보기" })
   async placePreview(
     @Query("url") url?: string,
     @Query("name") name?: string,
   ) {
+    // 1. URL에서 placeId 추출 → 직접 조회
     if (url) {
       const placeId = this.naverPlace.extractPlaceIdFromUrl(url);
       if (placeId) {
-        const info = await this.naverPlace.getPlaceDetail(placeId);
-        if (info) return { ...info, placeId };
+        try {
+          const info = await this.naverPlace.getPlaceDetail(placeId);
+          if (info) return { ...info, placeId };
+        } catch {}
+
+        // placeId는 있지만 상세 조회 실패 → 최소 정보라도 반환
+        return {
+          id: placeId,
+          placeId,
+          name: "매장 정보 조회 중",
+          category: "",
+          address: "",
+          roadAddress: "",
+          phone: "",
+          businessHours: "",
+          _fallback: true,
+          _message: "네이버 API에서 상세 정보를 가져오지 못했습니다. 등록 후 자동 수집됩니다.",
+        };
       }
     }
+    // 2. 매장명으로 검색
     if (name) {
-      const info = await this.naverPlace.searchAndGetPlaceInfo(name);
-      if (info) return info;
+      try {
+        const info = await this.naverPlace.searchAndGetPlaceInfo(name);
+        if (info) return info;
+      } catch {}
     }
     return null;
   }

@@ -530,6 +530,68 @@ model BlogAnalysis {
   @@index([storeId, analyzedAt])
 }
 
+// ===== 일별 스냅샷 (매장) — Phase 8: 누적→속도 전환 =====
+// 매일 1회 자정 이후 수집. 리뷰 증가량/추이 계산 기반.
+model StoreDailySnapshot {
+  id                 String   @id @default(cuid())
+  storeId            String
+  date               DateTime @db.Date
+  visitorReviewCount Int? // 방문자(영수증) 리뷰 누적
+  blogReviewCount    Int? // 블로그 리뷰 누적
+  visitorDelta       Int? // 전일 대비 증가량
+  blogDelta          Int? // 전일 대비 증가량
+  raw                Json? // 원본 응답 (디버깅용)
+  collectedAt        DateTime @default(now())
+
+  @@unique([storeId, date])
+  @@index([storeId, date])
+}
+
+// ===== 일별 스냅샷 (경쟁사) — Phase 8 =====
+// 경쟁사 매장별 일별 수집. 일평균 발행량 비교용.
+model CompetitorDailySnapshot {
+  id                 String   @id @default(cuid())
+  storeId            String // 본인 매장 (어떤 사용자 컨텍스트의 경쟁사인가)
+  competitorPlaceId  String
+  date               DateTime @db.Date
+  visitorReviewCount Int?
+  blogReviewCount    Int?
+  visitorDelta       Int?
+  blogDelta          Int?
+  collectedAt        DateTime @default(now())
+
+  @@unique([storeId, competitorPlaceId, date])
+  @@index([storeId, date])
+  @@index([competitorPlaceId, date])
+}
+
+// ===== 일별 키워드 검색량 — Phase 8 =====
+// 키워드별 일 단위 검색량 추이 (어제 vs 오늘 비교)
+model KeywordDailyVolume {
+  id           String   @id @default(cuid())
+  keyword      String
+  date         DateTime @db.Date
+  pcVolume     Int?
+  mobileVolume Int?
+  totalVolume  Int?
+  collectedAt  DateTime @default(now())
+
+  @@unique([keyword, date])
+  @@index([keyword, date])
+}
+
+// ===== 제외 키워드 — Phase 8-6 (AI 재생성 시 재노출 방지) =====
+model ExcludedKeyword {
+  id        String   @id @default(cuid())
+  storeId   String
+  keyword   String
+  reason    String? // "지역 무관" | "내 매장 아님" | "경쟁 과포화" | "사용자 판단"
+  excludedAt DateTime @default(now())
+
+  @@unique([storeId, keyword])
+  @@index([storeId])
+}
+
 // ===== 상담 신청 (CTA 전환 추적) =====
 model ConsultationRequest {
   id          String    @id @default(cuid())

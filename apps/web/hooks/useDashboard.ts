@@ -36,6 +36,7 @@ export function useDashboard(storeId: string) {
           description: string;
           href: string;
         }>;
+        aiPending?: boolean;
         keywordRanks: Array<{
           keyword: string;
           currentRank: number | null;
@@ -48,11 +49,13 @@ export function useDashboard(storeId: string) {
           name: string;
           receiptReviewCount: number;
           blogReviewCount: number;
+          dailySearchVolume: number;
           type: string;
         }>;
         myMetrics: {
           receiptReviewCount: number | null;
           blogReviewCount: number | null;
+          dailySearchVolume: number | null;
           saveCount: number | null;
           trafficScore: number | null;
           engagementScore: number | null;
@@ -61,6 +64,8 @@ export function useDashboard(storeId: string) {
       };
     },
     enabled: !!storeId,
-    refetchInterval: 60000,
+    // AI 보강 진행 중이면 8초마다 재조회 (캐시 채워지면 즉시 반영) — 아니면 60초
+    refetchInterval: (query) =>
+      (query.state.data as any)?.aiPending ? 8000 : 60000,
   });
 }

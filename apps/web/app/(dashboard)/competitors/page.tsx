@@ -1,69 +1,131 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CompetitorRadarChart } from "@/components/charts/competitor-radar-chart";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
-import { useCompetitors, useAddCompetitor, useDeleteCompetitor, useCompetitorComparison } from "@/hooks/useCompetitors";
-import { useCompetitorAlerts } from "@/hooks/useROI";
+import {
+  useCompetitors,
+  useAddCompetitor,
+  useDeleteCompetitor,
+  useCompetitorComparison,
+} from "@/hooks/useCompetitors";
 import { apiClient } from "@/lib/api-client";
-import { formatNumber, CARD_BASE } from "@/lib/design-system";
 import { toast } from "sonner";
 import {
-  Plus,
-  Trash2,
-  Loader2,
-  RefreshCw,
-  Users,
-  MessageSquare,
-  Search,
-  Crown,
-  ArrowUp,
-  ArrowDown,
-  Bell,
-  TrendingUp,
-  AlertTriangle,
-  Swords,
-  FileEdit,
-  Sparkles,
+  Plus, Loader2, RefreshCw, Crown, Trash2,
+  MessageSquare, FileText, AlertTriangle, Activity, Info,
+  TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
+import { ConsultationCTA } from "@/components/common/consultation-cta";
 
-type TabKey = "compare" | "alerts";
+type Period = "date" | "day" | "week" | "month";
+const PERIOD_LABEL: Record<Period, string> = { date: "날짜", day: "일", week: "주", month: "월" };
+
+type DailyRow = {
+  name: string;
+  placeId: string | null;
+  visitorAvg7: number | null;
+  blogAvg7: number | null;
+  visitorTotal: number | null;
+  blogTotal: number | null;
+  deltas?: {
+    visitor: { day: number | null; week: number | null; month: number | null };
+    blog: { day: number | null; week: number | null; month: number | null };
+  };
+};
 
 export default function CompetitorsPage() {
   const { storeId } = useCurrentStoreId();
-  const { data: competitors, isLoading, refetch } = useCompetitors(storeId);
-  const { data: comparison } = useCompetitorComparison(storeId);
-  const { data: alerts, isLoading: alertsLoading } = useCompetitorAlerts(storeId);
+  const { data: competitors, refetch } = useCompetitors(storeId);
+  const { data: comparison, isLoading } = useCompetitorComparison(storeId);
   const addComp = useAddCompetitor(storeId);
   const deleteComp = useDeleteCompetitor(storeId);
   const [newName, setNewName] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabKey>("compare");
+  const [period, setPeriod] = useState<Period>("week");
+  const [selectedDate, setSelectedDate] = useState<string>("");
+
+  const { data: dailyResp } = useQuery<{ competitors: DailyRow[]; summary: any }>({
+    queryKey: ["competitors-daily", storeId],
+    queryFn: () => apiClient.get(`/stores/${storeId}/competitors/daily`).then((r) => r.data),
+    enabled: !!storeId,
+  });
+
+  const { data: flow } = useQuery<any>({
+    queryKey: ["store-flow", storeId],
+    queryFn: () => apiClient.get(`/stores/${storeId}/flow`).then((r) => r.data),
+    enabled: !!storeId,
+  });
+
+  const { data: timelineResp } = useQuery<{ competitors: Array<{ placeId: string; name: string; days: Array<{ date: string; visitorDelta: number | null; blogDelta: number | null; visitor: number | null; blog: number | null }> }> }>({
+    queryKey: ["competitors-timeline", storeId],
+    queryFn: () => apiClient.get(`/stores/${storeId}/competitors/timeline`).then((r) => r.data),
+    enabled: !!storeId,
+  });
+
+  // 이용 가능한 날짜 목록 (가장 최근 순)
+  const availableDates = Array.from(
+    new Set(
+      (timelineResp?.competitors ?? []).flatMap((c) => c.days.map((d) => d.date)),
+    ),
+  ).sort((a, b) => (a < b ? 1 : -1));
+
+  // 기본 선택 날짜 = 최신
+  const effectiveDate = selectedDate || availableDates[0] || "";
+
+  const timelineByPid = new Map<string, Map<string, { visitorDelta: number | null; blogDelta: number | null; visitor: number | null; blog: number | null }>>();
+  for (const c of timelineResp?.competitors ?? []) {
+    const m = new Map<string, any>();
+    for (const d of c.days) m.set(d.date, d);
+    if (c.placeId) timelineByPid.set(c.placeId, m);
+  }
 
   const comps = competitors ?? [];
   const myStore = comparison?.store;
-  const compData = comparison?.competitors ?? [];
-  const alertItems = alerts ?? [];
+  const compData: any[] = comparison?.competitors ?? [];
+  const dailyRows = dailyResp?.competitors ?? [];
+
+  // placeId/이름 기준 daily 머지
+  const dailyByKey = new Map<string, DailyRow>();
+  for (const d of dailyRows) {
+    if (d.placeId) dailyByKey.set(`pid:${d.placeId}`, d);
+    dailyByKey.set(`name:${d.name}`, d);
+  }
+
+  const myVisitorAvg = flow?.visitor?.last7DaysAvg ?? null;
+  const myBlogAvg = flow?.blog?.last7DaysAvg ?? null;
+  const myVisitorTotal = flow?.visitor?.current ?? myStore?.receiptReviewCount ?? 0;
+  const myBlogTotal = flow?.blog?.current ?? myStore?.blogReviewCount ?? 0;
+
+  const merged = compData.map((c) => {
+    const d =
+      (c.placeId && dailyByKey.get(`pid:${c.placeId}`)) ||
+      dailyByKey.get(`name:${c.name}`) ||
+      null;
+    return {
+      ...c,
+      visitorAvg7: d?.visitorAvg7 ?? null,
+      blogAvg7: d?.blogAvg7 ?? null,
+      dailySum: (d?.visitorAvg7 ?? 0) + (d?.blogAvg7 ?? 0),
+    };
+  });
+
+  // 일평균 발행량 기준 정렬
+  const sorted = [...merged].sort((a, b) => b.dailySum - a.dailySum);
+  const topByDaily = sorted[0];
 
   const handleAdd = () => {
     const name = newName.trim();
-    if (!name) return;
-    if (name.length < 2) {
-      toast.error("매장명을 2글자 이상 입력해주세요");
-      return;
-    }
-    if (comps.some((c: any) => c.competitorName === name)) {
-      toast.error("이미 등록된 경쟁 매장입니다");
-      return;
-    }
-    if (!confirm(`"${name}"을(를) 경쟁 매장으로 추가할까요?\n네이버에서 매장 정보를 자동으로 검색합니다.`)) return;
+    if (name.length < 2) return toast.error("2글자 이상 입력");
+    if (comps.some((c: any) => c.competitorName === name)) return toast.error("이미 등록됨");
     addComp.mutate({ competitorName: name }, {
       onSuccess: () => {
-        toast.success(`"${name}" 추가 완료! 네이버에서 데이터 수집 중...`);
+        toast.success(`"${name}" 추가 — 데이터 수집 중...`);
         setNewName("");
         setTimeout(() => refetch(), 5000);
       },
@@ -74,320 +136,405 @@ export default function CompetitorsPage() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      toast.info("경쟁 매장 데이터를 수집하고 있습니다...");
+      toast.info("경쟁사 데이터 갱신 중...");
       await apiClient.post(`/stores/${storeId}/competitors/refresh`);
-      toast.success("경쟁 매장 데이터 수집 완료!");
+      toast.success("갱신 완료");
       refetch();
     } catch {
-      toast.error("데이터 수집 실패");
+      toast.error("갱신 실패");
     } finally {
       setRefreshing(false);
     }
   };
 
-  const firstComp = compData[0];
-  const radarData = firstComp && myStore ? [
-    { metric: "블로그 리뷰", myStore: myStore.blogReviewCount ?? 0, competitor: firstComp.blogReviewCount ?? 0 },
-    { metric: "영수증 리뷰", myStore: myStore.receiptReviewCount ?? 0, competitor: firstComp.receiptReviewCount ?? 0 },
-    { metric: "일 검색량", myStore: myStore.dailySearchVolume ?? 0, competitor: firstComp.dailySearchVolume ?? 0 },
-  ] : [];
-
-  const CompareCell = ({ my, their, unit }: { my: number; their: number; unit: string }) => {
-    const diff = my - their;
+  if (isLoading) {
     return (
-      <div className="text-center">
-        <p className="text-sm font-bold">{formatNumber(their)}<span className="text-[10px] text-text-tertiary font-normal">{unit}</span></p>
-        {diff !== 0 && (
-          <span className={`text-[10px] font-medium flex items-center justify-center gap-0.5 ${diff > 0 ? "text-success" : "text-danger"}`}>
-            {diff > 0 ? <ArrowDown size={10} /> : <ArrowUp size={10} />}
-            {formatNumber(Math.abs(diff))}
-          </span>
-        )}
+      <div className="space-y-4 max-w-5xl mx-auto">
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-96 w-full" />
       </div>
     );
-  };
+  }
 
-  const alertTypeIcon: Record<string, React.ElementType> = {
-    REVIEW_INCREASE: TrendingUp,
-    RANK_CHANGE: ArrowUp,
-    NEW_CONTENT: FileEdit,
-    WARNING: AlertTriangle,
-  };
-
-  const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
-    { key: "compare", label: "경쟁 비교", icon: Swords },
-    { key: "alerts", label: "알림 히스토리", icon: Bell },
-  ];
+  const hasDailyData = sorted.some((c) => c.visitorAvg7 != null || c.blogAvg7 != null);
 
   return (
-    <div className="space-y-4 md:space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-5 max-w-5xl mx-auto">
       {/* 헤더 */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-xl md:text-2xl font-bold tracking-tight text-text-primary">경쟁 비교</h2>
-          <p className="text-sm text-text-secondary mt-0.5">{comps.length}개 경쟁 매장 추적 중</p>
+          <h2 className="text-xl md:text-2xl font-bold">경쟁 비교</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            일평균 발행 속도 기준 · 경쟁사 {comps.length}곳
+          </p>
         </div>
-        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing || comps.length === 0} className="rounded-xl border-border-primary">
-          {refreshing ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <RefreshCw size={14} className="mr-1.5" />}
-          데이터 수집
+        <Button size="sm" variant="outline" onClick={handleRefresh} disabled={refreshing}>
+          {refreshing ? <Loader2 size={14} className="animate-spin mr-1" /> : <RefreshCw size={14} className="mr-1" />}
+          데이터 갱신
         </Button>
       </div>
 
-      {/* 탭 */}
-      <div className="flex gap-1 p-1 bg-surface-secondary rounded-xl">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === tab.key
-                ? "bg-surface shadow-sm text-text-primary"
-                : "text-text-secondary hover:text-text-primary"
-            }`}
-          >
-            <tab.icon size={14} />
-            {tab.label}
-            {tab.key === "alerts" && alertItems.filter((a) => !a.isRead).length > 0 && (
-              <span className="size-4 rounded-full bg-danger text-white text-[10px] font-bold flex items-center justify-center">
-                {alertItems.filter((a) => !a.isRead).length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "compare" ? (
-        <>
-          {/* 경쟁매장 추가 */}
-          <div className="flex gap-3">
-            <div className="flex-1 relative">
-              <Users size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-              <Input
-                placeholder="경쟁 매장명 입력 (예: 옆집 고깃집)"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                className="pl-10 rounded-xl h-11"
+      {/* === 누적 수치 요약 (상단 한 줄) === */}
+      {myStore && sorted.length > 0 && (
+        <Card className="bg-muted/30">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Info size={12} className="text-muted-foreground" />
+              <span className="text-[11px] text-muted-foreground font-semibold">누적 수치 (참고)</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <SummaryPill label="내 방문자 리뷰" value={myVisitorTotal} />
+              <SummaryPill label="내 블로그 리뷰" value={myBlogTotal} />
+              <SummaryPill
+                label="경쟁사 평균 방문자"
+                value={Math.round(sorted.reduce((s, c) => s + (c.receiptReviewCount ?? 0), 0) / sorted.length)}
+              />
+              <SummaryPill
+                label="경쟁사 평균 블로그"
+                value={Math.round(sorted.reduce((s, c) => s + (c.blogReviewCount ?? 0), 0) / sorted.length)}
               />
             </div>
-            <Button onClick={handleAdd} disabled={addComp.isPending || !newName.trim()} className="rounded-xl h-11 px-6 bg-brand hover:bg-brand-dark text-white">
-              {addComp.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={16} />}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* === 핵심: 일평균 발행 속도 비교 === */}
+      {!hasDailyData && sorted.length > 0 && (
+        <Card>
+          <CardContent className="p-4 text-xs text-muted-foreground flex items-start gap-2">
+            <Activity size={14} className="mt-0.5" />
+            <div>
+              <div className="font-semibold text-foreground mb-0.5">일별 스냅샷 수집 중</div>
+              일평균 발행 속도는 매일 자정에 수집됩니다. 최소 2~3일 데이터가 쌓이면 속도 비교가 표시됩니다.
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {sorted.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-sm font-bold">기간별 발행 변동량 비교</h3>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-muted-foreground mr-1">기간</span>
+              {(["date", "day", "week", "month"] as Period[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                    period === p
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-white hover:bg-muted/50 border-border"
+                  }`}
+                >
+                  {PERIOD_LABEL[p]}
+                </button>
+              ))}
+              {period === "date" && availableDates.length > 0 && (
+                <select
+                  value={effectiveDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="ml-2 px-2 py-1 text-xs border rounded-md bg-white"
+                >
+                  {availableDates.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            {period === "date"
+              ? effectiveDate
+                ? `${effectiveDate} 당일 발행량(전일 대비 증가량)`
+                : "선택 가능한 날짜가 없습니다 — 스냅샷 수집 대기 중"
+              : period === "day"
+                ? "최근 1일 총 증가량 · 많이 쌓는 매장 순"
+                : period === "week"
+                  ? "최근 7일 총 증가량 · 많이 쌓는 매장 순"
+                  : "최근 30일 총 증가량 · 많이 쌓는 매장 순"}
+          </p>
+          {sorted.map((c, idx) => (
+            <DailyCompetitorCard
+              key={c.id}
+              rank={idx + 1}
+              isTop={topByDaily?.id === c.id}
+              competitor={c}
+              myFlow={flow}
+              period={period}
+              date={effectiveDate}
+              dateRow={c.placeId ? timelineByPid.get(c.placeId)?.get(effectiveDate) ?? null : null}
+              myTimeline={flow?.timeline ?? []}
+              onDelete={() => {
+                if (!confirm(`"${c.name}" 삭제?`)) return;
+                deleteComp.mutate(c.id, {
+                  onSuccess: () => toast.success("삭제됨"),
+                });
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* === 경쟁사 추가 === */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Plus size={14} className="text-primary" />
+            <span className="font-semibold text-sm">경쟁사 추가</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            매장명 입력 → 네이버 자동 검색 → 일별 스냅샷 수집 시작
+          </p>
+          <div className="flex gap-2">
+            <Input
+              placeholder="경쟁 매장명"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            />
+            <Button onClick={handleAdd} disabled={addComp.isPending || !newName.trim()}>
+              {addComp.isPending ? <Loader2 size={14} className="animate-spin" /> : "추가"}
             </Button>
           </div>
+        </CardContent>
+      </Card>
 
-          {/* 내 매장 vs 경쟁매장 요약 */}
-          {myStore && compData.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className={`${CARD_BASE} overflow-hidden ring-2 ring-brand/20`}>
-                <div className="p-4 bg-brand-subtle/30">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="size-7 rounded-lg bg-brand-subtle flex items-center justify-center">
-                      <Crown size={14} className="text-brand" />
-                    </div>
-                    <span className="text-sm font-bold text-text-primary">내 매장</span>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-text-secondary">영수증 리뷰</span>
-                      <span className="font-bold text-text-primary">{formatNumber(myStore.receiptReviewCount ?? 0)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-text-secondary">블로그 리뷰</span>
-                      <span className="font-bold text-text-primary">{formatNumber(myStore.blogReviewCount ?? 0)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-text-secondary">일 검색량</span>
-                      <span className="font-bold text-text-primary">{formatNumber(myStore.dailySearchVolume ?? 0)}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+      {sorted.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            <AlertTriangle size={20} className="mx-auto mb-2 text-amber-500" />
+            등록된 경쟁사가 없습니다 — 위에서 추가하세요
+          </CardContent>
+        </Card>
+      )}
 
-              {compData.slice(0, 2).map((c: any, i: number) => (
-                <div key={c.id || i} className={`${CARD_BASE} overflow-hidden`}>
-                  <div className="p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="size-7 rounded-lg bg-danger-light flex items-center justify-center">
-                        <span className="text-[10px] font-bold text-danger">{i + 1}</span>
-                      </div>
-                      <span className="text-sm font-bold text-text-primary truncate">{c.name}</span>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-text-secondary">영수증 리뷰</span>
-                        <CompareCell my={myStore.receiptReviewCount ?? 0} their={c.receiptReviewCount ?? 0} unit="" />
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-text-secondary">블로그 리뷰</span>
-                        <CompareCell my={myStore.blogReviewCount ?? 0} their={c.blogReviewCount ?? 0} unit="" />
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-text-secondary">일 검색량</span>
-                        <CompareCell my={myStore.dailySearchVolume ?? 0} their={c.dailySearchVolume ?? 0} unit="" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* 레이더 차트 */}
-          {radarData.length > 0 && (
-            <CompetitorRadarChart
-              data={radarData}
-              myStoreName={myStore?.name ?? "내 매장"}
-              competitorName={firstComp?.name ?? "경쟁매장"}
-            />
-          )}
-
-          {/* 경쟁 매장 목록 */}
-          {isLoading ? <Skeleton className="h-48 w-full rounded-2xl" /> : comps.length === 0 ? (
-            <div className={CARD_BASE}>
-              <div className="py-16 text-center">
-                <div className="size-16 rounded-2xl bg-danger-light flex items-center justify-center mx-auto mb-4">
-                  <Users size={24} className="text-danger" />
-                </div>
-                <p className="text-text-secondary font-medium">등록된 경쟁 매장이 없습니다</p>
-                <p className="text-sm text-text-tertiary mt-1">위에서 경쟁 매장을 추가하세요</p>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <h3 className="text-sm font-semibold text-text-secondary mb-3">전체 경쟁 매장 ({comps.length})</h3>
-              <div className="space-y-2">
-                {comps.map((c: any, i: number) => (
-                  <div key={c.id || i} className={`${CARD_BASE} overflow-hidden hover:shadow-md transition-all`}>
-                    <div className="py-3 px-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className={`size-10 rounded-xl flex items-center justify-center text-sm font-bold ${
-                            c.type === "AUTO" ? "bg-brand-subtle text-brand" : "bg-info-light text-info"
-                          }`}>
-                            {i + 1}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="font-semibold text-sm text-text-primary truncate">{c.competitorName}</p>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                                c.type === "AUTO" ? "bg-brand-subtle text-brand" : "bg-surface-secondary text-text-secondary"
-                              }`}>
-                                {c.type === "AUTO" ? "AI추천" : "직접추가"}
-                              </span>
-                            </div>
-                            <div className="flex gap-3 text-[11px] text-text-tertiary mt-1">
-                              {c.blogReviewCount != null && <span className="flex items-center gap-0.5"><MessageSquare size={10} /> 블로그 {formatNumber(c.blogReviewCount)}</span>}
-                              {c.receiptReviewCount != null && <span className="flex items-center gap-0.5"><Users size={10} /> 방문자 {formatNumber(c.receiptReviewCount)}</span>}
-                              {c.dailySearchVolume != null && <span className="flex items-center gap-0.5"><Search size={10} /> {formatNumber(c.dailySearchVolume)}/일</span>}
-                              {!c.blogReviewCount && !c.receiptReviewCount && (
-                                <span className="text-text-tertiary">데이터 수집 중...</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            if (!confirm(`"${c.competitorName}" 경쟁 매장을 삭제할까요?`)) return;
-                            deleteComp.mutate(c.id, {
-                              onSuccess: () => toast.success(`"${c.competitorName}" 삭제됨`),
-                              onError: () => toast.error("삭제 실패"),
-                            });
-                          }}
-                          disabled={deleteComp.isPending}
-                          className="text-text-tertiary hover:text-danger shrink-0 rounded-xl"
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        /* 알림 히스토리 탭 */
-        <div>
-          {alertsLoading ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-24 w-full rounded-2xl" />
-              ))}
-            </div>
-          ) : alertItems.length === 0 ? (
-            <div className={CARD_BASE}>
-              <div className="py-16 text-center">
-                <div className="size-16 rounded-2xl bg-surface-tertiary flex items-center justify-center mx-auto mb-4">
-                  <Bell size={24} className="text-text-tertiary" />
-                </div>
-                <p className="text-text-secondary font-medium">경쟁사 알림이 없습니다</p>
-                <p className="text-sm text-text-tertiary mt-1">경쟁 매장의 변화가 감지되면 알림이 표시됩니다</p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {alertItems.map((alert) => {
-                const AlertIcon = alertTypeIcon[alert.alertType] ?? AlertTriangle;
-                return (
-                  <div
-                    key={alert.id}
-                    className={`${CARD_BASE} overflow-hidden ${!alert.isRead ? "border-l-2 border-l-brand" : ""}`}
-                  >
-                    <div className="p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="size-7 rounded-lg bg-danger-light flex items-center justify-center shrink-0 mt-0.5">
-                          <AlertIcon size={14} className="text-danger" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-danger px-1.5 py-0.5 bg-danger-light rounded-md">
-                              {alert.competitorName}
-                            </span>
-                            <span className="text-[10px] text-text-tertiary">
-                              {new Date(alert.createdAt).toLocaleDateString("ko-KR", {
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </span>
-                          </div>
-                          <p className="text-sm text-text-primary font-medium mt-1.5">
-                            {alert.detail}
-                          </p>
-
-                          {/* AI 추천 */}
-                          {alert.aiRecommendation && (
-                            <div className="mt-3 p-3 bg-brand-subtle/30 rounded-xl">
-                              <div className="flex items-center gap-1.5 mb-1">
-                                <Sparkles size={12} className="text-brand" />
-                                <span className="text-[11px] font-semibold text-brand">AI 추천</span>
-                              </div>
-                              <p className="text-xs text-text-secondary leading-relaxed">
-                                {alert.aiRecommendation}
-                              </p>
-                              <Link
-                                href="/content"
-                                className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-brand hover:text-brand-dark transition-colors"
-                              >
-                                <FileEdit size={12} />
-                                대응 콘텐츠 만들기
-                              </Link>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+      {storeId && sorted.length > 0 && (
+        <ConsultationCTA
+          type="GENERAL"
+          storeId={storeId}
+          title="경쟁사 격차 좁히기, 어디서부터?"
+          description="발행 속도·리뷰·콘텐츠 우선순위를 전문가가 진단해드립니다."
+        />
       )}
     </div>
   );
+}
+
+function SummaryPill({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-base font-bold">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+function DailyCompetitorCard({
+  rank, isTop, competitor: c, myFlow, period, date, dateRow, myTimeline, onDelete,
+}: {
+  rank: number;
+  isTop: boolean;
+  competitor: any;
+  myFlow: any;
+  period: Period;
+  date: string;
+  dateRow: { visitorDelta: number | null; blogDelta: number | null } | null;
+  myTimeline: Array<{ date: string; visitorDelta: number | null; blogDelta: number | null }>;
+  onDelete: () => void;
+}) {
+  // 기간별 경쟁사 변동량
+  let cV: number | null = null;
+  let cB: number | null = null;
+  let myV: number | null = null;
+  let myB: number | null = null;
+
+  if (period === "date") {
+    // 선택 날짜 하루 delta
+    cV = dateRow?.visitorDelta ?? null;
+    cB = dateRow?.blogDelta ?? null;
+    const myRow = myTimeline.find((t) => {
+      const d = typeof t.date === "string" ? t.date.slice(0, 10) : new Date(t.date as any).toISOString().slice(0, 10);
+      return d === date;
+    });
+    myV = myRow?.visitorDelta ?? null;
+    myB = myRow?.blogDelta ?? null;
+  } else {
+    cV = c.deltas?.visitor?.[period] ?? null;
+    cB = c.deltas?.blog?.[period] ?? null;
+    const myVKey = period === "day" ? "deltaDay" : period === "week" ? "deltaWeek" : "deltaMonth";
+    myV = myFlow?.visitor?.[myVKey] ?? null;
+    myB = myFlow?.blog?.[myVKey] ?? null;
+  }
+
+  const hasData = cV != null || cB != null || myV != null || myB != null;
+
+  const visitorDelta = myV != null && cV != null ? +(myV - cV).toFixed(1) : null;
+  const blogDelta = myB != null && cB != null ? +(myB - cB).toFixed(1) : null;
+
+  const aheadCount = [visitorDelta, blogDelta].filter((d) => d != null && d > 0).length;
+  const behindCount = [visitorDelta, blogDelta].filter((d) => d != null && d < 0).length;
+
+  let statusLabel = "데이터 수집 중";
+  let statusColor = "bg-muted text-muted-foreground border-border";
+  let diagnosis = "일별 스냅샷이 2~3일치 쌓이면 속도 비교가 가능합니다.";
+
+  if (hasData && (visitorDelta != null || blogDelta != null)) {
+    if (aheadCount === 2) {
+      statusLabel = "속도 우위";
+      statusColor = "bg-green-100 text-green-700 border-green-200";
+      diagnosis = "내 매장이 방문자·블로그 모두 빠른 속도로 발행 중. 이 속도 유지가 핵심.";
+    } else if (aheadCount === 1 && behindCount === 0) {
+      statusLabel = "부분 우위";
+      statusColor = "bg-green-50 text-green-600 border-green-200";
+      diagnosis = "일부 지표만 앞섬. 뒤처진 축을 맞추면 완전 우위 가능.";
+    } else if (behindCount === 2) {
+      const gapSum = Math.abs((visitorDelta ?? 0)) + Math.abs((blogDelta ?? 0));
+      if (gapSum > 10) {
+        statusLabel = "속도 크게 뒤처짐";
+        statusColor = "bg-red-100 text-red-700 border-red-200";
+        diagnosis = "경쟁사 발행 속도가 매우 빠름 — 현 속도로는 격차 계속 벌어짐. 리뷰·블로그 생성 집중 필요.";
+      } else {
+        statusLabel = "속도 부족";
+        statusColor = "bg-red-50 text-red-600 border-red-200";
+        diagnosis = "두 지표 모두 경쟁사보다 느림. 일평균 발행량을 끌어올려야 추격 가능.";
+      }
+    } else if (behindCount === 1 && aheadCount === 1) {
+      statusLabel = "혼재";
+      statusColor = "bg-amber-50 text-amber-600 border-amber-200";
+      diagnosis = "한쪽은 앞서고 한쪽은 뒤처짐. 약점 축 보강으로 균형 잡기.";
+    } else {
+      statusLabel = "동등";
+      statusColor = "bg-muted/50 text-muted-foreground border-border";
+      diagnosis = "속도가 비슷한 구간. 콘텐츠 품질·전환 중심 전략.";
+    }
+  }
+
+  return (
+    <Card className={isTop ? "border-amber-300" : ""}>
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between mb-4 gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground font-semibold">#{rank}</span>
+              {isTop && <Crown size={12} className="text-amber-500" />}
+              <h4 className="font-bold text-base">{c.name}</h4>
+              <Badge variant="outline" className={`text-[10px] py-0 ${statusColor}`}>
+                {statusLabel}
+              </Badge>
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onDelete}>
+            <Trash2 size={12} className="text-muted-foreground hover:text-red-500" />
+          </Button>
+        </div>
+
+        <div className="space-y-3">
+          <DailyBar
+            label="방문자 리뷰"
+            periodLabel={period === "date" ? date : `최근 ${PERIOD_LABEL[period]}`}
+            icon={MessageSquare}
+            my={myV}
+            their={cV}
+            delta={visitorDelta}
+            cumulativeTheir={c.receiptReviewCount}
+          />
+          <DailyBar
+            label="블로그 리뷰"
+            periodLabel={period === "date" ? date : `최근 ${PERIOD_LABEL[period]}`}
+            icon={FileText}
+            my={myB}
+            their={cB}
+            delta={blogDelta}
+            cumulativeTheir={c.blogReviewCount}
+          />
+        </div>
+
+        <div className="mt-4 pt-3 border-t flex items-start gap-2">
+          <span className="text-xs">💡</span>
+          <p className="text-xs text-muted-foreground leading-relaxed flex-1">
+            <span className="font-semibold text-foreground">진단: </span>
+            {diagnosis}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DailyBar({
+  label, periodLabel, icon: Icon, my, their, delta, cumulativeTheir,
+}: {
+  label: string;
+  periodLabel: string;
+  icon: any;
+  my: number | null;
+  their: number | null;
+  delta: number | null;
+  cumulativeTheir: number | null;
+}) {
+  const myVal = my ?? 0;
+  const theirVal = their ?? 0;
+  const max = Math.max(myVal, theirVal, 1);
+  const myWidth = Math.min(100, (myVal / max) * 100);
+  const theirWidth = Math.min(100, (theirVal / max) * 100);
+
+  const fmt = (v: number | null) => (v == null ? "-" : v > 0 ? `+${v}` : `${v}`);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Icon size={11} />
+          {label}
+          <span className="text-[10px] text-muted-foreground/70">· {periodLabel} 변동량</span>
+        </div>
+        <DeltaBadge value={delta} />
+      </div>
+
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground w-10 shrink-0 font-semibold">나</span>
+          <div className="flex-1 h-5 bg-muted/30 rounded-md overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-md transition-all flex items-center justify-end px-2"
+              style={{ width: `${myWidth}%` }}
+            >
+              <span className="text-[10px] font-bold text-white">{fmt(my)}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground w-10 shrink-0">경쟁</span>
+          <div className="flex-1 h-5 bg-muted/30 rounded-md overflow-hidden">
+            <div
+              className="h-full bg-muted-foreground/40 rounded-md transition-all flex items-center justify-end px-2"
+              style={{ width: `${theirWidth}%` }}
+            >
+              <span className="text-[10px] font-bold text-white">{fmt(their)}</span>
+            </div>
+          </div>
+          {cumulativeTheir != null && cumulativeTheir > 0 && (
+            <span className="text-[9px] text-muted-foreground w-16 shrink-0 text-right">
+              누적 {cumulativeTheir.toLocaleString()}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeltaBadge({ value }: { value: number | null }) {
+  if (value == null) {
+    return <span className="text-xs font-semibold text-muted-foreground inline-flex items-center gap-0.5"><Minus size={12} />수집중</span>;
+  }
+  if (value > 0) {
+    return <span className="text-xs font-bold text-green-600 inline-flex items-center gap-0.5"><TrendingUp size={12} />+{value}</span>;
+  }
+  if (value < 0) {
+    return <span className="text-xs font-bold text-red-600 inline-flex items-center gap-0.5"><TrendingDown size={12} />{value}</span>;
+  }
+  return <span className="text-xs font-semibold text-muted-foreground inline-flex items-center gap-0.5"><Minus size={12} />0</span>;
 }

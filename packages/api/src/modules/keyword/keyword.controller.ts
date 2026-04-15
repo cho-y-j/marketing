@@ -1,10 +1,11 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from "@nestjs/swagger";
 import { KeywordService } from "./keyword.service";
 import { RankCheckService } from "./rank-check.service";
 import { KeywordDiscoveryService } from "./keyword-discovery.service";
 import { TrafficShiftService } from "./traffic-shift.service";
 import { BlogAnalysisService } from "./blog-analysis.service";
+import { BrandVolumeService } from "./brand-volume.service";
 import { CreateKeywordDto } from "./dto/keyword.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 
@@ -19,12 +20,25 @@ export class KeywordController {
     private discoveryService: KeywordDiscoveryService,
     private trafficShift: TrafficShiftService,
     private blogAnalysis: BlogAnalysisService,
+    private brandVolume: BrandVolumeService,
   ) {}
+
+  @Get("brand-volume")
+  @ApiOperation({ summary: "브랜드 검색량 합산 (매장명 변형 전부)" })
+  getBrandVolume(@Param("storeId") storeId: string) {
+    return this.brandVolume.getBrandVolume(storeId);
+  }
 
   @Get()
   @ApiOperation({ summary: "키워드 목록" })
   findAll(@Param("storeId") storeId: string) {
     return this.keywordService.findAll(storeId);
+  }
+
+  @Get("with-competition")
+  @ApiOperation({ summary: "키워드 + 각 Top 3 매장 + 내 위치 (카드용)" })
+  findAllWithCompetition(@Param("storeId") storeId: string) {
+    return this.keywordService.findAllWithCompetition(storeId);
   }
 
   @Get("recommended")
@@ -89,6 +103,12 @@ export class KeywordController {
     return this.discoveryService.discoverKeywords(storeId);
   }
 
+  @Post("cleanup")
+  @ApiOperation({ summary: "키워드 정리 — 월300미만(회식예외) + 지역성결여 일괄 제거" })
+  cleanup(@Param("storeId") storeId: string) {
+    return this.keywordService.cleanupByRules(storeId);
+  }
+
   @Post("refresh-volume")
   @ApiOperation({ summary: "전체 키워드 검색량 새로고침" })
   refreshVolumes(@Param("storeId") storeId: string) {
@@ -130,5 +150,51 @@ export class KeywordController {
   @ApiOperation({ summary: "블로그 상위노출 분석 결과 조회" })
   getBlogAnalysis(@Param("storeId") storeId: string) {
     return this.blogAnalysis.getSummary(storeId);
+  }
+
+  @Get("preview-volume")
+  @ApiOperation({ summary: "키워드 검색량 미리보기 (추가 전 조회)" })
+  async previewKeywordVolume(@Query("keyword") keyword: string) {
+    if (!keyword) return { keyword: "", monthly: 0, weekly: 0, daily: 0, available: false };
+    return this.keywordService.previewVolume(keyword);
+  }
+
+  @Delete(":keywordId")
+  @ApiOperation({ summary: "키워드 제외 (삭제 + 재생성 방지)" })
+  excludeKeyword(
+    @Param("storeId") storeId: string,
+    @Param("keywordId") keywordId: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.keywordService.excludeKeyword(storeId, keywordId, body?.reason);
+  }
+
+  @Get("excluded")
+  @ApiOperation({ summary: "제외된 키워드 목록" })
+  listExcluded(@Param("storeId") storeId: string) {
+    return this.keywordService.listExcluded(storeId);
+  }
+
+  @Delete("excluded/:excludedId")
+  @ApiOperation({ summary: "제외 해제 (재생성 시 다시 포함)" })
+  unexclude(
+    @Param("storeId") storeId: string,
+    @Param("excludedId") excludedId: string,
+  ) {
+    return this.keywordService.removeExclusion(storeId, excludedId);
+  }
+
+  @Get("competition/:keyword")
+  @ApiOperation({ summary: "키워드별 경쟁 매트릭스 (Top 10 매장 + 내 위치 + N일전 비교)" })
+  getKeywordCompetition(
+    @Param("storeId") storeId: string,
+    @Param("keyword") keyword: string,
+    @Query("compareDays") compareDays?: string,
+  ) {
+    return this.rankCheckService.getKeywordCompetition(
+      storeId,
+      decodeURIComponent(keyword),
+      compareDays ? parseInt(compareDays) : 1,
+    );
   }
 }

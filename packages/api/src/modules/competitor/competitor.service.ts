@@ -84,6 +84,7 @@ export class CompetitorService {
       competitors: competitors.map((c) => ({
         id: c.id,
         name: c.competitorName,
+        placeId: c.competitorPlaceId,
         type: c.type,
         blogReviewCount: c.blogReviewCount ?? 0,
         receiptReviewCount: c.receiptReviewCount ?? 0,

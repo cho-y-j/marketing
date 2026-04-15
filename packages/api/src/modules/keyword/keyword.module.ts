@@ -5,6 +5,7 @@ import { RankCheckService } from "./rank-check.service";
 import { KeywordDiscoveryService } from "./keyword-discovery.service";
 import { TrafficShiftService } from "./traffic-shift.service";
 import { BlogAnalysisService } from "./blog-analysis.service";
+import { BrandVolumeService } from "./brand-volume.service";
 
 @Module({
   controllers: [KeywordController],
@@ -14,6 +15,7 @@ import { BlogAnalysisService } from "./blog-analysis.service";
     KeywordDiscoveryService,
     TrafficShiftService,
     BlogAnalysisService,
+    BrandVolumeService,
   ],
   exports: [
     KeywordService,
@@ -21,6 +23,7 @@ import { BlogAnalysisService } from "./blog-analysis.service";
     KeywordDiscoveryService,
     TrafficShiftService,
     BlogAnalysisService,
+    BrandVolumeService,
   ],
 })
 export class KeywordModule {}

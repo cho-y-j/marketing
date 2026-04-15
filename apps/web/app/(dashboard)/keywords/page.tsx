@@ -1,480 +1,415 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RankHistoryChart } from "@/components/charts/rank-history-chart";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
-import { useKeywords } from "@/hooks/useKeywords";
-import { useRankHistory, useRankCheck } from "@/hooks/useRankHistory";
-import { useTrafficShift, useRecordVolumes } from "@/hooks/useTrafficShift";
+import { useRankCheck } from "@/hooks/useRankHistory";
 import { apiClient } from "@/lib/api-client";
-import { getKeywordTypeConfig, getTrendStyle, formatNumber, CHART_COLORS } from "@/lib/design-system";
 import { toast } from "sonner";
-import { RankGridTable } from "@/components/keywords/rank-grid-table";
 import { BlogAnalysisCard } from "@/components/keywords/blog-analysis-card";
-import { TrendingUp, TrendingDown, Minus, Plus, Search, Loader2, RefreshCw, BarChart3, Hash, ArrowUpRight, ArrowDownRight, Sparkles, Lightbulb, ArrowRight, Activity } from "lucide-react";
+import { ConsultationCTA } from "@/components/common/consultation-cta";
+import {
+  Plus, Search, Loader2, Crown, ChevronRight,
+  MessageSquare, FileText, Sparkles, RefreshCw, X, Trash2,
+} from "lucide-react";
 
 export default function KeywordsPage() {
   const { storeId } = useCurrentStoreId();
-  const { data: keywords, isLoading, refetch } = useKeywords(storeId);
-  const { data: rankData } = useRankHistory(storeId, 7);
+  const qc = useQueryClient();
   const rankCheck = useRankCheck(storeId);
-  const { data: trafficShift, refetch: refetchShift, isLoading: shiftLoading } = useTrafficShift(storeId);
-  const recordVolumes = useRecordVolumes(storeId);
   const [newKeyword, setNewKeyword] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState<any>(null);
   const [adding, setAdding] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
-  const [discoveredKeywords, setDiscoveredKeywords] = useState<any>(null);
 
-  const handleRecordVolumes = () => {
-    recordVolumes.mutate(undefined, {
-      onSuccess: (count) => {
-        toast.success(`검색량 ${count}건 기록됨 — 누적 2주 후 트래픽 이동 분석 가능`);
-        refetchShift();
-      },
-      onError: (e: any) =>
-        toast.error("기록 실패: " + (e.response?.data?.message || e.message)),
-    });
+  const { data: keywords, isLoading, refetch } = useQuery({
+    queryKey: ["keywords-with-competition", storeId],
+    queryFn: () =>
+      apiClient.get(`/stores/${storeId}/keywords/with-competition`).then((r) => r.data),
+    enabled: !!storeId,
+  });
+
+  // 검색량 미리보기 (먼저 조회)
+  const handlePreview = async () => {
+    if (!newKeyword.trim() || !storeId) return;
+    setPreviewLoading(true);
+    setPreviewData(null);
+    try {
+      const { data } = await apiClient.get(`/stores/${storeId}/keywords/preview-volume`, {
+        params: { keyword: newKeyword.trim() },
+      });
+      setPreviewData(data);
+    } catch (e: any) {
+      toast.error("검색량 조회 실패");
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
-  const handleAdd = async () => {
-    if (!newKeyword.trim() || !storeId) return;
+  // 미리보기 후 최종 추가
+  const confirmAdd = async () => {
+    if (!previewData) return;
     setAdding(true);
     try {
       await apiClient.post(`/stores/${storeId}/keywords`, {
         keyword: newKeyword.trim(),
         type: "USER_ADDED",
       });
-      toast.success(`"${newKeyword.trim()}" 키워드가 추가되었습니다`);
+      toast.success(`"${newKeyword.trim()}" 추가됨`);
       setNewKeyword("");
+      setPreviewData(null);
       refetch();
     } catch (e: any) {
-      toast.error(e.response?.data?.message || "키워드 추가에 실패했습니다");
+      toast.error(e.response?.data?.message || "추가 실패");
     } finally {
       setAdding(false);
     }
   };
 
+  const cancelPreview = () => {
+    setPreviewData(null);
+    setNewKeyword("");
+  };
+
   const handleRankCheck = () => {
     rankCheck.mutate(undefined, {
-      onSuccess: (data: any) => {
-        toast.success(`순위 체크 완료! ${data.results?.length ?? 0}개 키워드`);
-        refetch();
+      onSuccess: () => {
+        toast.success("순위 체크 완료");
+        qc.invalidateQueries({ queryKey: ["keywords-with-competition", storeId] });
       },
-      onError: (e: any) => toast.error("순위 체크 실패: " + (e.response?.data?.message || e.message)),
+      onError: (e: any) =>
+        toast.error("순위 체크 실패: " + (e.response?.data?.message || e.message)),
     });
   };
 
-  const handleRefreshVolume = async () => {
-    try {
-      toast.info("검색량을 조회하고 있습니다...");
-      await apiClient.post(`/stores/${storeId}/keywords/refresh-volume`);
-      toast.success("검색량 업데이트 완료!");
-      refetch();
-    } catch (e: any) {
-      toast.error("검색량 조회 실패");
+  const [sortBy, setSortBy] = useState<"volume" | "rank" | "name">("volume");
+  const kwsRaw = keywords ?? [];
+  const kws = [...kwsRaw].sort((a: any, b: any) => {
+    if (sortBy === "rank") {
+      const ar = a.currentRank ?? 9999;
+      const br = b.currentRank ?? 9999;
+      return ar - br;
     }
-  };
-
-  const handleDiscover = async () => {
-    setDiscovering(true);
-    try {
-      toast.info("AI가 히든 키워드를 발굴하고 있습니다...");
-      const { data } = await apiClient.post(`/stores/${storeId}/keywords/discover`);
-      setDiscoveredKeywords(data);
-      toast.success(`${(data.discovered?.length || 0) + (data.aiRecommended?.length || 0)}개 키워드 발견!`);
-    } catch (e: any) {
-      toast.error("키워드 발굴 실패: " + (e.response?.data?.message || e.message));
-    } finally {
-      setDiscovering(false);
-    }
-  };
-
-  const handleAddDiscovered = async (keyword: string) => {
-    try {
-      await apiClient.post(`/stores/${storeId}/keywords`, { keyword, type: "HIDDEN" });
-      toast.success(`"${keyword}" 추가됨`);
-      refetch();
-    } catch (e: any) {
-      toast.error(e.response?.data?.message || "추가 실패");
-    }
-  };
-
-  const kws = keywords ?? [];
-  const upCount = kws.filter((k: any) => k.trendDirection === "UP").length;
-  const downCount = kws.filter((k: any) => k.trendDirection === "DOWN").length;
-  const avgRank = kws.filter((k: any) => k.currentRank).length > 0
-    ? Math.round(kws.filter((k: any) => k.currentRank).reduce((s: number, k: any) => s + k.currentRank, 0) / kws.filter((k: any) => k.currentRank).length)
-    : null;
+    if (sortBy === "name") return (a.keyword ?? "").localeCompare(b.keyword ?? "");
+    return (b.monthlySearchVolume ?? 0) - (a.monthlySearchVolume ?? 0);
+  });
 
   return (
-    <div className="space-y-4 md:space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-5 max-w-5xl mx-auto">
       {/* 헤더 */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-xl md:text-2xl font-bold tracking-tight text-text-primary">키워드 분석</h2>
-          <p className="text-sm text-text-secondary mt-0.5">{kws.length}개 키워드 추적 중</p>
+          <h2 className="text-xl md:text-2xl font-bold">키워드 분석</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {kws.length}개 키워드 · 검색 키워드별 내 순위와 상위 매장 비교
+          </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefreshVolume} className="rounded-xl">
-            <RefreshCw size={14} className="mr-1.5" />
-            검색량 조회
-          </Button>
-          <Button size="sm" onClick={handleRankCheck} disabled={rankCheck.isPending || kws.length === 0} className="rounded-xl bg-brand hover:bg-brand-dark">
-            {rankCheck.isPending ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <Search size={14} className="mr-1.5" />}
-            순위 체크
-          </Button>
-        </div>
-      </div>
-
-      {/* 요약 카드 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4">
-          <div className="flex items-center justify-between mb-1">
-            <div className="size-7 rounded-lg bg-brand-subtle flex items-center justify-center">
-              <Hash size={14} className="text-brand" />
-            </div>
-          </div>
-          <p className="text-2xl font-extrabold text-text-primary">{kws.length}</p>
-          <p className="text-xs text-text-tertiary">추적 키워드</p>
-        </div>
-        <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4">
-          <div className="flex items-center justify-between mb-1">
-            <div className="size-7 rounded-lg bg-success-light flex items-center justify-center">
-              <ArrowUpRight size={14} className="text-success" />
-            </div>
-          </div>
-          <p className="text-2xl font-extrabold text-success">{upCount}</p>
-          <p className="text-xs text-text-tertiary">순위 상승</p>
-        </div>
-        <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4">
-          <div className="flex items-center justify-between mb-1">
-            <div className="size-7 rounded-lg bg-danger-light flex items-center justify-center">
-              <ArrowDownRight size={14} className="text-danger" />
-            </div>
-          </div>
-          <p className="text-2xl font-extrabold text-danger">{downCount}</p>
-          <p className="text-xs text-text-tertiary">순위 하락</p>
-        </div>
-        <div className="rounded-2xl border border-border-primary bg-surface shadow-sm p-4">
-          <div className="flex items-center justify-between mb-1">
-            <div className="size-7 rounded-lg bg-violet-100 flex items-center justify-center">
-              <BarChart3 size={14} className="text-violet-600" />
-            </div>
-          </div>
-          <p className="text-2xl font-extrabold text-text-primary">{avgRank ?? "-"}</p>
-          <p className="text-xs text-text-tertiary">평균 순위</p>
-        </div>
-      </div>
-
-      {/* 키워드 추가 */}
-      <div className="flex gap-2">
-        <div className="flex-1 relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input
-            placeholder="키워드 추가 (예: 청주 맛집)"
-            value={newKeyword}
-            onChange={(e) => setNewKeyword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            className="pl-10 rounded-xl h-11"
-          />
-        </div>
-        <Button onClick={handleAdd} disabled={adding || !newKeyword.trim()} className="rounded-xl h-11 px-5 bg-brand hover:bg-brand-dark">
-          {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={16} />}
+        <Button
+          size="sm"
+          onClick={handleRankCheck}
+          disabled={rankCheck.isPending || kws.length === 0}
+        >
+          {rankCheck.isPending ? (
+            <Loader2 size={14} className="animate-spin mr-1" />
+          ) : (
+            <RefreshCw size={14} className="mr-1" />
+          )}
+          전체 순위 체크
         </Button>
       </div>
 
-      {/* 순위 차트 — 순위 잡힌 키워드 우선, 부족하면 검색량 순으로 채움 */}
-      {kws.length > 0 && (() => {
-        const ranked = kws.filter((k: any) => k.currentRank != null);
-        const unranked = kws.filter((k: any) => k.currentRank == null);
-        const chartKeywords = [...ranked, ...unranked].slice(0, 5).map((k: any) => k.keyword);
-        return (
-          <RankHistoryChart
-            data={rankData ?? []}
-            keywords={chartKeywords}
-            isLoading={false}
-          />
-        );
-      })()}
-
-      {/* 일별 순위 추이 그리드 */}
-      {storeId && <RankGridTable storeId={storeId} />}
-
-      {/* 키워드 목록 */}
-      {isLoading ? (
-        <Skeleton className="h-64 w-full rounded-2xl" />
-      ) : kws.length === 0 ? (
-        <div className="rounded-2xl border border-border-primary bg-surface shadow-sm">
-          <div className="py-16 text-center">
-            <div className="size-16 rounded-2xl bg-brand-subtle flex items-center justify-center mx-auto mb-4">
-              <Search size={24} className="text-brand" />
-            </div>
-            <p className="text-text-secondary font-medium">추적 중인 키워드가 없습니다</p>
-            <p className="text-sm text-text-tertiary mt-1">위에서 키워드를 추가해보세요</p>
+      {/* 키워드 추가 — 검색량 미리보기 후 추가 */}
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="추적할 키워드 입력 → 조회 → 추가"
+              value={newKeyword}
+              onChange={(e) => {
+                setNewKeyword(e.target.value);
+                if (previewData) setPreviewData(null);
+              }}
+              onKeyDown={(e) => e.key === "Enter" && handlePreview()}
+              className="pl-10"
+              disabled={previewLoading || adding}
+            />
           </div>
+          <Button onClick={handlePreview} disabled={previewLoading || !newKeyword.trim() || !!previewData}>
+            {previewLoading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Search size={14} className="mr-1" />}
+            검색량 조회
+          </Button>
         </div>
-      ) : (
-        <div className="space-y-2">
-          {kws.map((kw: any, i: number) => {
-            const badge = getKeywordTypeConfig(kw.type);
-            const rankDiff = kw.previousRank && kw.currentRank ? kw.previousRank - kw.currentRank : null;
-            const trend = getTrendStyle(kw.trendDirection);
-            return (
-              <div key={kw.id || i} className="rounded-2xl border border-border-primary bg-surface shadow-sm hover:shadow-md transition-all">
-                <div className="py-3 px-4">
-                  <div className="flex items-center justify-between gap-3">
-                    {/* 좌측: 키워드 정보 */}
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="size-8 rounded-lg bg-surface-secondary flex items-center justify-center shrink-0 text-xs font-bold text-text-tertiary">
-                        {i + 1}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-sm truncate text-text-primary">{kw.keyword}</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${badge.color}`}>{badge.label}</span>
-                        </div>
-                        <p className="text-xs text-text-tertiary mt-0.5">
-                          월 검색량 <span className="font-semibold text-text-primary">{formatNumber(kw.monthlySearchVolume)}</span>
-                        </p>
-                      </div>
-                    </div>
 
-                    {/* 우측: 순위 + 트렌드 */}
-                    <div className="flex items-center gap-4 shrink-0">
-                      {kw.currentRank ? (
-                        <div className="text-right">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-lg font-bold text-text-primary">{kw.currentRank}</span>
-                            <span className="text-xs text-text-tertiary">위</span>
-                          </div>
-                          {rankDiff !== null && rankDiff !== 0 && (
-                            <span className={`text-xs font-medium ${rankDiff > 0 ? "text-success" : "text-danger"}`}>
-                              {rankDiff > 0 ? `+${rankDiff} ↑` : `${rankDiff} ↓`}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-text-tertiary">-위</span>
-                      )}
-
-                      {kw.trendDirection === "UP" && (
-                        <div className="size-7 rounded-lg bg-success-light flex items-center justify-center">
-                          <TrendingUp size={14} className="text-success" />
-                        </div>
-                      )}
-                      {kw.trendDirection === "DOWN" && (
-                        <div className="size-7 rounded-lg bg-danger-light flex items-center justify-center">
-                          <TrendingDown size={14} className="text-danger" />
-                        </div>
-                      )}
-                      {kw.trendDirection === "STABLE" && (
-                        <div className="size-7 rounded-lg bg-surface-secondary flex items-center justify-center">
-                          <Minus size={14} className="text-text-tertiary" />
-                        </div>
-                      )}
-                    </div>
+        {/* 미리보기 카드 */}
+        {previewData && (
+          <Card className="border-primary/30 bg-primary/5">
+            <CardContent className="p-4">
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <div className="font-bold text-sm mb-0.5">"{previewData.keyword}"</div>
+                  <div className="text-xs text-muted-foreground">
+                    경쟁 강도: <span className="font-semibold">{previewData.competition || "정보 없음"}</span>
                   </div>
                 </div>
+                <Button variant="ghost" size="sm" onClick={cancelPreview} className="h-7 w-7 p-0">
+                  <X size={14} />
+                </Button>
               </div>
-            );
-          })}
+
+              {previewData.available ? (
+                <>
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div className="text-center bg-white rounded p-2 border">
+                      <div className="text-[10px] text-muted-foreground mb-0.5">월 검색량</div>
+                      <div className="text-lg font-black">{previewData.monthly.toLocaleString()}</div>
+                    </div>
+                    <div className="text-center bg-white rounded p-2 border">
+                      <div className="text-[10px] text-muted-foreground mb-0.5">주 검색량</div>
+                      <div className="text-lg font-bold">{previewData.weekly.toLocaleString()}</div>
+                    </div>
+                    <div className="text-center bg-white rounded p-2 border">
+                      <div className="text-[10px] text-muted-foreground mb-0.5">일 검색량</div>
+                      <div className="text-lg font-bold">{previewData.daily.toLocaleString()}</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-3 text-[11px] text-muted-foreground mb-3">
+                    <span>PC {previewData.pc?.toLocaleString() ?? 0}</span>
+                    <span>모바일 {previewData.mobile?.toLocaleString() ?? 0}</span>
+                  </div>
+                  <Button onClick={confirmAdd} disabled={adding} className="w-full" size="sm">
+                    {adding ? (
+                      <><Loader2 size={14} className="animate-spin mr-1" /> 추가 중...</>
+                    ) : (
+                      <><Plus size={14} className="mr-1" /> "{previewData.keyword}" 추가하기</>
+                    )}
+                  </Button>
+                </>
+              ) : (
+                <div className="text-center py-3">
+                  <p className="text-sm text-muted-foreground mb-2">
+                    이 키워드는 검색량이 거의 없습니다 (월 0회)
+                  </p>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    실제 사용자가 검색하지 않는 키워드일 수 있습니다.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button onClick={confirmAdd} disabled={adding} variant="outline" size="sm" className="flex-1">
+                      그래도 추가하기
+                    </Button>
+                    <Button onClick={cancelPreview} variant="ghost" size="sm" className="flex-1">
+                      취소
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* 정렬 토글 */}
+      {kws.length > 0 && (
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-muted-foreground mr-1">정렬:</span>
+          {[
+            { key: "volume", label: "검색량 순" },
+            { key: "rank", label: "순위 순" },
+            { key: "name", label: "이름 순" },
+          ].map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setSortBy(opt.key as any)}
+              className={`px-2.5 py-1 rounded-md border transition-colors ${
+                sortBy === opt.key
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-white hover:bg-muted/50 border-border"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       )}
 
-      {/* 블로그 상위노출 분석 */}
-      {storeId && <BlogAnalysisCard storeId={storeId} />}
+      {/* 키워드 카드 목록 */}
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-48 w-full" />)}
+        </div>
+      ) : kws.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center">
+            <Search size={32} className="mx-auto text-muted-foreground/40 mb-3" />
+            <p className="font-semibold">추적 중인 키워드가 없습니다</p>
+            <p className="text-xs text-muted-foreground mt-1">위에서 키워드를 추가해보세요</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {kws.map((kw: any) => (
+            <KeywordCard key={kw.id} kw={kw} storeId={storeId} onChange={refetch} />
+          ))}
+        </div>
+      )}
 
-      {/* === 검색 트래픽 이동 분석 === */}
-      <div className="rounded-2xl border border-border-primary bg-surface shadow-sm">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <div className="size-7 rounded-lg bg-info-light flex items-center justify-center">
-                <Activity size={14} className="text-info" />
+      {/* 블로그 상위노출 분석 (하단으로 이동) */}
+      {storeId && kws.length > 0 && <BlogAnalysisCard storeId={storeId} />}
+
+      {/* 전문 상담 CTA */}
+      {storeId && kws.length > 0 && (
+        <ConsultationCTA
+          type="KEYWORD"
+          storeId={storeId}
+          title="키워드 전략, 전문가와 함께 세워보세요"
+          description="상위 진입 가능 키워드 선별 + 블로그 발행 로드맵을 제안해드립니다."
+        />
+      )}
+    </div>
+  );
+}
+
+function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onChange: () => void }) {
+  const top3 = kw.top3 || [];
+  const myPlace = kw.myPlace;
+  const myRank = kw.currentRank ?? myPlace?.rank;
+  const myInTop3 = top3.some((p: any) => p.isMine);
+  const [excluding, setExcluding] = useState(false);
+
+  const handleExclude = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!storeId) return;
+    if (!confirm(`"${kw.keyword}" 키워드를 제외할까요?\n삭제 후 AI 재생성 시에도 다시 나오지 않습니다.`)) return;
+    setExcluding(true);
+    try {
+      await apiClient.delete(`/stores/${storeId}/keywords/${kw.id}`, {
+        data: { reason: "사용자 판단" },
+      });
+      toast.success(`"${kw.keyword}" 제외됨`);
+      onChange();
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || "제외 실패");
+    } finally {
+      setExcluding(false);
+    }
+  };
+
+  // 순위 색상
+  const rankColor =
+    myRank == null ? "text-muted-foreground" :
+    myRank <= 3 ? "text-blue-600" :
+    myRank <= 10 ? "text-foreground" :
+    "text-red-500";
+
+  return (
+    <Link href={`/keywords/${encodeURIComponent(kw.keyword)}`} className="block group">
+      <Card className="group-hover:shadow-md group-hover:border-primary/30 transition-all">
+        <CardContent className="p-4">
+          {/* 헤더 */}
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-base">{kw.keyword}</h3>
+                {kw.type === "MAIN" && (
+                  <Badge variant="outline" className="text-[10px] py-0">핵심</Badge>
+                )}
+                {kw.type === "HIDDEN" && (
+                  <Badge variant="secondary" className="text-[10px] py-0 bg-amber-100 text-amber-700">히든</Badge>
+                )}
+                <button
+                  type="button"
+                  onClick={handleExclude}
+                  disabled={excluding}
+                  className="ml-1 p-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
+                  title="이 키워드 제외"
+                >
+                  {excluding ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                </button>
               </div>
-              <div>
-                <p className="text-sm font-bold text-text-primary">검색 트래픽 이동 분석</p>
-                <p className="text-xs text-text-tertiary">
-                  감소 키워드 → 후보 키워드 + AI 해석 (15% 이상 하락 시)
-                </p>
-              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {kw.monthlyVolume > 0 ? (
+                  <>
+                    월 <strong className="text-foreground">{kw.monthlyVolume.toLocaleString()}</strong> ·
+                    주 {kw.weeklyVolume.toLocaleString()} ·
+                    일 {kw.dailyVolume.toLocaleString()}
+                  </>
+                ) : (
+                  "검색량 0"
+                )}
+                {kw.totalResults != null && ` · ${kw.totalResults}개 매장 노출`}
+              </p>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRecordVolumes}
-              disabled={recordVolumes.isPending || kws.length === 0}
-              className="rounded-xl"
-            >
-              {recordVolumes.isPending ? (
-                <Loader2 size={12} className="animate-spin mr-1.5" />
-              ) : (
-                <RefreshCw size={12} className="mr-1.5" />
-              )}
-              검색량 기록
-            </Button>
+            <div className="text-right shrink-0">
+              <div className={`text-2xl font-black ${rankColor}`}>
+                {myRank ? `${myRank}위` : "-"}
+              </div>
+              <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover:text-primary transition-colors" />
+            </div>
           </div>
 
-          {shiftLoading ? (
-            <Skeleton className="h-20 w-full rounded-xl" />
-          ) : !trafficShift || trafficShift.length === 0 ? (
-            <div className="text-center py-6 px-3">
-              <p className="text-xs text-text-tertiary">
-                감소 임계치(-15%) 이하 키워드가 없습니다
-              </p>
-              <p className="text-xs text-text-tertiary mt-1">
-                "검색량 기록" 버튼을 매일 눌러 누적 데이터를 만드세요 (2주 이상 필요)
-              </p>
+          {/* Top 3 + 내 매장 미니 테이블 */}
+          {top3.length > 0 ? (
+            <div className="bg-muted/30 rounded-lg p-2 space-y-1">
+              {top3.map((p: any, i: number) => (
+                <PlaceRow key={i} place={p} />
+              ))}
+              {/* 내 매장이 Top 3 밖이면 별도 추가 */}
+              {myPlace && !myInTop3 && (
+                <>
+                  <div className="border-t border-border/50 my-1" />
+                  <PlaceRow place={myPlace} />
+                </>
+              )}
             </div>
           ) : (
-            <div className="space-y-3 mt-3">
-              {trafficShift.map((shift, i) => (
-                <div
-                  key={i}
-                  className="p-3 rounded-xl border border-border-primary bg-surface-secondary"
-                >
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-bold text-danger">
-                      {shift.sourceKeyword}
-                    </span>
-                    <span className="text-xs text-text-tertiary">
-                      {formatNumber(shift.sourcePrevious)} →{" "}
-                      {formatNumber(shift.sourceCurrent)}
-                    </span>
-                    <span className="text-xs font-semibold text-danger">
-                      ({shift.sourceDropRate}%)
-                    </span>
-                  </div>
-                  {shift.candidates.length > 0 && (
-                    <div className="mt-2 pl-2 border-l-2 border-info">
-                      <p className="text-xs font-semibold text-info mb-1 flex items-center gap-1">
-                        <ArrowRight size={10} />
-                        후보 키워드 (검색량 상승)
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {shift.candidates.map((c, j) => (
-                          <span
-                            key={j}
-                            className="text-xs px-2 py-0.5 rounded-lg bg-info-light text-info"
-                          >
-                            {c.keyword}
-                            {!Number.isNaN(c.gainRate) && (
-                              <span className="ml-1 text-success font-semibold">
-                                +{c.gainRate}%
-                              </span>
-                            )}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {shift.interpretation && (
-                    <div className="mt-2 p-2 rounded-lg bg-surface border border-border-primary">
-                      <p className="text-xs font-semibold text-violet-600 flex items-center gap-1 mb-0.5">
-                        <Sparkles size={10} />
-                        AI 해석
-                      </p>
-                      <p className="text-xs text-text-primary leading-relaxed">
-                        {shift.interpretation}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ))}
+            <div className="bg-muted/20 rounded-lg p-3 text-center text-xs text-muted-foreground">
+              순위 데이터 없음 — 상단 "전체 순위 체크" 버튼을 눌러주세요
             </div>
           )}
-        </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function PlaceRow({ place }: { place: any }) {
+  return (
+    <div className={`flex items-center gap-2 px-2 py-1.5 rounded ${place.isMine ? "bg-primary/15 ring-1 ring-primary/30" : ""}`}>
+      {/* 순위 */}
+      <div className="w-8 text-center shrink-0">
+        {place.rank === 1 ? (
+          <Crown size={14} className="text-yellow-500 mx-auto" />
+        ) : (
+          <span className={`text-sm font-bold ${
+            place.rank <= 3 ? "text-blue-600" :
+            place.rank <= 10 ? "text-foreground" : "text-muted-foreground"
+          }`}>{place.rank}</span>
+        )}
       </div>
-
-      {/* AI 키워드 발굴 */}
-      <div className="rounded-2xl border border-border-primary bg-surface shadow-sm">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="size-7 rounded-lg bg-warning-light flex items-center justify-center">
-                <Lightbulb size={14} className="text-warning" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-text-primary">AI 히든 키워드 발굴</p>
-                <p className="text-xs text-text-tertiary">경쟁자가 놓치고 있는 틈새 키워드 찾기</p>
-              </div>
-            </div>
-            <Button
-              size="sm"
-              onClick={handleDiscover}
-              disabled={discovering}
-              className="rounded-xl bg-brand hover:bg-brand-dark"
-            >
-              {discovering ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <Sparkles size={14} className="mr-1.5" />}
-              발굴하기
-            </Button>
-          </div>
-
-          {discoveredKeywords && (
-            <div className="space-y-3 mt-4">
-              {/* 히든 키워드 */}
-              {discoveredKeywords.hidden?.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-warning mb-2">히든 키워드 (경쟁 낮음 + 검색량 적정)</p>
-                  <div className="flex flex-wrap gap-2">
-                    {discoveredKeywords.hidden.map((k: any, i: number) => (
-                      <button
-                        key={i}
-                        onClick={() => handleAddDiscovered(k.keyword)}
-                        className="text-xs px-3 py-1.5 rounded-xl bg-warning-light text-warning hover:opacity-80 transition-colors flex items-center gap-1.5"
-                      >
-                        <Plus size={10} /> {k.keyword}
-                        <span className="text-[10px] opacity-60">{formatNumber(k.monthlyVolume)}/월</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* AI 추천 */}
-              {discoveredKeywords.aiRecommended?.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-violet-600 mb-2">AI 추천 키워드</p>
-                  <div className="flex flex-wrap gap-2">
-                    {discoveredKeywords.aiRecommended.map((k: any, i: number) => (
-                      <button
-                        key={i}
-                        onClick={() => handleAddDiscovered(k.keyword)}
-                        className="text-xs px-3 py-1.5 rounded-xl bg-violet-100 text-violet-700 hover:opacity-80 transition-colors flex items-center gap-1.5"
-                      >
-                        <Plus size={10} /> {k.keyword}
-                        <span className="text-[10px] opacity-60">{formatNumber(k.monthlyVolume)}/월</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 연관 키워드 */}
-              {discoveredKeywords.discovered?.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-brand mb-2">연관 키워드 (검색량 순)</p>
-                  <div className="flex flex-wrap gap-2">
-                    {discoveredKeywords.discovered.slice(0, 10).map((k: any, i: number) => (
-                      <button
-                        key={i}
-                        onClick={() => handleAddDiscovered(k.keyword)}
-                        className="text-xs px-3 py-1.5 rounded-xl bg-brand-subtle text-brand hover:opacity-80 transition-colors flex items-center gap-1.5"
-                      >
-                        <Plus size={10} /> {k.keyword}
-                        <span className="text-[10px] opacity-60">{formatNumber(k.monthlyVolume)}/월</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+      {/* 매장명 */}
+      <div className="flex-1 min-w-0">
+        <span className={`text-sm truncate ${place.isMine ? "font-bold" : "font-medium"}`}>
+          {place.name}
+        </span>
+        {place.isMine && <Badge className="ml-1 text-[9px] py-0 px-1.5">나</Badge>}
+      </div>
+      {/* 지표 */}
+      <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+        <span className="inline-flex items-center gap-0.5">
+          <MessageSquare size={10} />
+          {place.visitorReviewCount?.toLocaleString() ?? "-"}
+        </span>
+        <span className="inline-flex items-center gap-0.5">
+          <FileText size={10} />
+          {place.blogReviewCount?.toLocaleString() ?? "-"}
+        </span>
       </div>
     </div>
   );

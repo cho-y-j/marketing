@@ -16,7 +16,6 @@ import {
   CheckCircle2,
   Star,
   MessageSquare,
-  Bookmark,
   FileText,
 } from "lucide-react";
 
@@ -159,7 +158,7 @@ export default function NewStorePage() {
             </div>
 
             {/* 지표 요약 */}
-            <div className="grid grid-cols-3 gap-3 mt-4">
+            <div className="grid grid-cols-2 gap-3 mt-4">
               {preview.visitorReviewCount != null && (
                 <div className="text-center bg-white rounded-md p-2">
                   <MessageSquare size={14} className="mx-auto text-muted-foreground mb-1" />
@@ -176,15 +175,6 @@ export default function NewStorePage() {
                     {preview.blogReviewCount.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground">블로그 리뷰</div>
-                </div>
-              )}
-              {preview.saveCount != null && (
-                <div className="text-center bg-white rounded-md p-2">
-                  <Bookmark size={14} className="mx-auto text-muted-foreground mb-1" />
-                  <div className="font-bold text-sm">
-                    {preview.saveCount.toLocaleString()}
-                  </div>
-                  <div className="text-xs text-muted-foreground">저장</div>
                 </div>
               )}
             </div>

@@ -26,7 +26,6 @@ const navGroups = [
     label: "홈",
     items: [
       { href: "/", label: "오늘 해야 할 것", icon: LayoutDashboard },
-      { href: "/stores", label: "내 매장", icon: Store },
     ],
   },
   {

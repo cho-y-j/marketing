@@ -1,5 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
+import { AIProvider } from "../../providers/ai/ai.provider";
+import { CacheService } from "../../common/cache.service";
+import * as crypto from "crypto";
 
 /**
  * 마케팅 로직 엔진
@@ -18,6 +21,7 @@ export interface MarketingDiagnosis {
   problems: Problem[];
   actions: Action[];
   keywordStrategy: KeywordStrategy | null;
+  aiPending?: boolean; // AI 보강 백그라운드 진행 중 (프론트 재조회 힌트)
 }
 
 export interface Problem {
@@ -35,6 +39,14 @@ export interface Action {
   reason: string;
   href: string;
   priority: number;
+  // 신규: 구체적 가이드
+  steps?: string[];           // 단계별 실행 방법
+  expectedEffect?: string;    // 예상 효과 (예: "리뷰 5개 = 순위 +3위 추정")
+  metric?: {                  // 측정 가능한 지표
+    current: number;
+    target: number;
+    unit: string;
+  };
 }
 
 export interface KeywordStrategy {
@@ -48,10 +60,14 @@ export interface KeywordStrategy {
 export class MarketingEngineService {
   private readonly logger = new Logger(MarketingEngineService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private ai: AIProvider,
+    private cache: CacheService,
+  ) {}
 
-  async diagnose(storeId: string): Promise<MarketingDiagnosis> {
-    const store = await this.prisma.store.findUnique({
+  async diagnose(storeId: string, preloadedStore?: any): Promise<MarketingDiagnosis> {
+    const store = preloadedStore ?? await this.prisma.store.findUnique({
       where: { id: storeId },
       include: {
         analyses: { take: 1, orderBy: { analyzedAt: "desc" } },
@@ -62,8 +78,8 @@ export class MarketingEngineService {
     if (!store) throw new Error("Store not found");
 
     const analysis = store.analyses[0] || null;
-    const keywords = store.keywords;
-    const competitors = store.competitors;
+    const keywords: any[] = store.keywords ?? [];
+    const competitors: any[] = store.competitors ?? [];
 
     const myReceiptReviews = analysis?.receiptReviewCount ?? 0;
     const myBlogReviews = analysis?.blogReviewCount ?? 0;
@@ -87,11 +103,108 @@ export class MarketingEngineService {
       avgRank, rankedKws.length, keywords.length,
     );
 
+    // === 2-2. 추가 진단: 키워드 검색량 0, 1위와 격차, 역전 위협 ===
+    // 검색량 0인 키워드 비율
+    const zeroVolumeKws = keywords.filter((k) => k.monthlySearchVolume === 0);
+    if (zeroVolumeKws.length >= 3 && zeroVolumeKws.length / keywords.length >= 0.3) {
+      problems.push({
+        type: "ZERO_VOLUME_KEYWORDS",
+        title: "검색량 0인 키워드 다수",
+        description: `${zeroVolumeKws.length}개 키워드가 검색량 0 — 사람들이 안 쓰는 키워드입니다. 더 실용적인 키워드로 교체 필요.`,
+        severity: "warning",
+        metric: { current: zeroVolumeKws.length, target: 0, unit: "개" },
+      });
+    }
+
+    // 1위 경쟁사 격차 (큰 위협)
+    const topComp = competitors[0];
+    if (topComp && (topComp.receiptReviewCount ?? 0) > myReceiptReviews * 1.5) {
+      const gap = (topComp.receiptReviewCount ?? 0) - myReceiptReviews;
+      problems.push({
+        type: "TOP_COMPETITOR_THREAT",
+        title: `1위 경쟁사 격차 큼`,
+        description: `"${topComp.competitorName}" 방문자 리뷰 ${topComp.receiptReviewCount}개 — 나보다 ${gap}개 많음. 추격 전략 필요.`,
+        severity: "warning",
+        metric: { current: myReceiptReviews, target: topComp.receiptReviewCount ?? 0, unit: "개" },
+      });
+    }
+
+    // 키워드 자체가 너무 적음
+    if (keywords.length < 5) {
+      problems.push({
+        type: "FEW_KEYWORDS",
+        title: "추적 키워드 부족",
+        description: `현재 ${keywords.length}개. 다양한 키워드로 노출 기회를 늘려야 합니다.`,
+        severity: "info",
+        metric: { current: keywords.length, target: 10, unit: "개" },
+      });
+    }
+
     // === 3. 업종별 키워드 전략 ===
     const keywordStrategy = await this.analyzeKeywordStrategy(store, keywords);
 
-    // === 4. 오늘의 액션 생성 ===
-    const actions = this.generateActions(phase, problems, keywordStrategy, rankedKws.length);
+    // === 4. 오늘의 액션 생성 (룰 기반) ===
+    let actions = this.generateActions(phase, problems, keywordStrategy, rankedKws.length);
+
+    // === 5. AI로 액션 보강 (캐싱 적용 — 1시간) ===
+    const aiContext = {
+      storeName: store.name,
+      category: store.category || "",
+      myReceiptReviews,
+      myBlogReviews,
+      avgCompReviews,
+      avgCompBlogs,
+      avgRank,
+      topCompetitor: competitors[0],
+      phase: phase.label,
+      phaseDescription: phase.description,
+      topKeywords: keywords.slice(0, 5).map((k) => ({
+        keyword: k.keyword,
+        rank: k.currentRank,
+        volume: k.monthlySearchVolume,
+      })),
+    };
+    // 캐시 키: 매장 ID + 데이터 해시 (데이터 변경 시 자동 무효화)
+    const dataHash = crypto
+      .createHash("md5")
+      .update(JSON.stringify(aiContext) + JSON.stringify(actions.slice(0, 3).map((a) => a.type)))
+      .digest("hex")
+      .slice(0, 12);
+    const cacheKey = `marketing:actions:${storeId}:${dataHash}`;
+
+    // 캐시 조회 — 있으면 AI 보강판 사용, 없으면 룰 기반으로 즉시 응답 + 백그라운드 AI
+    const cached = await this.cache.get<Action[]>(cacheKey);
+    let aiPending = false;
+
+    if (cached && cached.length > 0) {
+      this.logger.log(`AI 액션 캐시 HIT [${cacheKey}]`);
+      actions = cached;
+    } else {
+      // 중복 실행 가드 (같은 해시 백그라운드 AI가 이미 돌고 있으면 스킵)
+      const lockKey = `${cacheKey}:lock`;
+      const lock = await this.cache.get<number>(lockKey);
+      if (!lock) {
+        aiPending = true;
+        // 10분 락 (AI 최대 실행시간 + 버퍼)
+        await this.cache.set(lockKey, Date.now(), 600);
+        // 백그라운드 실행 — 응답을 블록하지 않음
+        const baseSnapshot = actions.slice(0, 3);
+        this.enrichActionsWithAI(baseSnapshot, aiContext)
+          .then(async (enriched) => {
+            if (enriched && enriched.length > 0) {
+              await this.cache.set(cacheKey, enriched, 3600);
+              this.logger.log(`[BG] AI 액션 캐시 저장 [${cacheKey}] TTL=1h`);
+            }
+          })
+          .catch((e: any) => this.logger.warn(`[BG] AI 액션 보강 실패: ${e.message}`))
+          .finally(async () => {
+            await this.cache.del(lockKey).catch(() => {});
+          });
+      } else {
+        this.logger.log(`AI 액션 보강 이미 진행 중 — 룰 기반으로 응답 [${cacheKey}]`);
+        aiPending = true;
+      }
+    }
 
     return {
       phase: phase.code,
@@ -100,6 +213,7 @@ export class MarketingEngineService {
       problems,
       actions: actions.sort((a, b) => b.priority - a.priority).slice(0, 3),
       keywordStrategy,
+      aiPending,
     };
   }
 
@@ -207,17 +321,6 @@ export class MarketingEngineService {
         description: `블로그 ${myBlogs}개. 경쟁사 평균 ${avgCompBlogs}개 대비 ${Math.round(avgCompBlogs / Math.max(myBlogs, 1))}배 차이.`,
         severity: myBlogs < 10 ? "critical" : "warning",
         metric: { current: myBlogs, target: avgCompBlogs, unit: "개" },
-      });
-    }
-
-    // 저장수 부족
-    if (mySaves < 50 && avgCompReviews > 100) {
-      problems.push({
-        type: "SAVE_LOW",
-        title: "저장 수 부족",
-        description: `저장 ${mySaves}개. 저장수가 높을수록 네이버 알고리즘에서 유리합니다.`,
-        severity: "info",
-        metric: { current: mySaves, target: 100, unit: "개" },
       });
     }
 
@@ -384,5 +487,101 @@ export class MarketingEngineService {
   private avg(arr: any[], field: string): number {
     if (arr.length === 0) return 0;
     return Math.round(arr.reduce((s, item) => s + (item[field] ?? 0), 0) / arr.length);
+  }
+
+  /**
+   * AI로 액션 보강 — 룰 기반 액션에 구체적 숫자, 단계, 예상 효과 추가
+   */
+  private async enrichActionsWithAI(
+    baseActions: Action[],
+    context: {
+      storeName: string;
+      category: string;
+      myReceiptReviews: number;
+      myBlogReviews: number;
+      avgCompReviews: number;
+      avgCompBlogs: number;
+      avgRank: number | null;
+      topCompetitor: any;
+      phase: string;
+      phaseDescription: string;
+      topKeywords: Array<{ keyword: string; rank: number | null; volume: number | null }>;
+    },
+  ): Promise<Action[] | null> {
+    if (baseActions.length === 0) return null;
+
+    const systemPrompt = `너는 자영업 마케팅 컨설턴트다.
+사장님이 오늘 당장 실행할 수 있는 구체적 액션을 만든다.
+
+원칙:
+1. 추상적 명령 X — 숫자로 구체화 ("리뷰 5개 받으면 평균 도달")
+2. 단계별 실행 방법 제시 (steps)
+3. 예상 효과 명시 (expectedEffect)
+4. 사장님이 30초 안에 이해할 수 있어야`;
+
+    const userPrompt = `매장 정보:
+- 매장명: ${context.storeName}
+- 업종: ${context.category}
+- 마케팅 단계: ${context.phase} — ${context.phaseDescription}
+- 내 방문자 리뷰: ${context.myReceiptReviews}개 (경쟁사 평균 ${context.avgCompReviews}개)
+- 내 블로그 리뷰: ${context.myBlogReviews}개 (경쟁사 평균 ${context.avgCompBlogs}개)
+- 평균 검색 순위: ${context.avgRank ?? "N/A"}위
+- 1위 경쟁사: ${context.topCompetitor?.competitorName ?? "없음"} (방문자 ${context.topCompetitor?.receiptReviewCount ?? 0}개)
+- 주요 키워드 5개:
+${context.topKeywords.map((k) => `  · "${k.keyword}" — ${k.rank ? `${k.rank}위` : "순위없음"}, 월 ${k.volume?.toLocaleString() ?? "?"}회`).join("\n")}
+
+기본 액션 (이걸 보강하라):
+${baseActions.map((a, i) => `${i + 1}. ${a.title} — ${a.description}`).join("\n")}
+
+작업:
+위 매장 데이터에 맞춰 각 액션을 구체적으로 다듬어라.
+
+JSON 응답 (정확히 ${baseActions.length}개 액션):
+[
+  {
+    "type": "기존 type 유지",
+    "title": "구체적 제목 (숫자 포함)",
+    "description": "한 줄 설명",
+    "reason": "왜 지금 이 매장에 필요한지 (숫자 근거)",
+    "href": "기존 href 유지",
+    "priority": 기존 priority,
+    "steps": ["1단계: ...", "2단계: ...", "3단계: ..."],
+    "expectedEffect": "예상 효과 (예: 리뷰 5개 = 평균 도달, 1주 내 가능)",
+    "metric": { "current": 현재값, "target": 목표값, "unit": "단위" }
+  },
+  ...
+]
+
+JSON 배열만 반환. 다른 텍스트 X.`;
+
+    try {
+      const response = await this.ai.call(systemPrompt, userPrompt);
+      const match = response.content.match(/\[[\s\S]*\]/);
+      if (!match) return null;
+
+      const parsed = JSON.parse(match[0]);
+      if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+      this.logger.log(`AI 액션 보강 완료 [${response.provider}]: ${parsed.length}개`);
+
+      // baseActions의 type/href는 보존, AI 텍스트만 사용
+      return parsed.map((a, i) => {
+        const base = baseActions[i] || baseActions[0];
+        return {
+          type: a.type || base.type,
+          title: a.title || base.title,
+          description: a.description || base.description,
+          reason: a.reason || base.reason,
+          href: a.href || base.href,
+          priority: a.priority ?? base.priority,
+          steps: Array.isArray(a.steps) ? a.steps.slice(0, 4) : undefined,
+          expectedEffect: typeof a.expectedEffect === "string" ? a.expectedEffect : undefined,
+          metric: a.metric && typeof a.metric.current === "number" ? a.metric : undefined,
+        };
+      });
+    } catch (e: any) {
+      this.logger.warn(`AI 액션 파싱 실패: ${e.message}`);
+      return null;
+    }
   }
 }

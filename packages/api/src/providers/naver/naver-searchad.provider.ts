@@ -103,14 +103,21 @@ export class NaverSearchadProvider {
     );
   }
 
-  // 총 월간 검색량 (PC + 모바일)
+  // 총 월간 검색량 (PC + 모바일) — "< 10" 같은 string도 처리
   getTotalMonthlySearch(stat: KeywordStats): number {
-    const pc =
-      typeof stat.monthlyPcQcCnt === "number" ? stat.monthlyPcQcCnt : 0;
-    const mobile =
-      typeof stat.monthlyMobileQcCnt === "number"
-        ? stat.monthlyMobileQcCnt
-        : 0;
-    return pc + mobile;
+    return this.parseVolume(stat.monthlyPcQcCnt) + this.parseVolume(stat.monthlyMobileQcCnt);
+  }
+
+  // "< 10" → 5, "100" → 100, 100 → 100
+  private parseVolume(v: any): number {
+    if (typeof v === "number") return v;
+    if (typeof v === "string") {
+      // "< 10" → 5 (절반으로 추정)
+      const lt = v.match(/<\s*(\d+)/);
+      if (lt) return Math.floor(parseInt(lt[1]) / 2);
+      const num = parseInt(v.replace(/[^0-9]/g, ""));
+      return isNaN(num) ? 0 : num;
+    }
+    return 0;
   }
 }

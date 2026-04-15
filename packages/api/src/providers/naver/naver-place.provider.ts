@@ -58,35 +58,46 @@ export class NaverPlaceProvider {
    * 실패 시 allSearch 폴백.
    */
   async getPlaceDetail(placeId: string): Promise<PlaceInfo | null> {
-    // 1차: 직접 상세 API
+    // 1차: 직접 상세 API (신규 구조: data.placeDetail)
     try {
       const resp = await axios.get(
         `https://map.naver.com/p/api/place/summary/${placeId}`,
         { headers: this.headers, timeout: 10000 },
       );
-      const d = resp.data;
+      // 신규 응답: { data: { placeDetail: { ... } } }
+      const d = resp.data?.data?.placeDetail || resp.data;
       if (d && (d.name || d.id)) {
+        const visitorText: string = d.visitorReviews?.displayText || "";
+        const visitorCount = this.parseReviewCount(visitorText);
         return {
           id: d.id || placeId,
           name: d.name || "",
-          category: Array.isArray(d.category) ? d.category.join(" > ") : (d.category || ""),
-          address: d.address || d.jibunAddress || "",
-          roadAddress: d.roadAddress || "",
-          phone: d.phone || d.tel || "",
-          businessHours: d.businessHours?.status || d.businessStatus || "",
-          imageUrl: d.thumUrl || d.imageUrl || undefined,
-          reviewCount: d.reviewCount ?? d.totalReviewCount ?? 0,
-          visitorReviewCount: d.visitorReviewCount ?? d.receiptReviewCount ?? 0,
-          blogReviewCount: d.blogReviewCount ?? 0,
+          category: d.category?.category || (Array.isArray(d.category) ? d.category.join(" > ") : (d.category || "")),
+          address: d.address?.address || d.address?.formattedAddress || d.jibunAddress || "",
+          roadAddress: d.address?.roadAddress || d.roadAddress || "",
+          phone: d.phone?.number || d.phone || d.tel || "",
+          businessHours: d.businessHours?.description || d.businessHours?.status || d.businessStatus || "",
+          imageUrl: d.images?.images?.[0]?.origin || d.thumUrl || d.imageUrl || undefined,
+          reviewCount: (d.reviewCount ?? d.totalReviewCount ?? visitorCount) || 0,
+          visitorReviewCount: visitorCount || d.visitorReviewCount || 0,
+          blogReviewCount: d.blogReviews?.total ?? d.blogReviewCount ?? 0,
           saveCount: d.saveCount ?? d.bookmarkCount ?? 0,
         };
       }
     } catch (e: any) {
-      this.logger.debug(`summary API 실패 (${placeId}), allSearch 폴백: ${e.message}`);
+      this.logger.debug(`summary API 실패 (${placeId}): ${e.message}`);
     }
 
-    // 2차: allSearch 폴백
+    // 2차: allSearch 폴백 (매장 검색)
     return this.getPlaceInfo(placeId);
+  }
+
+  // "방문자 리뷰 1,563" → 1563
+  private parseReviewCount(text: string): number {
+    if (!text) return 0;
+    const match = text.match(/([\d,]+)/);
+    if (!match) return 0;
+    return parseInt(match[1].replace(/,/g, ""), 10) || 0;
   }
 
   // 플레이스 기본 정보 조회 (공개 allSearch API)
@@ -129,18 +140,57 @@ export class NaverPlaceProvider {
    * 경쟁사 등 placeId가 없는 경우 사용.
    */
   async searchAndGetPlaceInfo(storeName: string): Promise<PlaceInfo | null> {
+    // 1차: search.naver.com HTML에서 placeId 추출 → getPlaceDetail 호출
+    try {
+      const url = `https://search.naver.com/search.naver?query=${encodeURIComponent(storeName)}&where=nexearch`;
+      const resp = await axios.get(url, {
+        headers: this.headers,
+        timeout: 10000,
+      });
+      const html: string = resp.data;
+      // JSON 패턴에서 id + name 쌍 추출 (가장 가까운 쌍만)
+      // 네이버 SSR 결과: "id":"숫자"..."name":"매장명" 또는 "name":"..."..."id":"..."
+      const placeIds = Array.from(html.matchAll(/"id":"(\d+)"[^}]{0,500}?"name":"([^"]+)"/g));
+      const normalizedTarget = storeName.replace(/\s+/g, "");
+      for (const m of placeIds) {
+        const pid = m[1];
+        const pname = m[2];
+        if (pname.replace(/\s+/g, "").includes(normalizedTarget) ||
+            normalizedTarget.includes(pname.replace(/\s+/g, ""))) {
+          const detail = await this.getPlaceDetail(pid);
+          if (detail) return detail;
+        }
+      }
+      // 매칭 실패 시 첫 번째 placeId 시도
+      if (placeIds.length > 0) {
+        const pid = placeIds[0][1];
+        const detail = await this.getPlaceDetail(pid);
+        if (detail) return detail;
+      }
+    } catch (e: any) {
+      this.logger.debug(`search.naver.com 실패 [${storeName}]: ${e.message}`);
+    }
+
+    // 2차: allSearch (백업) — 신규 응답 구조 파싱
     try {
       const resp = await axios.get(
         `https://map.naver.com/p/api/search/allSearch`,
         {
-          params: { query: storeName, type: "all" },
+          params: { query: storeName, type: "all", searchCoord: "126.9780;37.5665" },
           headers: this.headers,
           timeout: 10000,
         },
       );
 
-      const place = resp.data?.result?.place?.list?.[0];
+      const list = resp.data?.result?.place?.list || resp.data?.data?.places;
+      const place = Array.isArray(list) ? list[0] : null;
       if (!place) return null;
+
+      // placeId가 있으면 getPlaceDetail로 상세 조회
+      if (place.id) {
+        const detail = await this.getPlaceDetail(place.id);
+        if (detail) return detail;
+      }
 
       return {
         id: place.id || "",

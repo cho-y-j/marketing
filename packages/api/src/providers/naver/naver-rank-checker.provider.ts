@@ -2,12 +2,23 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { chromium, Browser } from "playwright-core";
 import { execFileSync } from "child_process";
+import { NaverSearchProvider } from "./naver-search.provider";
+import { NaverPlaceProvider } from "./naver-place.provider";
 
 export interface RankCheckResult {
   keyword: string;
   rank: number | null;
   totalResults: number;
-  topPlaces: Array<{ name: string; rank: number }>;
+  topPlaces: Array<{
+    name: string;
+    rank: number;
+    placeId?: string;
+    category?: string;
+    visitorReviewCount?: number;
+    blogReviewCount?: number;
+    saveCount?: number;
+    isMine?: boolean;
+  }>;
   checkedAt: Date;
 }
 
@@ -16,7 +27,11 @@ export class NaverRankCheckerProvider {
   private readonly logger = new Logger(NaverRankCheckerProvider.name);
   private readonly chromePath: string;
 
-  constructor(private config: ConfigService) {
+  constructor(
+    private config: ConfigService,
+    private naverSearch: NaverSearchProvider,
+    private naverPlace: NaverPlaceProvider,
+  ) {
     // Chrome 경로 탐지
     const paths = [
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -51,8 +66,8 @@ export class NaverRankCheckerProvider {
 
     try {
       if (!this.chromePath) {
-        this.logger.warn("Chrome 없음 — 순위 체크 불가");
-        return { keyword, rank: null, totalResults: 0, topPlaces: [], checkedAt: new Date() };
+        // Chrome 없으면 네이버 공식 검색 API로 폴백
+        return this.checkRankViaSearchAPI(keyword, storeName, naverPlaceId);
       }
 
       browser = await chromium.launch({
@@ -122,6 +137,119 @@ export class NaverRankCheckerProvider {
       return { keyword, rank: null, totalResults: 0, topPlaces: [], checkedAt: new Date() };
     } finally {
       if (browser) await browser.close();
+    }
+  }
+
+  /**
+   * Chrome 없을 때 폴백 — 네이버 공식 검색 API로 순위 확인
+   * 상위 5개 제한이지만 Chrome 없이 동작
+   */
+  private async checkRankViaSearchAPI(
+    keyword: string,
+    storeName: string,
+    naverPlaceId?: string,
+  ): Promise<RankCheckResult> {
+    try {
+      // 더 많은 결과를 위해 search.naver.com HTML도 활용 (id+name 추출)
+      const naverPlaces = await this.fetchPlacesFromSearchHtml(keyword);
+      // 폴백: 공식 검색 API
+      const officialPlaces = naverPlaces.length > 0
+        ? naverPlaces
+        : (await this.naverSearch.searchPlace(keyword, 10)).map((p) => ({
+            id: null as string | null,
+            name: p.title.replace(/<[^>]*>/g, "").trim(),
+          }));
+
+      const normalizedStore = storeName.replace(/\s+/g, "");
+      const topPlaces: RankCheckResult["topPlaces"] = [];
+      let rank: number | null = null;
+
+      // Top 50까지 확장 (애드로그 수준)
+      const limit = Math.min(officialPlaces.length, 50);
+
+      // 1) isMine 매칭은 빠르게 (Place API 없이) — rank 빠르게 산출
+      for (let i = 0; i < limit; i++) {
+        const p = officialPlaces[i];
+        let isMine = false;
+        if (naverPlaceId && p.id && p.id === naverPlaceId) {
+          isMine = true;
+        } else if (!naverPlaceId) {
+          isMine = p.name.replace(/\s+/g, "") === normalizedStore;
+        }
+        if (isMine && rank === null) rank = i + 1;
+      }
+
+      // 2) Place API 병렬 호출 (배치 5개씩, 50개 매장 → 10번 배치)
+      const BATCH_SIZE = 5;
+      for (let batchStart = 0; batchStart < limit; batchStart += BATCH_SIZE) {
+        const batch = officialPlaces.slice(batchStart, batchStart + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(async (p, j) => {
+            const i = batchStart + j;
+            const cleanName = p.name;
+            let detail: any = null;
+            try {
+              if (p.id) {
+                detail = await this.naverPlace.getPlaceDetail(p.id);
+              } else {
+                detail = await this.naverPlace.searchAndGetPlaceInfo(cleanName);
+              }
+            } catch {}
+
+            const isMine =
+              (naverPlaceId && p.id && p.id === naverPlaceId) ||
+              (!naverPlaceId && cleanName.replace(/\s+/g, "") === normalizedStore);
+
+            return {
+              name: cleanName,
+              rank: i + 1,
+              placeId: p.id || detail?.id || undefined,
+              category: detail?.category || undefined,
+              visitorReviewCount: detail?.visitorReviewCount || undefined,
+              blogReviewCount: detail?.blogReviewCount || undefined,
+              saveCount: detail?.saveCount || undefined,
+              isMine: !!isMine,
+            };
+          }),
+        );
+        topPlaces.push(...results);
+      }
+
+      this.logger.log(
+        `순위 체크(API폴백): "${keyword}" → ${storeName}: ${rank ? `${rank}위` : "10위 밖"} (${topPlaces.length}개 매장 + 상세 수집)`,
+      );
+
+      return {
+        keyword,
+        rank,
+        totalResults: topPlaces.length,
+        topPlaces,
+        checkedAt: new Date(),
+      };
+    } catch (e: any) {
+      this.logger.warn(`검색API 순위 체크 실패 [${keyword}]: ${e.message}`);
+      return { keyword, rank: null, totalResults: 0, topPlaces: [], checkedAt: new Date() };
+    }
+  }
+
+  /**
+   * search.naver.com HTML에서 placeId+name 쌍 추출 (Chrome 없이)
+   */
+  private async fetchPlacesFromSearchHtml(keyword: string): Promise<Array<{ id: string | null; name: string }>> {
+    try {
+      const axios = (await import("axios")).default;
+      const url = `https://search.naver.com/search.naver?query=${encodeURIComponent(keyword)}&where=nexearch`;
+      const resp = await axios.get(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0",
+          Referer: "https://map.naver.com/",
+        },
+        timeout: 10000,
+      });
+      const html: string = resp.data;
+      return this.extractPlacesFromHtml(html).slice(0, 50);
+    } catch {
+      return [];
     }
   }
 
