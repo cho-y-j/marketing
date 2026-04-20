@@ -22,6 +22,7 @@ import {
   TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 import { ConsultationCTA } from "@/components/common/consultation-cta";
+import { CompetitorTrendChart } from "@/components/charts/competitor-trend-chart";
 
 type Period = "date" | "day" | "week" | "month";
 const PERIOD_LABEL: Record<Period, string> = { date: "날짜", day: "일", week: "주", month: "월" };
@@ -84,6 +85,41 @@ export default function CompetitorsPage() {
     for (const d of c.days) m.set(d.date, d);
     if (c.placeId) timelineByPid.set(c.placeId, m);
   }
+
+  // === 차트 데이터 조립: 최근 30일 × (내 매장 + 경쟁사 N) ===
+  const chartDates = availableDates.slice().reverse(); // 오래된 순
+  const competitorSeries = (timelineResp?.competitors ?? []).map((c) => ({
+    key: `comp_${c.placeId}`,
+    label: c.name,
+    days: new Map(c.days.map((d) => [d.date, d])),
+  }));
+  const myFlowTimeline: Array<{ date: string; visitor: number | null; blog: number | null }> =
+    flow?.timeline ?? [];
+  const myByDate = new Map<string, { visitor: number | null; blog: number | null }>();
+  for (const t of myFlowTimeline) {
+    const key = typeof t.date === "string" ? t.date.slice(0, 10) : new Date(t.date as any).toISOString().slice(0, 10);
+    myByDate.set(key, { visitor: t.visitor ?? null, blog: t.blog ?? null });
+  }
+  const visitorChartData = chartDates.map((date) => {
+    const row: any = { date };
+    row["내 매장"] = myByDate.get(date)?.visitor ?? null;
+    for (const s of competitorSeries) {
+      row[s.key] = s.days.get(date)?.visitor ?? null;
+    }
+    return row;
+  });
+  const blogChartData = chartDates.map((date) => {
+    const row: any = { date };
+    row["내 매장"] = myByDate.get(date)?.blog ?? null;
+    for (const s of competitorSeries) {
+      row[s.key] = s.days.get(date)?.blog ?? null;
+    }
+    return row;
+  });
+  const chartSeries = [
+    { key: "내 매장", label: "내 매장", isMine: true },
+    ...competitorSeries.map((s) => ({ key: s.key, label: s.label })),
+  ];
 
   const comps = competitors ?? [];
   const myStore = comparison?.store;
@@ -197,6 +233,22 @@ export default function CompetitorsPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* === 누적 리뷰 추이 차트 (나 vs 경쟁사) === */}
+      {sorted.length > 0 && chartDates.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <CompetitorTrendChart
+            title="방문자 리뷰 누적 추이"
+            data={visitorChartData}
+            series={chartSeries}
+          />
+          <CompetitorTrendChart
+            title="블로그 리뷰 누적 추이"
+            data={blogChartData}
+            series={chartSeries}
+          />
+        </div>
       )}
 
       {/* === 속도 비교 안내 (스냅샷 부족 시) === */}
