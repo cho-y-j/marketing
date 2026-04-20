@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
+import { NaverSearchProvider } from "../../providers/naver/naver-search.provider";
 
 /**
  * Phase 8 — 일별 스냅샷 조회 헬퍼.
@@ -9,7 +10,10 @@ import { PrismaService } from "../../common/prisma.service";
  */
 @Injectable()
 export class DailySnapshotService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private naverSearch: NaverSearchProvider,
+  ) {}
 
   // 매장의 최근 스냅샷 + 7일 평균 일증가량 + 일/주/월 변동량
   async getStoreFlow(storeId: string) {
@@ -173,10 +177,32 @@ export class DailySnapshotService {
         const latest = recent[0];
         const visitorDay = diffCount(recent, "visitorReviewCount", 1);
         const blogDay = diffCount(recent, "blogReviewCount", 1);
-        const visitorWeek = diffCount(recent, "visitorReviewCount", 7);
-        const blogWeek = diffCount(recent, "blogReviewCount", 7);
-        const visitorMonth = diffCount(recent, "visitorReviewCount", 30);
-        const blogMonth = diffCount(recent, "blogReviewCount", 30);
+        let visitorWeek = diffCount(recent, "visitorReviewCount", 7);
+        let blogWeek = diffCount(recent, "blogReviewCount", 7);
+        let visitorMonth = diffCount(recent, "visitorReviewCount", 30);
+        let blogMonth = diffCount(recent, "blogReviewCount", 30);
+
+        // 스냅샷이 부족해 blogWeek/blogMonth 가 null 이면 — 네이버 블로그 검색으로 역산
+        // (visitor 리뷰는 공개 API가 없어 역산 불가, 블로그만 보강)
+        let blogWeekFromSearch: number | null = null;
+        let blogMonthFromSearch: number | null = null;
+        if (blogWeek == null || blogMonth == null) {
+          try {
+            if (blogWeek == null) {
+              const w = await this.naverSearch.countRecentBlogPosts(c.competitorName, 7);
+              blogWeekFromSearch = w.count;
+              blogWeek = blogWeekFromSearch;
+            }
+            if (blogMonth == null) {
+              const m = await this.naverSearch.countRecentBlogPosts(c.competitorName, 30);
+              blogMonthFromSearch = m.count;
+              blogMonth = blogMonthFromSearch;
+            }
+          } catch {
+            // 네이버 API 실패해도 UI 렌더링에 지장 없도록 무시
+          }
+        }
+
         return {
           name: c.competitorName,
           placeId: c.competitorPlaceId,
@@ -188,6 +214,11 @@ export class DailySnapshotService {
           deltas: {
             visitor: { day: visitorDay, week: visitorWeek, month: visitorMonth },
             blog: { day: blogDay, week: blogWeek, month: blogMonth },
+          },
+          // 역산 출처 표시 (UI 배지용)
+          blogDeltaSource: {
+            week: blogWeekFromSearch != null ? "blogSearch" : "snapshot",
+            month: blogMonthFromSearch != null ? "blogSearch" : "snapshot",
           },
         };
       }),

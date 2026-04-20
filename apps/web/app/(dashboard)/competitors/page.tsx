@@ -199,14 +199,16 @@ export default function CompetitorsPage() {
         </Card>
       )}
 
-      {/* === 핵심: 일평균 발행 속도 비교 === */}
+      {/* === 속도 비교 안내 (스냅샷 부족 시) === */}
       {!hasDailyData && sorted.length > 0 && (
-        <Card>
-          <CardContent className="p-4 text-xs text-muted-foreground flex items-start gap-2">
-            <Activity size={14} className="mt-0.5" />
+        <Card className="border-sky-200 bg-sky-50/50">
+          <CardContent className="p-4 text-xs flex items-start gap-2">
+            <Activity size={14} className="mt-0.5 text-sky-600" />
             <div>
-              <div className="font-semibold text-foreground mb-0.5">일별 스냅샷 수집 중</div>
-              일평균 발행 속도는 매일 자정에 수집됩니다. 최소 2~3일 데이터가 쌓이면 속도 비교가 표시됩니다.
+              <div className="font-semibold text-sky-900 mb-0.5">누적 수치는 오늘자 확보 완료 — 속도 비교는 2~3일 대기</div>
+              <span className="text-sky-800/80">
+                아래 카드마다 경쟁사 누적 리뷰 수치는 이미 표시됩니다. 일별 발행 속도(어제 대비 +N) 비교는 매일 01:00 스냅샷이 2~3일 쌓이면 자동 계산됩니다.
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -344,14 +346,13 @@ function DailyCompetitorCard({
   myTimeline: Array<{ date: string; visitorDelta: number | null; blogDelta: number | null }>;
   onDelete: () => void;
 }) {
-  // 기간별 경쟁사 변동량
+  // 기간별 경쟁사 변동량 (delta 없으면 null — 그래도 누적값으로 카드 표시)
   let cV: number | null = null;
   let cB: number | null = null;
   let myV: number | null = null;
   let myB: number | null = null;
 
   if (period === "date") {
-    // 선택 날짜 하루 delta
     cV = dateRow?.visitorDelta ?? null;
     cB = dateRow?.blogDelta ?? null;
     const myRow = myTimeline.find((t) => {
@@ -369,6 +370,11 @@ function DailyCompetitorCard({
   }
 
   const hasData = cV != null || cB != null || myV != null || myB != null;
+  // 누적 리뷰 수치 (오늘 기준 절대값 — delta 없어도 항상 존재)
+  const cumulativeV = c.receiptReviewCount ?? c.visitorTotal ?? null;
+  const cumulativeB = c.blogReviewCount ?? c.blogTotal ?? null;
+  const myCumV = myFlow?.visitor?.current ?? null;
+  const myCumB = myFlow?.blog?.current ?? null;
 
   const visitorDelta = myV != null && cV != null ? +(myV - cV).toFixed(1) : null;
   const blogDelta = myB != null && cB != null ? +(myB - cB).toFixed(1) : null;
@@ -376,9 +382,15 @@ function DailyCompetitorCard({
   const aheadCount = [visitorDelta, blogDelta].filter((d) => d != null && d > 0).length;
   const behindCount = [visitorDelta, blogDelta].filter((d) => d != null && d < 0).length;
 
-  let statusLabel = "데이터 수집 중";
-  let statusColor = "bg-muted text-muted-foreground border-border";
-  let diagnosis = "일별 스냅샷이 2~3일치 쌓이면 속도 비교가 가능합니다.";
+  // 스냅샷이 아직 1일치밖에 없을 때도 누적값은 노출 — "수집 중"으로 숨기지 않음
+  const hasCumulative = cumulativeV != null || cumulativeB != null;
+  let statusLabel = hasCumulative ? "수치만 수집 완료" : "데이터 수집 중";
+  let statusColor = hasCumulative
+    ? "bg-sky-50 text-sky-700 border-sky-200"
+    : "bg-muted text-muted-foreground border-border";
+  let diagnosis = hasCumulative
+    ? `오늘 기준 누적 리뷰 확보. 일별 속도 비교는 스냅샷 2~3일치가 쌓이면 계산됩니다.`
+    : "매장 정보 수집 중 — 잠시 후 새로고침하세요.";
 
   if (hasData && (visitorDelta != null || blogDelta != null)) {
     if (aheadCount === 2) {
@@ -430,6 +442,13 @@ function DailyCompetitorCard({
           </Button>
         </div>
 
+        {/* 누적 리뷰 요약 — 항상 노출 (delta 없어도 의미있는 정보) */}
+        <div className="grid grid-cols-2 gap-2 mb-3 p-3 bg-muted/30 rounded-md">
+          <CumulativeCell icon={MessageSquare} label="방문자 리뷰 누적" mine={myCumV} their={cumulativeV} />
+          <CumulativeCell icon={FileText} label="블로그 리뷰 누적" mine={myCumB} their={cumulativeB} />
+        </div>
+
+        {/* 속도 비교 — delta 있을 때만 의미있으므로 조건부 */}
         <div className="space-y-3">
           <DailyBar
             label="방문자 리뷰"
@@ -528,7 +547,7 @@ function DailyBar({
 
 function DeltaBadge({ value }: { value: number | null }) {
   if (value == null) {
-    return <span className="text-xs font-semibold text-muted-foreground inline-flex items-center gap-0.5"><Minus size={12} />수집중</span>;
+    return <span className="text-[10px] text-muted-foreground/60 inline-flex items-center gap-0.5" title="2~3일치 스냅샷 쌓이면 계산"><Minus size={11} />속도 대기</span>;
   }
   if (value > 0) {
     return <span className="text-xs font-bold text-green-600 inline-flex items-center gap-0.5"><TrendingUp size={12} />+{value}</span>;
@@ -537,4 +556,32 @@ function DeltaBadge({ value }: { value: number | null }) {
     return <span className="text-xs font-bold text-red-600 inline-flex items-center gap-0.5"><TrendingDown size={12} />{value}</span>;
   }
   return <span className="text-xs font-semibold text-muted-foreground inline-flex items-center gap-0.5"><Minus size={12} />0</span>;
+}
+
+function CumulativeCell({ icon: Icon, label, mine, their }: { icon: any; label: string; mine: number | null; their: number | null }) {
+  const ahead = mine != null && their != null ? mine - their : null;
+  return (
+    <div>
+      <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
+        <Icon size={10} />
+        <span>{label}</span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <div>
+          <div className="text-[9px] text-muted-foreground">나</div>
+          <div className="text-sm font-bold">{mine != null ? mine.toLocaleString() : "-"}</div>
+        </div>
+        <div className="text-muted-foreground/50 text-xs">vs</div>
+        <div>
+          <div className="text-[9px] text-muted-foreground">경쟁</div>
+          <div className="text-sm font-bold text-muted-foreground">{their != null ? their.toLocaleString() : "-"}</div>
+        </div>
+        {ahead != null && (
+          <div className={`text-[10px] font-semibold ml-auto ${ahead > 0 ? "text-green-600" : ahead < 0 ? "text-red-600" : "text-muted-foreground"}`}>
+            {ahead > 0 ? `+${ahead}` : ahead}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

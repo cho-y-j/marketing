@@ -83,12 +83,35 @@ export class NaverSearchProvider {
   async searchBlog(
     query: string,
     count = 10,
+    sort: "sim" | "date" = "sim",
   ): Promise<NaverBlogResult[]> {
     return this.withRetry(async () => {
       const resp = await this.client.get("/search/blog.json", {
-        params: { query, display: count, sort: "sim" },
+        params: { query, display: count, sort },
       });
       return resp.data.items as NaverBlogResult[];
     });
+  }
+
+  /**
+   * 매장명 기반 최근 N일 블로그 글 수 카운트.
+   * 네이버 블로그 검색은 날짜 필터 파라미터가 없어 최신순 100건 가져와서 postdate 필터링.
+   * 100건 내에 N일 이전 글이 포함될 만큼 최근이면 정확, 인기 매장은 100건이 모자랄 수 있음.
+   */
+  async countRecentBlogPosts(
+    query: string,
+    days: number,
+  ): Promise<{ count: number; capped: boolean }> {
+    const items = await this.searchBlog(query, 100, "date");
+    const threshold = new Date();
+    threshold.setDate(threshold.getDate() - days);
+    const thresholdKey = threshold.toISOString().slice(0, 10).replace(/-/g, "");
+    let count = 0;
+    for (const item of items) {
+      if ((item.postdate || "") >= thresholdKey) count++;
+    }
+    // 100건 전부 기간 내면 cap된 상태 (실제는 더 많을 수 있음)
+    const capped = items.length >= 100 && count === items.length;
+    return { count, capped };
   }
 }
