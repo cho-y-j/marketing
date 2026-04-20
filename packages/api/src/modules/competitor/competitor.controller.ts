@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { CompetitorService } from "./competitor.service";
+import { CompetitorBackfillService } from "./competitor-backfill.service";
 import { CreateCompetitorDto } from "./dto/competitor.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { PrismaService } from "../../common/prisma.service";
@@ -22,6 +23,7 @@ import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 export class CompetitorController {
   constructor(
     private competitorService: CompetitorService,
+    private backfillService: CompetitorBackfillService,
     private prisma: PrismaService,
     private naverPlace: NaverPlaceProvider,
   ) {}
@@ -83,6 +85,12 @@ export class CompetitorController {
   @ApiOperation({ summary: "placeId NULL 경쟁사 재검색·보강 (수동 트리거)" })
   backfillPlaceIds(@Param("storeId") storeId: string) {
     return this.competitorService.backfillNullPlaceIds(storeId);
+  }
+
+  @Post("backfill-history")
+  @ApiOperation({ summary: "경쟁사 과거 30일 일별 스냅샷 역산 (네이버 공개 데이터 기반)" })
+  backfillHistory(@Param("storeId") storeId: string) {
+    return this.backfillService.backfillAllCompetitors(storeId);
   }
 
   @Get("alerts")

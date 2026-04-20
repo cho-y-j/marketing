@@ -4,6 +4,8 @@ import { NaverSearchadProvider } from "../../providers/naver/naver-searchad.prov
 import { NaverSearchProvider } from "../../providers/naver/naver-search.provider";
 import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
 import { CreateCompetitorDto } from "./dto/competitor.dto";
+import { CompetitorBackfillService } from "./competitor-backfill.service";
+import { forwardRef, Inject } from "@nestjs/common";
 
 @Injectable()
 export class CompetitorService {
@@ -14,6 +16,8 @@ export class CompetitorService {
     private searchad: NaverSearchadProvider,
     private naverSearch: NaverSearchProvider,
     private naverPlace: NaverPlaceProvider,
+    @Inject(forwardRef(() => CompetitorBackfillService))
+    private backfillService: CompetitorBackfillService,
   ) {}
 
   async findAll(storeId: string) {
@@ -49,6 +53,15 @@ export class CompetitorService {
     this.collectCompetitorData(competitor.id, dto.competitorName).catch((e) =>
       this.logger.warn(`경쟁매장 데이터 수집 실패 [${dto.competitorName}]: ${e.message}`),
     );
+
+    // 경쟁사 추가 즉시 과거 30일 역산 백필 → 차트에 바로 선 그려짐
+    if (placeId) {
+      this.backfillService
+        .backfillCompetitor(storeId, placeId, dto.competitorName)
+        .catch((e) =>
+          this.logger.warn(`경쟁매장 과거 역산 실패 [${dto.competitorName}]: ${e.message}`),
+        );
+    }
 
     return competitor;
   }
@@ -106,12 +119,18 @@ export class CompetitorService {
     for (const c of competitors) {
       const placeId = await this.resolvePlaceId(c.competitorName, c.competitorUrl);
       if (placeId) {
+        const row = await this.prisma.competitor.findUnique({ where: { id: c.id }, select: { storeId: true } });
         await this.prisma.competitor.update({
           where: { id: c.id },
           data: { competitorPlaceId: placeId, lastComparedAt: new Date() },
         });
-        // 확보했으면 데이터 수집도 다시 시도
+        // 확보했으면 데이터 수집 + 과거 30일 역산 같이
         this.collectCompetitorData(c.id, c.competitorName).catch(() => {});
+        if (row?.storeId) {
+          this.backfillService
+            .backfillCompetitor(row.storeId, placeId, c.competitorName)
+            .catch(() => {});
+        }
         filled++;
         this.logger.log(`[보강] ${c.competitorName} → placeId ${placeId}`);
       } else {
