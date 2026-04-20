@@ -24,11 +24,22 @@ export class CompetitorService {
   }
 
   async create(storeId: string, dto: CreateCompetitorDto) {
+    // B안: placeId 없으면 저장 전에 네이버 검색으로 확보 시도 — 일별 스냅샷·비교 분석 모두 placeId 기반이라 필수
+    let placeId = dto.competitorPlaceId;
+    if (!placeId) {
+      placeId = (await this.resolvePlaceId(dto.competitorName, dto.competitorUrl)) ?? undefined;
+      if (placeId) {
+        this.logger.log(`[경쟁사 추가] placeId 자동 획득: ${dto.competitorName} → ${placeId}`);
+      } else {
+        this.logger.warn(`[경쟁사 추가] placeId 획득 실패: ${dto.competitorName} — 일별 비교 불가, 재보강 cron 대기`);
+      }
+    }
+
     const competitor = await this.prisma.competitor.create({
       data: {
         storeId,
         competitorName: dto.competitorName,
-        competitorPlaceId: dto.competitorPlaceId,
+        competitorPlaceId: placeId,
         competitorUrl: dto.competitorUrl,
         category: dto.category,
         type: "USER_SET",
@@ -40,6 +51,77 @@ export class CompetitorService {
     );
 
     return competitor;
+  }
+
+  /**
+   * 매장명 + URL 로 네이버 placeId 획득 시도.
+   * 순서: 1) URL 직접 파싱 → 2) 검색 API 결과의 link → 3) HTML searchAndGetPlaceInfo 폴백
+   * 실패 시 null.
+   */
+  private async resolvePlaceId(name: string, url?: string | null): Promise<string | null> {
+    // 1) URL 직접 파싱
+    if (url) {
+      const fromUrl = this.naverPlace.extractPlaceIdFromUrl(url);
+      if (fromUrl) return fromUrl;
+    }
+    // 2) 네이버 검색 API → 결과 link에서 추출
+    try {
+      const places = await this.naverSearch.searchPlace(name, 3);
+      for (const p of places) {
+        const cleanTitle = p.title.replace(/<[^>]*>/g, "");
+        const matched =
+          cleanTitle.replace(/\s+/g, "") === name.replace(/\s+/g, "") ||
+          cleanTitle.includes(name) ||
+          name.includes(cleanTitle);
+        if (matched) {
+          const extracted = this.naverPlace.extractPlaceIdFromUrl(p.link || "");
+          if (extracted) return extracted;
+        }
+      }
+    } catch {}
+    // 3) HTML 파싱 폴백 (Chrome 없이 axios)
+    try {
+      const info = await this.naverPlace.searchAndGetPlaceInfo(name);
+      if (info?.id) return info.id;
+    } catch {}
+    return null;
+  }
+
+  /**
+   * A안: competitorPlaceId 가 NULL 인 경쟁사들을 재검색으로 보강.
+   * 슈퍼관리자 or cron 에서 호출.
+   * @returns { total, filled, stillMissing }
+   */
+  async backfillNullPlaceIds(storeId?: string) {
+    const competitors = await this.prisma.competitor.findMany({
+      where: {
+        competitorPlaceId: null,
+        ...(storeId ? { storeId } : {}),
+      },
+      select: { id: true, competitorName: true, competitorUrl: true },
+    });
+
+    let filled = 0;
+    const stillMissing: string[] = [];
+    for (const c of competitors) {
+      const placeId = await this.resolvePlaceId(c.competitorName, c.competitorUrl);
+      if (placeId) {
+        await this.prisma.competitor.update({
+          where: { id: c.id },
+          data: { competitorPlaceId: placeId, lastComparedAt: new Date() },
+        });
+        // 확보했으면 데이터 수집도 다시 시도
+        this.collectCompetitorData(c.id, c.competitorName).catch(() => {});
+        filled++;
+        this.logger.log(`[보강] ${c.competitorName} → placeId ${placeId}`);
+      } else {
+        stillMissing.push(c.competitorName);
+        this.logger.warn(`[보강 실패] ${c.competitorName} — 네이버 검색 결과 없음`);
+      }
+      await new Promise((r) => setTimeout(r, 1000)); // rate-limit
+    }
+
+    return { total: competitors.length, filled, stillMissing };
   }
 
   async remove(storeId: string, competitorId: string) {

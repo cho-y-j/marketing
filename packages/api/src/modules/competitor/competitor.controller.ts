@@ -79,6 +79,12 @@ export class CompetitorController {
     return this.competitorService.refreshAll(storeId);
   }
 
+  @Post("backfill-place-ids")
+  @ApiOperation({ summary: "placeId NULL 경쟁사 재검색·보강 (수동 트리거)" })
+  backfillPlaceIds(@Param("storeId") storeId: string) {
+    return this.competitorService.backfillNullPlaceIds(storeId);
+  }
+
   @Get("alerts")
   @ApiOperation({ summary: "경쟁사 알림 + AI 대응 추천 목록" })
   async getAlerts(@Param("storeId") storeId: string) {
