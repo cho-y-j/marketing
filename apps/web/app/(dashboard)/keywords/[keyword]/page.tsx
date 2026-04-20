@@ -62,7 +62,7 @@ export default function KeywordDetailPage({
     );
   }
 
-  const { topPlaces = [], myMetrics, myRank, monthlyVolume, totalResults, trend = [], insights = [] } = data;
+  const { topPlaces = [], myMetrics, myDeltas, myRank, monthlyVolume, totalResults, trend = [], insights = [] } = data;
 
   return (
     <div className="space-y-5 max-w-4xl mx-auto">
@@ -93,16 +93,26 @@ export default function KeywordDetailPage({
       <div className="grid grid-cols-3 gap-3">
         <KeyMetric
           label="내 순위"
-          value={myRank ? `${myRank}위` : "-"}
+          value={myRank ? `${myRank}위` : "100위 밖"}
           color={myRank && myRank <= 3 ? "blue" : myRank && myRank <= 10 ? "default" : "red"}
         />
         <KeyMetric
           label="방문자 리뷰"
           value={(myMetrics?.visitorReviewCount ?? 0).toLocaleString()}
+          deltas={myDeltas ? {
+            daily: myDeltas.daily?.visitor,
+            weekly: myDeltas.weekly?.visitor,
+            monthly: myDeltas.monthly?.visitor,
+          } : undefined}
         />
         <KeyMetric
           label="블로그 리뷰"
           value={(myMetrics?.blogReviewCount ?? 0).toLocaleString()}
+          deltas={myDeltas ? {
+            daily: myDeltas.daily?.blog,
+            weekly: myDeltas.weekly?.blog,
+            monthly: myDeltas.monthly?.blog,
+          } : undefined}
         />
       </div>
 
@@ -197,10 +207,10 @@ export default function KeywordDetailPage({
                       )}
                     </td>
                     <td className="text-center px-3 py-2.5">
-                      <MetricCell value={p.visitorReviewCount} icon={MessageSquare} />
+                      <MetricCell value={p.visitorReviewCount} icon={MessageSquare} delta={p.visitorDelta1d} />
                     </td>
                     <td className="text-center px-3 py-2.5">
-                      <MetricCell value={p.blogReviewCount} icon={FileText} />
+                      <MetricCell value={p.blogReviewCount} icon={FileText} delta={p.blogDelta1d} />
                     </td>
                   </tr>
                 ))}
@@ -234,7 +244,7 @@ export default function KeywordDetailPage({
                     t.rank <= 3 ? "text-blue-600" :
                     t.rank <= 10 ? "text-foreground" : "text-red-500"
                   }`}>
-                    {t.rank ? `${t.rank}위` : "-"}
+                    {t.rank ? `${t.rank}위` : "권외"}
                   </div>
                 </div>
               ))}
@@ -246,24 +256,52 @@ export default function KeywordDetailPage({
   );
 }
 
-function KeyMetric({ label, value, color = "default" }: { label: string; value: string; color?: "default" | "blue" | "red" }) {
+function KeyMetric({
+  label, value, color = "default", deltas,
+}: {
+  label: string;
+  value: string;
+  color?: "default" | "blue" | "red";
+  deltas?: { daily?: number | null; weekly?: number | null; monthly?: number | null };
+}) {
   const colorClass = color === "blue" ? "text-blue-600" : color === "red" ? "text-red-600" : "text-foreground";
+  const fmt = (n: number | null | undefined) => {
+    if (n == null) return null;
+    if (n === 0) return <span className="text-muted-foreground">0</span>;
+    if (n > 0) return <span className="text-green-600 font-semibold">+{n}</span>;
+    return <span className="text-red-600 font-semibold">{n}</span>;
+  };
   return (
     <Card>
       <CardContent className="p-4 text-center">
         <p className="text-xs text-muted-foreground mb-1">{label}</p>
         <p className={`text-2xl font-black ${colorClass}`}>{value}</p>
+        {deltas && (
+          <div className="flex justify-center gap-2 mt-1.5 text-[10px]">
+            <span className="text-muted-foreground">일 {fmt(deltas.daily) ?? "-"}</span>
+            <span className="text-muted-foreground">주 {fmt(deltas.weekly) ?? "-"}</span>
+            <span className="text-muted-foreground">월 {fmt(deltas.monthly) ?? "-"}</span>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function MetricCell({ value, icon: Icon }: { value?: number; icon: any }) {
+function MetricCell({ value, icon: Icon, delta }: { value?: number; icon: any; delta?: number | null }) {
   if (value == null || value === 0) return <span className="text-muted-foreground">-</span>;
+  const deltaNode =
+    delta == null ? null :
+    delta === 0 ? <span className="text-[10px] text-muted-foreground">±0</span> :
+    delta > 0 ? <span className="text-[10px] text-green-600 font-semibold">+{delta}</span> :
+    <span className="text-[10px] text-red-600 font-semibold">{delta}</span>;
   return (
-    <span className="inline-flex items-center gap-1 text-sm">
-      <Icon size={11} className="text-muted-foreground" />
-      {value.toLocaleString()}
+    <span className="inline-flex flex-col items-center gap-0">
+      <span className="inline-flex items-center gap-1 text-sm">
+        <Icon size={11} className="text-muted-foreground" />
+        {value.toLocaleString()}
+      </span>
+      {deltaNode}
     </span>
   );
 }

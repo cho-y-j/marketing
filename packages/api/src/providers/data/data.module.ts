@@ -9,6 +9,7 @@ import { IngredientCollectorService } from "./ingredient-collector.service";
 import { KeywordModule } from "../../modules/keyword/keyword.module";
 import { AnalysisModule } from "../../modules/analysis/analysis.module";
 import { BriefingModule } from "../../modules/briefing/briefing.module";
+import { StoreModule } from "../../modules/store/store.module";
 
 @Global()
 @Module({
@@ -16,6 +17,7 @@ import { BriefingModule } from "../../modules/briefing/briefing.module";
     forwardRef(() => KeywordModule),
     forwardRef(() => AnalysisModule),
     forwardRef(() => BriefingModule),
+    forwardRef(() => StoreModule),
   ],
   providers: [
     DataCollectorService,

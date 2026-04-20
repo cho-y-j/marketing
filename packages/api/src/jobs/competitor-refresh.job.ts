@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma.service";
+import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { CompetitorService } from "../modules/competitor/competitor.service";
 import { NotificationService } from "../modules/notification/notification.service";
 import { AIProvider } from "../providers/ai/ai.provider";
@@ -28,9 +29,9 @@ export class CompetitorRefreshJob {
 
   @Cron("30 2 * * *") // 02:30 — 분석(04:00) 전에 경쟁사 데이터 미리 갱신 (API만, CLI 안 씀)
   async refreshAllCompetitors() {
-    const stores = await this.prisma.store.findMany({
-      where: { user: { subscriptionPlan: { not: "FREE" } } },
+    const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, userId: true },
+      caller: "CompetitorRefreshJob",
     });
 
     this.logger.log(`[04:30] 경쟁사 갱신 대상 ${stores.length}개 매장`);

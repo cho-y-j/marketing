@@ -17,6 +17,7 @@ import { ConsultationCTA } from "@/components/common/consultation-cta";
 import {
   Plus, Search, Loader2, Crown, ChevronRight,
   MessageSquare, FileText, Sparkles, RefreshCw, X, Trash2,
+  ArrowUp, ArrowDown, Minus,
 } from "lucide-react";
 
 export default function KeywordsPage() {
@@ -348,8 +349,26 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
             </div>
             <div className="text-right shrink-0">
               <div className={`text-2xl font-black ${rankColor}`}>
-                {myRank ? `${myRank}위` : "-"}
+                {myRank ? `${myRank}위` : <span className="text-base">100위 밖</span>}
               </div>
+              {/* 순위 변동 (어제 대비) */}
+              {kw.rankChange != null && (
+                <div className="text-[11px] font-semibold mt-0.5">
+                  {kw.rankChange > 0 ? (
+                    <span className="inline-flex items-center gap-0.5 text-green-600">
+                      <ArrowUp size={10} /> {kw.rankChange}
+                    </span>
+                  ) : kw.rankChange < 0 ? (
+                    <span className="inline-flex items-center gap-0.5 text-red-600">
+                      <ArrowDown size={10} /> {Math.abs(kw.rankChange)}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center text-muted-foreground">
+                      <Minus size={10} />
+                    </span>
+                  )}
+                </div>
+              )}
               <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover:text-primary transition-colors" />
             </div>
           </div>

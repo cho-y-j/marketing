@@ -82,9 +82,4 @@ export class StoreService {
     return this.prisma.store.delete({ where: { id } });
   }
 
-  async getActiveStores() {
-    return this.prisma.store.findMany({
-      where: { user: { subscriptionPlan: { not: "FREE" } } },
-    });
-  }
 }

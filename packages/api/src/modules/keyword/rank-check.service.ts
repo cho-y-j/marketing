@@ -297,17 +297,97 @@ export class RankCheckService {
       if (p.placeId) prevRankMap.set(p.placeId, p.rank);
       prevRankMap.set(p.name, p.rank);
     }
+    // 3-b. 리뷰 증감 — 내 매장 + 추적 경쟁사의 일별 스냅샷에서 델타 조회
+    const snapDate = new Date();
+    snapDate.setUTCHours(0, 0, 0, 0);
+    const storeSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId, date: { lte: snapDate } },
+      orderBy: { date: "desc" },
+      select: { visitorDelta: true, blogDelta: true, date: true },
+    });
+    const placeIds = topPlaces.map((p: any) => p.placeId).filter(Boolean);
+    const compSnaps = placeIds.length
+      ? await this.prisma.competitorDailySnapshot.findMany({
+          where: {
+            storeId,
+            competitorPlaceId: { in: placeIds },
+            date: { lte: snapDate },
+          },
+          orderBy: { date: "desc" },
+          select: {
+            competitorPlaceId: true,
+            visitorDelta: true,
+            blogDelta: true,
+            date: true,
+          },
+        })
+      : [];
+    // placeId별 최신 델타 1건만
+    const compDeltaMap = new Map<string, { visitorDelta: number | null; blogDelta: number | null }>();
+    for (const s of compSnaps) {
+      if (!compDeltaMap.has(s.competitorPlaceId)) {
+        compDeltaMap.set(s.competitorPlaceId, { visitorDelta: s.visitorDelta, blogDelta: s.blogDelta });
+      }
+    }
+
     // topPlaces에 변동량 추가
     topPlaces = topPlaces.map((p: any) => {
       const prevRank = (p.placeId && prevRankMap.get(p.placeId)) || prevRankMap.get(p.name);
       const rankChange = prevRank ? prevRank - p.rank : null; // 양수=상승, 음수=하락
+      let visitorDelta1d: number | null = null;
+      let blogDelta1d: number | null = null;
+      if (p.isMine) {
+        visitorDelta1d = storeSnap?.visitorDelta ?? null;
+        blogDelta1d = storeSnap?.blogDelta ?? null;
+      } else if (p.placeId && compDeltaMap.has(p.placeId)) {
+        const d = compDeltaMap.get(p.placeId)!;
+        visitorDelta1d = d.visitorDelta;
+        blogDelta1d = d.blogDelta;
+      }
       return {
         ...p,
         prevRank: prevRank || null,
         rankChange,
         isHot: rankChange != null && rankChange >= 10,
+        visitorDelta1d,
+        blogDelta1d,
       };
     });
+
+    // 3-c. 내 매장 7일/30일 누적 리뷰 증가 (상단 스탯용)
+    const weekAgo = new Date(snapDate);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const monthAgo = new Date(snapDate);
+    monthAgo.setDate(monthAgo.getDate() - 30);
+    const weekSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId, date: { lte: weekAgo } },
+      orderBy: { date: "desc" },
+      select: { visitorReviewCount: true, blogReviewCount: true },
+    });
+    const monthSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId, date: { lte: monthAgo } },
+      orderBy: { date: "desc" },
+      select: { visitorReviewCount: true, blogReviewCount: true },
+    });
+    const latestSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId },
+      orderBy: { date: "desc" },
+      select: { visitorReviewCount: true, blogReviewCount: true },
+    });
+    const myDeltas = {
+      daily: {
+        visitor: storeSnap?.visitorDelta ?? null,
+        blog: storeSnap?.blogDelta ?? null,
+      },
+      weekly: {
+        visitor: latestSnap && weekSnap ? (latestSnap.visitorReviewCount ?? 0) - (weekSnap.visitorReviewCount ?? 0) : null,
+        blog: latestSnap && weekSnap ? (latestSnap.blogReviewCount ?? 0) - (weekSnap.blogReviewCount ?? 0) : null,
+      },
+      monthly: {
+        visitor: latestSnap && monthSnap ? (latestSnap.visitorReviewCount ?? 0) - (monthSnap.visitorReviewCount ?? 0) : null,
+        blog: latestSnap && monthSnap ? (latestSnap.blogReviewCount ?? 0) - (monthSnap.blogReviewCount ?? 0) : null,
+      },
+    };
 
     // 3. 내 매장 정보
     const myKeyword = store.keywords[0];
@@ -346,6 +426,7 @@ export class RankCheckService {
       totalResults: latest?.totalResults,
       topPlaces,
       myMetrics: myRankInTopPlaces || null,
+      myDeltas,
       trend,
       insights,
       compareDays,

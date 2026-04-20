@@ -11,6 +11,6 @@ import { AIModule } from "../../providers/ai/ai.module";
   imports: [AIModule],
   controllers: [StoreController],
   providers: [StoreService, DashboardService, MarketingEngineService, DailySnapshotService, DailySnapshotJob],
-  exports: [StoreService, DashboardService, MarketingEngineService, DailySnapshotService],
+  exports: [StoreService, DashboardService, MarketingEngineService, DailySnapshotService, DailySnapshotJob],
 })
 export class StoreModule {}

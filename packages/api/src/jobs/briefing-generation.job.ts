@@ -3,6 +3,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { Queue } from "bull";
 import { PrismaService } from "../common/prisma.service";
+import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { QUEUES } from "./queue.constants";
 
 /**
@@ -23,10 +24,7 @@ export class BriefingGenerationJob {
 
   @Cron("0 6 * * *")
   async enqueueDailyBriefings() {
-    const stores = await this.prisma.store.findMany({
-      where: { user: { subscriptionPlan: { not: "FREE" } } },
-      select: { id: true, name: true },
-    });
+    const stores = await findAutoAnalysisStores(this.prisma, { caller: "BriefingGenerationJob" });
     this.logger.log(`[06시] 브리핑 enqueue 대상 ${stores.length}개`);
 
     for (const store of stores) {

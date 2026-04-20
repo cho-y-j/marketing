@@ -3,6 +3,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { Queue } from "bull";
 import { PrismaService } from "../common/prisma.service";
+import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { QUEUES } from "./queue.constants";
 
 /**
@@ -99,10 +100,7 @@ export class BatchAnalysisJob {
   }
 
   private async getActiveStores() {
-    return this.prisma.store.findMany({
-      where: { user: { subscriptionPlan: { not: "FREE" } } },
-      select: { id: true, name: true },
-    });
+    return findAutoAnalysisStores(this.prisma, { caller: "BatchAnalysisJob" });
   }
 
   // 매장 수에 따른 간격(초) 계산: 1시간 안에 전부 분산

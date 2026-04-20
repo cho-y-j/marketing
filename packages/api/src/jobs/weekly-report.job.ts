@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma.service";
+import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { NotificationService } from "../modules/notification/notification.service";
 import { ActionTrackingService } from "../modules/analysis/action-tracking.service";
 import { AIProvider } from "../providers/ai/ai.provider";
@@ -22,9 +23,9 @@ export class WeeklyReportJob {
 
   @Cron("30 7 * * 1") // 매주 월요일 07:30
   async generateWeeklyReports() {
-    const stores = await this.prisma.store.findMany({
-      where: { user: { subscriptionPlan: { not: "FREE" } } },
+    const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, userId: true, avgOrderValue: true },
+      caller: "WeeklyReportJob",
     });
 
     this.logger.log(`[월요일 07:30] 주간 성적표 대상 ${stores.length}개 매장`);

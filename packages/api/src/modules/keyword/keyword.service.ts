@@ -97,6 +97,11 @@ export class KeywordService {
 
         // 일/주/월 검색량 계산
         const monthly = kw.monthlySearchVolume ?? 0;
+        // 순위 변동 (어제 대비) — previousRank와 currentRank 차이
+        const rankChange =
+          kw.previousRank != null && kw.currentRank != null
+            ? kw.previousRank - kw.currentRank // 양수 = 상승
+            : null;
         return {
           ...kw,
           monthlyVolume: monthly,
@@ -104,6 +109,7 @@ export class KeywordService {
           dailyVolume: monthly > 0 ? Math.round(monthly / 30) : 0,
           totalResults: latest?.totalResults ?? null,
           checkedAt: latest?.checkedAt ?? null,
+          rankChange,
           top3,
           myPlace: myPlace || null,
         };

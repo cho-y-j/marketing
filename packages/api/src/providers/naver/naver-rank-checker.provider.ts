@@ -122,7 +122,7 @@ export class NaverRankCheckerProvider {
       }
 
       this.logger.log(
-        `순위 체크: "${keyword}" → ${storeName}: ${rank ? `${rank}위` : `${places.length > 0 ? places.length : 50}위 밖`} (${places.length}개 결과)`,
+        `순위 체크: "${keyword}" → ${storeName}: ${rank ? `${rank}위` : `${places.length > 0 ? places.length : 100}위 밖`} (${places.length}개 결과)`,
       );
 
       return {
@@ -164,8 +164,8 @@ export class NaverRankCheckerProvider {
       const topPlaces: RankCheckResult["topPlaces"] = [];
       let rank: number | null = null;
 
-      // Top 50까지 확장 (애드로그 수준)
-      const limit = Math.min(officialPlaces.length, 50);
+      // Top 100까지 확장 (애드로그 수준 + 초과)
+      const limit = Math.min(officialPlaces.length, 100);
 
       // 1) isMine 매칭은 빠르게 (Place API 없이) — rank 빠르게 산출
       for (let i = 0; i < limit; i++) {
@@ -179,7 +179,7 @@ export class NaverRankCheckerProvider {
         if (isMine && rank === null) rank = i + 1;
       }
 
-      // 2) Place API 병렬 호출 (배치 5개씩, 50개 매장 → 10번 배치)
+      // 2) Place API 병렬 호출 (배치 5개씩, 100개 매장 → 20번 배치)
       const BATCH_SIZE = 5;
       for (let batchStart = 0; batchStart < limit; batchStart += BATCH_SIZE) {
         const batch = officialPlaces.slice(batchStart, batchStart + BATCH_SIZE);
@@ -216,7 +216,7 @@ export class NaverRankCheckerProvider {
       }
 
       this.logger.log(
-        `순위 체크(API폴백): "${keyword}" → ${storeName}: ${rank ? `${rank}위` : "10위 밖"} (${topPlaces.length}개 매장 + 상세 수집)`,
+        `순위 체크(API폴백): "${keyword}" → ${storeName}: ${rank ? `${rank}위` : `${topPlaces.length}위 밖`} (${topPlaces.length}개 매장 + 상세 수집)`,
       );
 
       return {
@@ -247,7 +247,7 @@ export class NaverRankCheckerProvider {
         timeout: 10000,
       });
       const html: string = resp.data;
-      return this.extractPlacesFromHtml(html).slice(0, 50);
+      return this.extractPlacesFromHtml(html).slice(0, 100);
     } catch {
       return [];
     }
@@ -271,7 +271,14 @@ export class NaverRankCheckerProvider {
     const excludePatterns = [
       /^naver/i, /^search/i, /^http/i, /^image/i, /^icon/i,
       /^[가-힣]{1}$/,
+      // 가격대/필터 라벨 — 네이버는 "1만원 ~ 2만원" 같은 가격필터를 placeId 10000/20000 등으로 섞어 내보냄
+      /^\d+만원/, /만원\s*[~∼]/, /\d+원\s*이상/, /\d+원\s*이하/,
+      // 거리/시간 필터
+      /^\d+(m|km|분|시간)\s*(이내|이상|이하)?/i,
+      // 카테고리 탭 ("한식", "카페" 등 단일 카테고리는 매장이 아닐 가능성 높음) — 매장은 보통 2음절 이상 고유명
     ];
+    // placeId가 라운드 숫자(10000, 20000, 30000, ..., 100000) 필터인 경우 제외
+    const filterIdPattern = /^\d0000$/;
 
     // 1) "id":"숫자".....,"name":"매장명" 패턴 — placeId 와 name 을 함께 추출
     //    네이버는 plain JSON 으로 내보내므로 같은 객체 안에 id + name 이 인접
@@ -287,7 +294,8 @@ export class NaverRankCheckerProvider {
         !excludeSet.has(name) &&
         !excludePatterns.some((p) => p.test(name)) &&
         !/^\d+$/.test(name) &&
-        !name.includes("\\")
+        !name.includes("\\") &&
+        !filterIdPattern.test(id)
       ) {
         seen.add(name);
         places.push({ id, name });

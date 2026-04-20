@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma.service";
+import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { NaverPlaceProvider } from "../providers/naver/naver-place.provider";
 import { NaverSearchadProvider } from "../providers/naver/naver-searchad.provider";
 
@@ -39,9 +40,9 @@ export class DailySnapshotJob {
 
   // 매장 스냅샷 — 현재 리뷰 누적을 저장 + 전일 대비 delta 계산
   async collectStoreSnapshots(date: Date) {
-    const stores = await this.prisma.store.findMany({
-      where: { naverPlaceId: { not: null } },
+    const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, naverPlaceId: true },
+      caller: "DailySnapshotJob",
     });
 
     for (const store of stores) {

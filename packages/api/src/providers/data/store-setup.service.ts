@@ -5,8 +5,10 @@ import { NaverSearchProvider } from "../naver/naver-search.provider";
 import { NaverPlaceProvider } from "../naver/naver-place.provider";
 import { AIProvider } from "../ai/ai.provider";
 import { KeywordDiscoveryService } from "../../modules/keyword/keyword-discovery.service";
+import { RankCheckService } from "../../modules/keyword/rank-check.service";
 import { AnalysisService } from "../../modules/analysis/analysis.service";
 import { BriefingService } from "../../modules/briefing/briefing.service";
+import { DailySnapshotJob } from "../../jobs/daily-snapshot.job";
 
 @Injectable()
 export class StoreSetupService {
@@ -20,10 +22,14 @@ export class StoreSetupService {
     private ai: AIProvider,
     @Inject(forwardRef(() => KeywordDiscoveryService))
     private keywordDiscovery: KeywordDiscoveryService,
+    @Inject(forwardRef(() => RankCheckService))
+    private rankCheckService: RankCheckService,
     @Inject(forwardRef(() => AnalysisService))
     private analysisService: AnalysisService,
     @Inject(forwardRef(() => BriefingService))
     private briefingService: BriefingService,
+    @Inject(forwardRef(() => DailySnapshotJob))
+    private dailySnapshotJob: DailySnapshotJob,
   ) {}
 
   /**
@@ -190,7 +196,28 @@ export class StoreSetupService {
         this.logger.warn(`첫 분석 실패 (나중에 재시도 가능): ${e.message}`);
       }
 
-      // 6단계: 첫 브리핑 생성
+      // 6단계: 첫 순위 체크 — 가입 당일 내 키워드별 현재 순위 확보 (증감 기준선)
+      await this.updateSetupStatus(storeId, "RUNNING", "키워드 순위를 체크하는 중...");
+      try {
+        await this.rankCheckService.checkAllKeywordRanks(storeId);
+        this.logger.log(`첫 순위 체크 완료`);
+      } catch (e: any) {
+        this.logger.warn(`첫 순위 체크 실패 (나중에 재시도 가능): ${e.message}`);
+      }
+
+      // 7단계: 첫 일별 스냅샷 — 리뷰/검색량 기준선 확보
+      await this.updateSetupStatus(storeId, "RUNNING", "리뷰 기준선을 기록하는 중...");
+      try {
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+        await this.dailySnapshotJob.collectStoreSnapshots(today);
+        await this.dailySnapshotJob.collectCompetitorSnapshots(today);
+        this.logger.log(`첫 스냅샷 기록 완료`);
+      } catch (e: any) {
+        this.logger.warn(`첫 스냅샷 실패 (나중에 재시도 가능): ${e.message}`);
+      }
+
+      // 8단계: 첫 브리핑 생성
       await this.updateSetupStatus(storeId, "RUNNING", "오늘의 브리핑을 생성하는 중...");
       try {
         await this.briefingService.generateDailyBriefing(storeId);
@@ -199,7 +226,7 @@ export class StoreSetupService {
         this.logger.warn(`첫 브리핑 생성 실패 (나중에 재시도 가능): ${e.message}`);
       }
 
-      // 7단계: 셋업 완료
+      // 9단계: 셋업 완료
       const totalKeywords = keywordCount + hiddenCount;
       const scoreText = analysisScore ? `, 경쟁력 ${analysisScore}점` : "";
       await this.prisma.store.update({

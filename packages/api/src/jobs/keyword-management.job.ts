@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma.service";
+import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { KeywordDiscoveryService } from "../modules/keyword/keyword-discovery.service";
 import { KeywordService } from "../modules/keyword/keyword.service";
 import { NotificationService } from "../modules/notification/notification.service";
@@ -32,9 +33,9 @@ export class KeywordManagementJob {
 
   @Cron("0 3 * * 1") // 매주 월요일 03:00
   async weeklyKeywordManagement() {
-    const stores = await this.prisma.store.findMany({
-      where: { user: { subscriptionPlan: { not: "FREE" } } },
+    const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, userId: true, district: true, category: true },
+      caller: "KeywordManagementJob",
     });
 
     this.logger.log(`[월요일 03:00] 키워드 관리 대상 ${stores.length}개 매장`);
