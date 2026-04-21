@@ -715,21 +715,41 @@ export class StoreSetupService {
       }
     }
 
-    // AI 완전 실패 시: 매우 보수적 최소 폴백 (지역+맛집 형태만)
+    // AI 완전 실패 시 규칙 기반 최소 폴백 (AI 없이도 셋업 성공하도록 5개 이상 보장)
     const fallback: string[] = [];
-    const primaryRegion = brandLocationHint || dong?.replace(/동$/, "") || gu?.replace(/구$/, "");
-    if (primaryRegion) {
-      fallback.push(`${primaryRegion} 맛집`);
-      fallback.push(`${primaryRegion}역 맛집`);
-    }
-    // 대표 메뉴 1개만 (카테고리 원문 X, 세부 메뉴만)
+    // 지명 접미사 모두 제거 (단양읍 → 단양)
+    const primaryRegion =
+      brandLocationHint ||
+      dong?.replace(/(동|읍|면)$/, "") ||
+      gu?.replace(/구$/, "") ||
+      "";
+    // 대도시 여부 (역 키워드 생성 여부 판단)
+    const isMetro = /특별시|광역시|서울|부산|대구|인천|광주|대전|울산|수원|성남|고양/.test(address);
+    // 대표 메뉴 추출 (카테고리 원문/포괄어 제외, 세부 메뉴만)
     const safeMenus = categoryParts.filter(
-      (c) => !c.includes(">") && c.length >= 2 && c.length <= 6 && !["음식점", "한식", "양식", "일식", "중식", "기타"].includes(c),
+      (c) =>
+        !c.includes(">") &&
+        c.length >= 2 &&
+        c.length <= 6 &&
+        !["음식점", "한식", "양식", "일식", "중식", "기타", "분식", "주점"].includes(c),
     );
-    if (primaryRegion && safeMenus.length > 0) {
-      fallback.push(`${primaryRegion} ${safeMenus[0]}`);
+
+    if (primaryRegion) {
+      // 유입 카테고리 (최소 2개)
+      fallback.push(`${primaryRegion} 맛집`);
+      if (isMetro) fallback.push(`${primaryRegion}역 맛집`);
+      else fallback.push(`${primaryRegion} 식당`);
+      // 상황 카테고리 (최소 2개)
+      fallback.push(`${primaryRegion} 회식`);
+      fallback.push(`${primaryRegion} 점심`);
+      // 메뉴 카테고리 (대표 메뉴 각각 1개씩)
+      for (const menu of safeMenus.slice(0, 3)) {
+        fallback.push(`${primaryRegion} ${menu}`);
+      }
     }
-    return this.sanitizeKeywords(fallback, primaryRegion || "");
+
+    this.logger.warn(`AI 완전 실패 — 규칙 기반 폴백 ${fallback.length}개 생성`);
+    return this.sanitizeKeywords(fallback, primaryRegion);
   }
 
   /**
