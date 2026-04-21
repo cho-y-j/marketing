@@ -174,9 +174,27 @@ export class StoreController {
   }
 
   @Get(":id/events")
-  @ApiOperation({ summary: "현재 진행 중인 주변 축제/이벤트 조회" })
+  @ApiOperation({ summary: "주변 축제/이벤트 조회 (진행중 + 다가오는)" })
   getEvents(@Param("id") id: string) {
     return this.eventCollector.getActiveEventsForStore(id);
+  }
+
+  @Get(":id/events/:eventId/suggest-keywords")
+  @ApiOperation({ summary: "축제 맞춤 광고 키워드 AI 추천" })
+  suggestEventKeywords(
+    @Param("id") id: string,
+    @Param("eventId") eventId: string,
+  ) {
+    return this.eventCollector.suggestMarketingKeywords(id, eventId);
+  }
+
+  @Post(":id/events/add-keywords")
+  @ApiOperation({ summary: "축제 키워드를 SEASONAL 로 일괄 추가" })
+  addEventKeywords(
+    @Param("id") id: string,
+    @Body() body: { keywords: string[] },
+  ) {
+    return this.eventCollector.addSeasonalKeywords(id, body.keywords ?? []);
   }
 
   @Post("consultation")

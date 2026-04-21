@@ -8,7 +8,7 @@ describe("EventCollectorService utils", () => {
   let svc: any;
 
   beforeEach(() => {
-    svc = new EventCollectorService(null as any, null as any);
+    svc = new EventCollectorService(null as any, null as any, null as any);
   });
 
   describe("parseYmd", () => {

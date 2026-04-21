@@ -1,334 +1,268 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
-import { CARD_BASE, formatNumber, getKeywordTypeConfig } from "@/lib/design-system";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
-  CalendarDays,
-  MapPin,
-  TrendingUp,
-  Plus,
-  Loader2,
-  Sparkles,
-  PartyPopper,
-  Search,
+  CalendarDays, MapPin, Loader2, Sparkles, PartyPopper, Check, Plus,
 } from "lucide-react";
 
-// 시즌 키워드 (type=SEASONAL) 조회
-function useSeasonalKeywords(storeId: string) {
-  return useQuery({
-    queryKey: ["keywords", storeId, "seasonal"],
-    queryFn: async () => {
-      const { data } = await apiClient.get(`/stores/${storeId}/keywords`, {
-        params: { type: "SEASONAL" },
-      });
-      return data as Array<{
-        id: string;
-        keyword: string;
-        type: string;
-        searchVolume: number | null;
-        rank: number | null;
-        event?: string;
-        startDate?: string;
-        endDate?: string;
-        location?: string;
-      }>;
-    },
-    enabled: !!storeId,
-  });
-}
+type Event = {
+  id: string;
+  name: string;
+  region: string | null;
+  startDate: string;
+  endDate: string;
+  keywords: string[];
+  description: string | null;
+  status: "ongoing" | "upcoming";
+  daysUntilStart: number;
+  isNearby: boolean;
+};
 
-// 실제 축제 데이터 (TourAPI)
-function useActiveEvents(storeId: string) {
-  return useQuery({
+type KeywordSuggestion = { keyword: string; reason: string };
+
+export default function EventsPage() {
+  const { storeId } = useCurrentStoreId();
+
+  const { data: events, isLoading } = useQuery({
     queryKey: ["events", storeId],
     queryFn: async () => {
       const { data } = await apiClient.get(`/stores/${storeId}/events`);
-      return data as Array<{
-        id: string;
-        name: string;
-        region: string | null;
-        startDate: string;
-        endDate: string;
-        keywords: string[];
-        description: string | null;
-      }>;
+      return data as Event[];
     },
     enabled: !!storeId,
-    retry: false,
   });
-}
 
-// 축제 수집 트리거
-function useCollectEvents(storeId: string) {
   const qc = useQueryClient();
-  return useMutation({
+  const collect = useMutation({
     mutationFn: async () => {
       const { data } = await apiClient.post(`/stores/${storeId}/events/collect`);
-      return data;
+      return data as number;
     },
     onSuccess: (count: number) => {
       qc.invalidateQueries({ queryKey: ["events", storeId] });
       toast.success(`주변 축제 ${count}건 수집 완료`);
     },
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message || "축제 수집 실패"),
+    onError: (e: any) => toast.error(e.response?.data?.message || "수집 실패"),
   });
-}
 
-function useAddKeyword(storeId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (keyword: string) => {
-      const { data } = await apiClient.post(`/stores/${storeId}/keywords`, {
-        keyword,
-        type: "SEASONAL",
-      });
-      return data;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["keywords", storeId] });
-      toast.success("키워드가 추가되었습니다");
-    },
-    onError: (e: any) =>
-      toast.error(e.response?.data?.message || "키워드 추가 실패"),
-  });
-}
+  if (isLoading) {
+    return (
+      <div className="space-y-4 max-w-4xl mx-auto">
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-40 rounded-xl" />
+        <Skeleton className="h-40 rounded-xl" />
+      </div>
+    );
+  }
 
-function formatDateRange(start?: string, end?: string): string {
-  if (!start) return "";
-  const s = new Date(start).toLocaleDateString("ko-KR", {
-    month: "short",
-    day: "numeric",
-  });
-  if (!end) return s;
-  const e = new Date(end).toLocaleDateString("ko-KR", {
-    month: "short",
-    day: "numeric",
-  });
-  return `${s} ~ ${e}`;
-}
-
-export default function EventsPage() {
-  const { storeId } = useCurrentStoreId();
-  const { data: seasonalKeywords, isLoading: kwLoading } =
-    useSeasonalKeywords(storeId);
-  const { data: activeEvents, isLoading: eventsLoading } =
-    useActiveEvents(storeId);
-  const collectEvents = useCollectEvents(storeId);
-  const addKeyword = useAddKeyword(storeId);
-
-  const keywords = seasonalKeywords ?? [];
-  const events = activeEvents ?? [];
-  const isLoading = kwLoading || eventsLoading;
-
-  const festivalKeywords = keywords.filter((k: any) => k.event || k.startDate);
-  const seasonKeywords = keywords;
-
-  const handleAddKeyword = (keyword: string) => {
-    addKeyword.mutate(keyword);
-  };
+  const list = events ?? [];
+  const ongoing = list.filter((e) => e.status === "ongoing");
+  const upcoming = list.filter((e) => e.status === "upcoming");
 
   return (
-    <div className="space-y-4 md:space-y-6 max-w-5xl mx-auto">
-      {/* 헤더 */}
-      <div>
-        <h2 className="text-xl md:text-2xl font-bold tracking-tight text-text-primary">
-          시즌 이벤트
-        </h2>
-        <p className="text-sm text-text-secondary mt-0.5">
-          시즌 키워드와 주변 축제를 활용한 마케팅 기회
-        </p>
+    <div className="space-y-4 max-w-4xl mx-auto">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold">시즌 이벤트</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            내 매장 근방 축제 · 광고 키워드 AI 추천
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => collect.mutate()}
+          disabled={collect.isPending}
+        >
+          {collect.isPending ? <Loader2 size={14} className="animate-spin mr-1" /> : <CalendarDays size={14} className="mr-1" />}
+          다시 수집
+        </Button>
       </div>
 
-      {isLoading ? (
-        <div className="space-y-4">
-          <Skeleton className="h-48 rounded-2xl" />
-          <Skeleton className="h-64 rounded-2xl" />
-        </div>
-      ) : (
-        <>
-          {/* 지금 근처 축제/이벤트 */}
-          <div className={`${CARD_BASE} overflow-hidden`}>
-            <div className="flex items-center justify-between p-4 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="size-7 rounded-lg bg-danger-light flex items-center justify-center">
-                  <PartyPopper size={14} className="text-danger" />
-                </div>
-                <h3 className="text-sm font-semibold text-text-primary">
-                  지금 근처 축제/이벤트
-                </h3>
-              </div>
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => collectEvents.mutate()}
-                disabled={collectEvents.isPending}
-                className="rounded-lg text-xs"
-              >
-                {collectEvents.isPending ? (
-                  <Loader2 size={12} className="animate-spin mr-1" />
-                ) : (
-                  <CalendarDays size={12} className="mr-1" />
-                )}
-                축제 수집
-              </Button>
-            </div>
-            <div className="px-4 pb-4">
-              {events.length > 0 ? (
-                <div className="space-y-2">
-                  {events.map((ev) => (
-                    <div
-                      key={ev.id}
-                      className="p-3 bg-surface-secondary rounded-xl"
-                    >
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="size-7 rounded-lg bg-warning-light flex items-center justify-center shrink-0">
-                          <CalendarDays size={14} className="text-warning" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-text-primary truncate">
-                            {ev.name}
-                          </p>
-                          <div className="flex items-center gap-3 text-[11px] text-text-tertiary mt-0.5">
-                            <span className="flex items-center gap-0.5">
-                              <CalendarDays size={10} />
-                              {formatDateRange(ev.startDate, ev.endDate)}
-                            </span>
-                            {ev.region && (
-                              <span className="flex items-center gap-0.5">
-                                <MapPin size={10} />
-                                {ev.region}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      {ev.keywords && ev.keywords.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 ml-10">
-                          {ev.keywords.slice(0, 5).map((kw) => (
-                            <button
-                              key={kw}
-                              onClick={() => addKeyword.mutate(kw)}
-                              className="text-[10px] px-2 py-0.5 rounded-md bg-brand-subtle text-brand font-medium hover:bg-brand/20 transition-colors flex items-center gap-0.5"
-                            >
-                              <Plus size={8} /> {kw}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-8 text-center">
-                  <div className="size-12 rounded-xl bg-surface-tertiary flex items-center justify-center mx-auto mb-3">
-                    <MapPin size={20} className="text-text-tertiary" />
-                  </div>
-                  <p className="text-sm text-text-secondary font-medium">
-                    매장 주소 기반으로 주변 축제를 자동 수집합니다
-                  </p>
-                  <p className="text-xs text-text-tertiary mt-1">
-                    TourAPI 연동을 통해 근처 축제/행사가 자동 반영됩니다
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+      {list.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            <MapPin size={24} className="mx-auto mb-2 text-muted-foreground/40" />
+            <p>내 매장 근방 축제 정보가 없습니다</p>
+            <p className="text-xs mt-1">"다시 수집" 버튼을 눌러보세요</p>
+          </CardContent>
+        </Card>
+      )}
 
-          {/* 시즌 키워드 추천 */}
-          <div className={`${CARD_BASE} overflow-hidden`}>
-            <div className="flex items-center gap-2.5 p-4 pb-3">
-              <div className="size-7 rounded-lg bg-success-light flex items-center justify-center">
-                <TrendingUp size={14} className="text-success" />
-              </div>
-              <h3 className="text-sm font-semibold text-text-primary">
-                시즌 키워드 추천
-              </h3>
-            </div>
-            <div className="px-4 pb-4">
-              {seasonKeywords.length > 0 ? (
-                <div className="space-y-2">
-                  {seasonKeywords.map((kw) => {
-                    const cfg = getKeywordTypeConfig(kw.type);
-                    return (
-                      <div
-                        key={kw.id}
-                        className="flex items-center justify-between gap-3 p-3 bg-surface-secondary rounded-xl"
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="size-7 rounded-lg bg-brand-subtle flex items-center justify-center shrink-0">
-                            <Search size={14} className="text-brand" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-semibold text-text-primary">
-                                {kw.keyword}
-                              </p>
-                              <span
-                                className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cfg.color}`}
-                              >
-                                {cfg.label}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-3 text-[11px] text-text-tertiary mt-0.5">
-                              {kw.searchVolume != null && (
-                                <span>
-                                  월 검색량{" "}
-                                  <strong className="text-text-secondary">
-                                    {formatNumber(kw.searchVolume)}
-                                  </strong>
-                                </span>
-                              )}
-                              {kw.rank != null && (
-                                <span>
-                                  현재 순위{" "}
-                                  <strong className="text-text-secondary">
-                                    {kw.rank}위
-                                  </strong>
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleAddKeyword(kw.keyword)}
-                          disabled={addKeyword.isPending}
-                          className="rounded-xl border-border-primary shrink-0"
-                        >
-                          {addKeyword.isPending ? (
-                            <Loader2 size={12} className="animate-spin" />
-                          ) : (
-                            <Plus size={14} />
-                          )}
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="py-8 text-center">
-                  <div className="size-12 rounded-xl bg-surface-tertiary flex items-center justify-center mx-auto mb-3">
-                    <CalendarDays size={20} className="text-text-tertiary" />
-                  </div>
-                  <p className="text-sm text-text-secondary font-medium">
-                    시즌 키워드가 없습니다
-                  </p>
-                  <p className="text-xs text-text-tertiary mt-1">
-                    AI가 매장 업종과 시즌에 맞는 키워드를 자동 추천합니다
-                  </p>
-                </div>
-              )}
-            </div>
+      {/* 진행 중 */}
+      {ongoing.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <Badge className="bg-red-100 text-red-700 border-red-300">🔴 진행 중</Badge>
+            <span className="text-xs text-muted-foreground">{ongoing.length}건</span>
           </div>
-        </>
+          {ongoing.map((ev) => (
+            <EventCard key={ev.id} event={ev} storeId={storeId} />
+          ))}
+        </div>
+      )}
+
+      {/* 다가오는 */}
+      {upcoming.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <Badge className="bg-sky-50 text-sky-700 border-sky-300">📅 다가오는 축제</Badge>
+            <span className="text-xs text-muted-foreground">{upcoming.length}건 — 미리 키워드 준비하세요</span>
+          </div>
+          {upcoming.map((ev) => (
+            <EventCard key={ev.id} event={ev} storeId={storeId} />
+          ))}
+        </div>
       )}
     </div>
+  );
+}
+
+function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
+  const [suggestions, setSuggestions] = useState<KeywordSuggestion[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [addedKeywords, setAddedKeywords] = useState<Set<string>>(new Set());
+  const qc = useQueryClient();
+
+  const suggest = async () => {
+    setLoading(true);
+    try {
+      const { data } = await apiClient.get(
+        `/stores/${storeId}/events/${event.id}/suggest-keywords`,
+      );
+      setSuggestions(data.keywords);
+      if (data.keywords.length === 0) toast.info("추천 키워드 없음 — 재시도해 보세요");
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || "추천 실패");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addAll = async () => {
+    if (!suggestions || suggestions.length === 0) return;
+    try {
+      const { data } = await apiClient.post(
+        `/stores/${storeId}/events/add-keywords`,
+        { keywords: suggestions.map((s) => s.keyword) },
+      );
+      toast.success(`${data}개 키워드 추가됨`);
+      setAddedKeywords(new Set(suggestions.map((s) => s.keyword)));
+      qc.invalidateQueries({ queryKey: ["keywords", storeId] });
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || "추가 실패");
+    }
+  };
+
+  const addOne = async (keyword: string) => {
+    try {
+      await apiClient.post(`/stores/${storeId}/events/add-keywords`, {
+        keywords: [keyword],
+      });
+      toast.success(`"${keyword}" 추가됨`);
+      setAddedKeywords((prev) => new Set(prev).add(keyword));
+      qc.invalidateQueries({ queryKey: ["keywords", storeId] });
+    } catch (e: any) {
+      toast.error("추가 실패");
+    }
+  };
+
+  const dateRange = `${event.startDate.slice(5, 10)} ~ ${event.endDate.slice(5, 10)}`;
+  const dLabel =
+    event.status === "ongoing"
+      ? `${new Date(event.endDate).getDate() - new Date().getDate()}일 남음`
+      : `D-${event.daysUntilStart}`;
+
+  return (
+    <Card className={event.status === "ongoing" ? "border-red-200" : event.isNearby ? "border-sky-200" : ""}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <PartyPopper size={14} className="text-amber-600 shrink-0" />
+              <h3 className="font-bold text-base truncate">{event.name}</h3>
+              {event.isNearby && (
+                <Badge variant="outline" className="text-[10px] bg-sky-50 text-sky-700 border-sky-200">
+                  같은 지역
+                </Badge>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1">
+                <CalendarDays size={11} /> {dateRange}
+              </span>
+              {event.region && (
+                <span className="inline-flex items-center gap-1">
+                  <MapPin size={11} /> {event.region}
+                </span>
+              )}
+              <Badge variant="outline" className="text-[10px]">
+                {dLabel}
+              </Badge>
+            </div>
+            {event.description && (
+              <p className="text-xs text-muted-foreground mt-1.5 line-clamp-1">{event.description}</p>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant={suggestions ? "outline" : "default"}
+            onClick={suggest}
+            disabled={loading}
+          >
+            {loading ? <Loader2 size={12} className="animate-spin mr-1" /> : <Sparkles size={12} className="mr-1" />}
+            {suggestions ? "다시 추천" : "광고 키워드 추천"}
+          </Button>
+        </div>
+
+        {suggestions && suggestions.length > 0 && (
+          <div className="mt-3 pt-3 border-t space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-muted-foreground">
+                AI 추천 광고 키워드 ({suggestions.length}개)
+              </span>
+              <Button size="xs" variant="outline" onClick={addAll}>
+                <Plus size={10} className="mr-1" /> 모두 추가
+              </Button>
+            </div>
+            <div className="space-y-1.5">
+              {suggestions.map((s, i) => {
+                const added = addedKeywords.has(s.keyword);
+                return (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-2 px-2.5 py-2 rounded-md border text-xs ${
+                      added ? "bg-green-50 border-green-200" : "bg-muted/30 border-border"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-foreground">{s.keyword}</div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">{s.reason}</div>
+                    </div>
+                    {added ? (
+                      <Badge className="bg-green-100 text-green-700 border-green-300 shrink-0">
+                        <Check size={10} className="mr-0.5" /> 추가됨
+                      </Badge>
+                    ) : (
+                      <Button size="xs" variant="ghost" onClick={() => addOne(s.keyword)} className="shrink-0">
+                        <Plus size={11} />
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

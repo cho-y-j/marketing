@@ -5,6 +5,7 @@ import {
   TourapiNotConfiguredError,
   TourapiFestival,
 } from "./tourapi.provider";
+import { AIProvider } from "../ai/ai.provider";
 
 /**
  * 시즌 이벤트(축제) 자동 수집기.
@@ -27,6 +28,7 @@ export class EventCollectorService {
   constructor(
     private prisma: PrismaService,
     private tourapi: TourapiProvider,
+    private ai: AIProvider,
   ) {}
 
   /**
@@ -80,27 +82,37 @@ export class EventCollectorService {
       return collected;
     };
 
-    let tier: "sigungu" | "sido" | "nation" = "nation";
+    // 시군구 + 시도 둘 다 수집 (중복 제거)
+    //   - 시군구 매칭: "단양"
+    //   - 시도 매칭: "충북 전체" — 같은 시도 내 다른 시군구 (사장님 요구: 단양+주변 지역)
+    //   - 시도 매칭 결과 중 시군구와 가까운 순으로 자연스럽게 보이도록 relevance 부여
+    const seen = new Set<string>();
+    const sigunguHits = new Set<string>();
+    const addList = (list: TourapiFestival[]) => {
+      for (const f of list) {
+        const key = `${f.title}_${f.eventstartdate}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        all.push(f);
+      }
+    };
+
     if (ldong.regn && ldong.signgu) {
       const list = await fetchPaged({ lDongRegnCd: ldong.regn, lDongSignguCd: ldong.signgu });
-      if (list.length > 0) {
-        all.push(...list);
-        tier = "sigungu";
-      }
+      for (const f of list) sigunguHits.add(`${f.title}_${f.eventstartdate}`);
+      addList(list);
     }
-    if (all.length === 0 && ldong.regn) {
+    if (ldong.regn) {
       const list = await fetchPaged({ lDongRegnCd: ldong.regn });
-      if (list.length > 0) {
-        all.push(...list);
-        tier = "sido";
-      }
+      addList(list);
     }
     if (all.length === 0) {
-      // 전국 축제 (마지막 폴백) — 대형 행사나 전국 관광 대상
-      all.push(...(await fetchPaged({})));
-      tier = "nation";
+      // 시도 매칭 결과 0개 → 전국 대형 행사로 폴백
+      addList(await fetchPaged({}));
     }
-    this.logger.log(`[${store.name}] 축제 ${all.length}건 수집됨 (${tier} 매칭)`);
+    this.logger.log(
+      `[${store.name}] 축제 ${all.length}건 수집 (시군구직매칭 ${sigunguHits.size}건)`,
+    );
 
     // 4) DB upsert — contentid 를 자연 키로 사용 (SeasonalEvent 에 unique 가 없으므로 name+startDate 매칭)
     let count = 0;
@@ -144,7 +156,8 @@ export class EventCollectorService {
   }
 
   /**
-   * 매장 region 컬럼에 부합하는 현재 진행 중인 축제 조회.
+   * 매장과 관련 있는 축제 — 진행 중 + 다가오는 (endDate >= today).
+   * 결과에 "ongoing"/"upcoming" 구분 필드 포함.
    */
   async getActiveEventsForStore(storeId: string) {
     const store = await this.prisma.store.findUnique({
@@ -154,8 +167,8 @@ export class EventCollectorService {
     if (!store) return [];
     const region = this.extractRegion(store.address || store.district || "");
     const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
 
-    // "충북" → "충청북도" 매핑 (짧은 표기 → 정식명)
     const shortToFull: Record<string, string> = {
       충북: "충청북도", 충남: "충청남도", 전북: "전라북도", 전남: "전라남도",
       경북: "경상북도", 경남: "경상남도", 경기: "경기도", 강원: "강원",
@@ -163,23 +176,154 @@ export class EventCollectorService {
       광주: "광주", 대전: "대전", 울산: "울산", 세종: "세종", 제주: "제주",
     };
     const regionVariants = region
-      ? [region, shortToFull[region], ...(shortToFull[region] ? [shortToFull[region]] : [])].filter(Boolean)
+      ? [region, shortToFull[region]].filter(Boolean)
       : [];
 
-    return this.prisma.seasonalEvent.findMany({
+    const events = await this.prisma.seasonalEvent.findMany({
       where: {
-        startDate: { lte: today },
+        // 진행 중 + 다가오는 (끝나지 않은 것 모두)
         endDate: { gte: today },
         ...(regionVariants.length > 0
-          ? { OR: [
-              ...regionVariants.map((r) => ({ region: { contains: r as string } })),
-              { region: null },
-            ] }
+          ? {
+              OR: [
+                ...regionVariants.map((r) => ({ region: { contains: r as string } })),
+              ],
+            }
           : {}),
       },
       orderBy: { startDate: "asc" },
-      take: 10,
+      take: 20,
     });
+
+    // 진행중/다가오는 구분 + 시군구(가장 구체) 매칭 우선 정렬
+    const storeSignguName = this.extractSigungu(store.address || store.district || "");
+    return events.map((ev) => {
+      const isOngoing = ev.startDate <= today && ev.endDate >= today;
+      const daysUntilStart = isOngoing
+        ? 0
+        : Math.floor((ev.startDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      const isNearby =
+        !!storeSignguName &&
+        (ev.region?.includes(storeSignguName) ||
+          ev.description?.includes(storeSignguName));
+      return {
+        ...ev,
+        status: isOngoing ? ("ongoing" as const) : ("upcoming" as const),
+        daysUntilStart,
+        isNearby,
+      };
+    });
+  }
+
+  /**
+   * 특정 축제에 대한 매장 맞춤 광고 키워드 AI 추천.
+   * @returns 키워드 5~8개 + 추천 이유
+   */
+  async suggestMarketingKeywords(storeId: string, eventId: string): Promise<{
+    keywords: Array<{ keyword: string; reason: string }>;
+    event: { name: string; startDate: Date; endDate: Date };
+  }> {
+    const [store, event] = await Promise.all([
+      this.prisma.store.findUnique({
+        where: { id: storeId },
+        select: { name: true, address: true, category: true, keyIngredients: true, keywords: { select: { keyword: true }, take: 10 } },
+      }),
+      this.prisma.seasonalEvent.findUnique({ where: { id: eventId } }),
+    ]);
+    if (!store || !event) throw new Error("store or event not found");
+
+    const systemPrompt = `당신은 자영업 마케팅 전문가. 특정 지역 축제를 매장 유입으로 연결하는 실전 광고 키워드를 추천한다.
+
+## 원칙
+- 축제 방문객/관광객이 축제 전/후 **실제 검색할 만한 키워드**
+- 축제 이름 + 매장 지역 + 매장 업종/메뉴 조합 중심
+- 방문 의도 있는 키워드 (정보 탐색 X)
+- 포괄어 금지 ("맛집", "한식" 단독 X — 반드시 지역 결합)
+- 각 키워드의 추천 이유 한 줄 (왜 이게 효과적인지)
+
+## 출력 (JSON만, 설명 없이)
+{
+  "keywords": [
+    {"keyword": "단양 철쭉제 맛집", "reason": "축제 방문객의 식사 검색 1순위"},
+    {"keyword": "단양 소백산 등산 후 보리밥", "reason": "철쭉제 + 등산 + 매장 대표메뉴 조합"},
+    ...
+  ]
+}
+
+5~8개 생성. 중복/유사 금지.`;
+
+    const userPrompt = `[매장 정보]
+- 이름: ${store.name}
+- 주소: ${store.address}
+- 업종: ${store.category}
+- 대표 메뉴/주재료: ${store.keyIngredients.join(", ") || "-"}
+- 기존 키워드: ${store.keywords.map((k) => k.keyword).join(", ")}
+
+[축제 정보]
+- 이름: ${event.name}
+- 기간: ${event.startDate.toISOString().slice(0, 10)} ~ ${event.endDate.toISOString().slice(0, 10)}
+- 지역: ${event.region ?? "-"}
+- 축제 관련 키워드 (추출됨): ${(event.keywords as string[]).join(", ")}
+
+위 축제를 이 매장의 유입으로 연결할 실전 광고 키워드 5~8개를 JSON 으로.`;
+
+    try {
+      const resp = await this.ai.analyze(systemPrompt, userPrompt);
+      const match = resp.content.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("JSON not found");
+      const parsed = JSON.parse(match[0]);
+      const keywords = (parsed.keywords ?? [])
+        .filter((k: any) => typeof k?.keyword === "string" && typeof k?.reason === "string")
+        .slice(0, 8);
+      this.logger.log(`축제 "${event.name}" 광고 키워드 ${keywords.length}개 [${resp.provider}]`);
+      return {
+        keywords,
+        event: { name: event.name, startDate: event.startDate, endDate: event.endDate },
+      };
+    } catch (e: any) {
+      this.logger.warn(`광고 키워드 추천 실패: ${e.message}`);
+      return { keywords: [], event: { name: event.name, startDate: event.startDate, endDate: event.endDate } };
+    }
+  }
+
+  /** 추천 키워드를 StoreKeyword.SEASONAL 로 일괄 추가 */
+  async addSeasonalKeywords(storeId: string, keywords: string[]): Promise<number> {
+    let added = 0;
+    for (const kw of keywords) {
+      const trimmed = kw.trim();
+      if (trimmed.length < 2 || trimmed.length > 30) continue;
+      try {
+        await this.prisma.storeKeyword.create({
+          data: { storeId, keyword: trimmed, type: "SEASONAL" },
+        });
+        added++;
+      } catch (e: any) {
+        if (!e.message?.includes("Unique")) {
+          this.logger.warn(`시즌 키워드 추가 실패 [${trimmed}]: ${e.message}`);
+        }
+      }
+    }
+    return added;
+  }
+
+  /** 주소에서 시군구 이름만 추출 (예: "충북 단양군 단양읍" → "단양군") */
+  private extractSigungu(address: string): string {
+    const parts = address.split(/\s+/).filter(Boolean);
+    const SIDO_SET = new Set([
+      "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
+      "경기도", "강원도", "강원특별자치도",
+      "충북", "충청북도", "충남", "충청남도",
+      "전북", "전북특별자치도", "전라북도", "전남", "전라남도",
+      "경북", "경상북도", "경남", "경상남도", "제주", "제주특별자치도",
+      "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시",
+      "대전광역시", "울산광역시", "세종특별자치시",
+    ]);
+    for (const p of parts) {
+      if (/(군|시|구)$/.test(p) && p.length >= 2 && !SIDO_SET.has(p)) {
+        return p;
+      }
+    }
+    return "";
   }
 
   // ===== 유틸 =====
