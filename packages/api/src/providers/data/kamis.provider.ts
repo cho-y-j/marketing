@@ -75,6 +75,7 @@ export class KamisProvider {
    */
   async getDailyPriceList(opts: {
     itemCategoryCode: string;
+    regday?: string; // YYYY-MM-DD (미지정 시 오늘)
     itemCode?: string;
     kindCode?: string;
     productClsCode?: "01" | "02";
@@ -83,16 +84,21 @@ export class KamisProvider {
   }): Promise<KamisPricePoint[]> {
     if (!this.isConfigured()) throw new KamisNotConfiguredError();
 
-    const cacheKey = `kamis:daily:${opts.itemCategoryCode}:${opts.itemCode ?? "_"}:${opts.kindCode ?? "_"}:${opts.productClsCode ?? "01"}`;
+    const regday = opts.regday ?? new Date().toISOString().slice(0, 10);
+    const cacheKey = `kamis:daily:${opts.itemCategoryCode}:${regday}:${opts.productClsCode ?? "01"}`;
     const cached = await this.cache.get<KamisPricePoint[]>(cacheKey);
     if (cached) return cached;
 
+    // KAMIS 는 http 만 제공하고 302 로 https://www.kamis.or.kr 로 리다이렉트
+    // → axios 의 기본 maxRedirects=5 가 따라가지만 co.kr→or.kr 이슈 방지 위해 or.kr 직접 사용
+    const url = "https://www.kamis.or.kr/service/price/xml.do";
     const params = {
       action: "dailyPriceByCategoryList",
       p_product_cls_code: opts.productClsCode ?? "01",
-      p_country_code: opts.countryCode ?? "1101", // 서울 기본
+      p_country_code: opts.countryCode ?? "1101",
       p_convert_kg_yn: opts.convertKgYn ?? "Y",
       p_item_category_code: opts.itemCategoryCode,
+      p_regday: regday, // 필수 — 없으면 "data":["200"] 에러
       p_cert_key: this.key,
       p_cert_id: this.id,
       p_returntype: "json",
@@ -102,29 +108,92 @@ export class KamisProvider {
 
     let resp;
     try {
-      resp = await axios.get(this.base, { params, timeout: 15000 });
+      resp = await axios.get(url, { params, timeout: 15000 });
     } catch (e: any) {
       throw new Error(`KAMIS 호출 실패: ${e?.response?.status ?? ""} ${e.message}`);
     }
 
-    // KAMIS 응답: { price: [...] } 형식
-    const items = resp.data?.price ?? resp.data?.data?.item ?? [];
+    // 응답 구조: { condition: [...], data: { error_code: "000", item: [{...}] } }
+    // 에러 시: { data: ["<code>"] } 형태
+    const data = resp.data?.data;
+    if (!data || Array.isArray(data)) {
+      // 빈 응답 또는 에러
+      await this.cache.set(cacheKey, [], 3600); // 짧게 캐싱 — 재시도 가능
+      return [];
+    }
+
+    const items = data.item ?? [];
     const priceType: "retail" | "wholesale" =
       (opts.productClsCode ?? "01") === "02" ? "wholesale" : "retail";
     const list: KamisPricePoint[] = (Array.isArray(items) ? items : [items])
       .filter((it: any) => it && it.item_name)
       .map(
         (it: any): KamisPricePoint => ({
-          date: it.regday || new Date().toISOString().split("T")[0],
-          productClsCode: it.product_cls_code || opts.productClsCode || "01",
-          productClsName: it.product_cls_name || "소매",
+          date: regday,
+          productClsCode: opts.productClsCode ?? "01",
+          productClsName: priceType === "retail" ? "소매" : "도매",
           itemName: it.item_name,
           unit: it.unit || "kg",
-          price: this.parsePrice(it.dpr1 ?? it.price),
+          price: this.parsePrice(it.dpr1),
           priceType,
         }),
       )
       .filter((it: KamisPricePoint) => it.price > 0);
+
+    await this.cache.set(cacheKey, list, 12 * 3600);
+    return list;
+  }
+
+  /**
+   * 품목 한 건의 당일/1주일전/1개월전 가격을 한 번에 조회 (widget 용).
+   * KAMIS 응답의 dpr1(당일)/dpr3(1주일전)/dpr5(1개월전) 활용.
+   */
+  async getMultiPointPrices(
+    categoryCode: string,
+    regday?: string,
+  ): Promise<
+    Array<{
+      itemName: string;
+      kindName: string;
+      unit: string;
+      today: number;
+      week: number;
+      month: number;
+    }>
+  > {
+    if (!this.isConfigured()) throw new KamisNotConfiguredError();
+    const day = regday ?? new Date().toISOString().slice(0, 10);
+    const cacheKey = `kamis:multi:${categoryCode}:${day}`;
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    const url = "https://www.kamis.or.kr/service/price/xml.do";
+    const params = {
+      action: "dailyPriceByCategoryList",
+      p_product_cls_code: "01",
+      p_country_code: "1101",
+      p_convert_kg_yn: "Y",
+      p_item_category_code: categoryCode,
+      p_regday: day,
+      p_cert_key: this.key,
+      p_cert_id: this.id,
+      p_returntype: "json",
+    };
+    const resp = await axios.get(url, { params, timeout: 15000 });
+    const data = resp.data?.data;
+    if (!data || Array.isArray(data)) return [];
+    const items = data.item ?? [];
+    const list = (Array.isArray(items) ? items : [items])
+      .filter((it: any) => it && it.item_name)
+      .map((it: any) => ({
+        itemName: it.item_name as string,
+        kindName: (it.kind_name as string) ?? "",
+        unit: (it.unit as string) || "kg",
+        today: this.parsePrice(it.dpr1),
+        week: this.parsePrice(it.dpr3),
+        month: this.parsePrice(it.dpr5),
+      }))
+      .filter((it: any) => it.today > 0);
 
     await this.cache.set(cacheKey, list, 12 * 3600);
     return list;
