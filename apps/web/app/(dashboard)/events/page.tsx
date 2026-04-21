@@ -24,17 +24,30 @@ type Event = {
   status: "ongoing" | "upcoming";
   daysUntilStart: number;
   isNearby: boolean;
+  distanceKm: number | null;
 };
+
+const RADIUS_OPTIONS: Array<{ label: string; value: number | null }> = [
+  { label: "5km", value: 5 },
+  { label: "10km", value: 10 },
+  { label: "30km", value: 30 },
+  { label: "50km", value: 50 },
+  { label: "100km", value: 100 },
+  { label: "전체", value: null },
+];
 
 type KeywordSuggestion = { keyword: string; reason: string };
 
 export default function EventsPage() {
   const { storeId } = useCurrentStoreId();
+  const [radiusKm, setRadiusKm] = useState<number | null>(30);
 
   const { data: events, isLoading } = useQuery({
-    queryKey: ["events", storeId],
+    queryKey: ["events", storeId, radiusKm],
     queryFn: async () => {
-      const { data } = await apiClient.get(`/stores/${storeId}/events`);
+      const { data } = await apiClient.get(`/stores/${storeId}/events`, {
+        params: radiusKm != null ? { radiusKm } : {},
+      });
       return data as Event[];
     },
     enabled: !!storeId,
@@ -86,6 +99,29 @@ export default function EventsPage() {
           다시 수집
         </Button>
       </div>
+
+      {/* 반경 토글 */}
+      <Card>
+        <CardContent className="p-3 flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] text-muted-foreground mr-1">반경</span>
+          {RADIUS_OPTIONS.map((opt) => (
+            <button
+              key={opt.label}
+              onClick={() => setRadiusKm(opt.value)}
+              className={`px-3 py-1.5 text-xs rounded-md border transition-colors font-medium ${
+                radiusKm === opt.value
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-white hover:bg-muted/50 border-border"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {radiusKm != null ? `내 매장 반경 ${radiusKm}km 내` : "매장 지역 전체"}
+          </span>
+        </CardContent>
+      </Card>
 
       {list.length === 0 && (
         <Card>
@@ -203,6 +239,11 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
                 <span className="inline-flex items-center gap-1">
                   <MapPin size={11} /> {event.region}
                 </span>
+              )}
+              {event.distanceKm != null && (
+                <Badge variant="outline" className={`text-[10px] ${event.distanceKm <= 10 ? "bg-green-50 text-green-700 border-green-200" : event.distanceKm <= 30 ? "bg-sky-50 text-sky-700 border-sky-200" : "bg-muted text-muted-foreground"}`}>
+                  📍 {event.distanceKm}km
+                </Badge>
               )}
               <Badge variant="outline" className="text-[10px]">
                 {dLabel}

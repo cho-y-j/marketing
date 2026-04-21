@@ -174,9 +174,16 @@ export class StoreController {
   }
 
   @Get(":id/events")
-  @ApiOperation({ summary: "주변 축제/이벤트 조회 (진행중 + 다가오는)" })
-  getEvents(@Param("id") id: string) {
-    return this.eventCollector.getActiveEventsForStore(id);
+  @ApiOperation({ summary: "주변 축제/이벤트 조회 (진행중 + 다가오는, 반경 필터)" })
+  getEvents(
+    @Param("id") id: string,
+    @Query("radiusKm") radiusKm?: string,
+  ) {
+    const radius = radiusKm ? Number(radiusKm) : undefined;
+    return this.eventCollector.getActiveEventsForStore(
+      id,
+      radius && radius > 0 ? radius : undefined,
+    );
   }
 
   @Get(":id/events/:eventId/suggest-keywords")

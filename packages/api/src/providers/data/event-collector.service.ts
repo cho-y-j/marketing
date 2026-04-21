@@ -122,8 +122,9 @@ export class EventCollectorService {
       if (!startD || !endD) continue;
 
       const keywords = this.extractKeywords(f.title, f.addr1);
+      const mapx = f.mapx ? Number(f.mapx) : null;
+      const mapy = f.mapy ? Number(f.mapy) : null;
 
-      // 같은 이름+같은 시작일 이면 update, 아니면 create
       const existing = await this.prisma.seasonalEvent.findFirst({
         where: { name: f.title, startDate: startD },
       });
@@ -135,6 +136,8 @@ export class EventCollectorService {
             region: this.extractRegion(f.addr1) ?? region ?? null,
             keywords,
             description: f.addr1 || null,
+            mapx,
+            mapy,
           },
         });
       } else {
@@ -146,6 +149,8 @@ export class EventCollectorService {
             region: this.extractRegion(f.addr1) ?? region ?? null,
             keywords,
             description: f.addr1 || null,
+            mapx,
+            mapy,
           },
         });
       }
@@ -156,19 +161,20 @@ export class EventCollectorService {
   }
 
   /**
-   * 매장과 관련 있는 축제 — 진행 중 + 다가오는 (endDate >= today).
-   * 결과에 "ongoing"/"upcoming" 구분 필드 포함.
+   * 매장 반경 내 축제 조회 — 진행 중 + 다가오는 (endDate >= today).
+   * @param radiusKm 반경 km. null/미지정 시 같은 시도 전체.
    */
-  async getActiveEventsForStore(storeId: string) {
+  async getActiveEventsForStore(storeId: string, radiusKm?: number) {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
-      select: { address: true, district: true },
+      select: { address: true, district: true, mapx: true, mapy: true },
     });
     if (!store) return [];
-    const region = this.extractRegion(store.address || store.district || "");
+
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
+    const region = this.extractRegion(store.address || store.district || "");
     const shortToFull: Record<string, string> = {
       충북: "충청북도", 충남: "충청남도", 전북: "전라북도", 전남: "전라남도",
       경북: "경상북도", 경남: "경상남도", 경기: "경기도", 강원: "강원",
@@ -179,9 +185,9 @@ export class EventCollectorService {
       ? [region, shortToFull[region]].filter(Boolean)
       : [];
 
-    const events = await this.prisma.seasonalEvent.findMany({
+    // 후보 먼저 넓게 조회 (같은 시도 or 전국)
+    const candidates = await this.prisma.seasonalEvent.findMany({
       where: {
-        // 진행 중 + 다가오는 (끝나지 않은 것 모두)
         endDate: { gte: today },
         ...(regionVariants.length > 0
           ? {
@@ -192,12 +198,11 @@ export class EventCollectorService {
           : {}),
       },
       orderBy: { startDate: "asc" },
-      take: 20,
+      take: 200,
     });
 
-    // 진행중/다가오는 구분 + 시군구(가장 구체) 매칭 우선 정렬
     const storeSignguName = this.extractSigungu(store.address || store.district || "");
-    return events.map((ev) => {
+    const enriched = candidates.map((ev) => {
       const isOngoing = ev.startDate <= today && ev.endDate >= today;
       const daysUntilStart = isOngoing
         ? 0
@@ -206,13 +211,62 @@ export class EventCollectorService {
         !!storeSignguName &&
         (ev.region?.includes(storeSignguName) ||
           ev.description?.includes(storeSignguName));
+
+      // 거리 계산 (매장/축제 좌표 모두 있을 때)
+      const distanceKm =
+        store.mapx && store.mapy && ev.mapx && ev.mapy
+          ? this.haversineKm(store.mapy, store.mapx, ev.mapy, ev.mapx)
+          : null;
+
       return {
         ...ev,
         status: isOngoing ? ("ongoing" as const) : ("upcoming" as const),
         daysUntilStart,
         isNearby,
+        distanceKm: distanceKm != null ? +distanceKm.toFixed(1) : null,
       };
     });
+
+    // 반경 필터 — radiusKm 지정 시 그 이내 + 좌표 없으면 시군구 직매칭 보존
+    let filtered = enriched;
+    if (radiusKm != null && radiusKm > 0) {
+      filtered = enriched.filter((e) => {
+        if (e.distanceKm != null) return e.distanceKm <= radiusKm;
+        // 좌표 없는 축제는 "같은 지역"이면 포함 유지
+        return e.isNearby;
+      });
+    }
+
+    // 정렬: 거리 오름차순 (null 은 뒤로), 그다음 시작일 오름차순
+    filtered.sort((a, b) => {
+      const da = a.distanceKm ?? Number.POSITIVE_INFINITY;
+      const db = b.distanceKm ?? Number.POSITIVE_INFINITY;
+      if (da !== db) return da - db;
+      return a.startDate.getTime() - b.startDate.getTime();
+    });
+
+    return filtered.slice(0, 30);
+  }
+
+  /**
+   * Haversine 공식으로 두 좌표 간 거리 (km).
+   */
+  private haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371; // 지구 반지름 km
+    const dLat = this.deg2rad(lat2 - lat1);
+    const dLon = this.deg2rad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.deg2rad(lat1)) *
+        Math.cos(this.deg2rad(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  private deg2rad(deg: number): number {
+    return deg * (Math.PI / 180);
   }
 
   /**

@@ -1,0 +1,7 @@
+-- 매장 좌표 (네이버 Place API)
+ALTER TABLE "Store" ADD COLUMN "mapx" DOUBLE PRECISION;
+ALTER TABLE "Store" ADD COLUMN "mapy" DOUBLE PRECISION;
+
+-- 축제 좌표 (TourAPI)
+ALTER TABLE "SeasonalEvent" ADD COLUMN "mapx" DOUBLE PRECISION;
+ALTER TABLE "SeasonalEvent" ADD COLUMN "mapy" DOUBLE PRECISION;

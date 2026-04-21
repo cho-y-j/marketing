@@ -70,6 +70,8 @@ export class StoreSetupService {
               category: placeInfo.category || store.category,
               district: placeInfo.district || store.district,
               phone: placeInfo.phone || store.phone,
+              mapx: placeInfo.mapx ? Number(placeInfo.mapx) : undefined,
+              mapy: placeInfo.mapy ? Number(placeInfo.mapy) : undefined,
             },
           });
           this.logger.log(`매장 정보 업데이트: ${placeInfo.address}, ${placeInfo.category}`);
@@ -421,13 +423,16 @@ export class StoreSetupService {
           visitorReviewCount: detail.visitorReviewCount,
           blogReviewCount: detail.blogReviewCount,
           saveCount: detail.saveCount,
+          // 좌표 — getPlaceDetail 응답에 있을 수도, 없을 수도
+          mapx: (detail as any).mapx ?? (detail as any).x,
+          mapy: (detail as any).mapy ?? (detail as any).y,
         };
       }
     } catch (e: any) {
       this.logger.debug(`placeId 직접 조회 실패 (${placeId}): ${e.message}`);
     }
 
-    // 2차: 매장명으로 검색 API
+    // 2차: 매장명으로 검색 API (local.json 은 mapx/mapy 확실히 반환)
     try {
       const places = await this.naverSearch.searchPlace(storeName, 3);
       if (places.length > 0) {
@@ -435,12 +440,22 @@ export class StoreSetupService {
         const jibunAddr = best.address || "";
         const roadAddr = best.roadAddress || "";
         const effectiveAddr = jibunAddr || roadAddr;
+        // local.json 좌표는 KATECH 좌표계 (10^6 배 큰 값) — WGS84 변환 필요
+        // 예: mapx="1269987365" → 126.9987365
+        const toWgs = (v: string | number | undefined): number | null => {
+          if (v == null) return null;
+          const n = Number(v);
+          if (!Number.isFinite(n)) return null;
+          return n > 1000 ? n / 1e7 : n;
+        };
         return {
           address: effectiveAddr,
           roadAddress: roadAddr,
           category: best.category || "",
           district: this.extractDistrict(effectiveAddr),
           phone: best.telephone || "",
+          mapx: toWgs(best.mapx),
+          mapy: toWgs(best.mapy),
         };
       }
     } catch (e: any) {
@@ -457,6 +472,8 @@ export class StoreSetupService {
           category: info.category || "",
           district: this.extractDistrict(address),
           phone: info.phone || "",
+          mapx: (info as any).mapx ?? (info as any).x,
+          mapy: (info as any).mapy ?? (info as any).y,
         };
       }
     } catch (e: any) {

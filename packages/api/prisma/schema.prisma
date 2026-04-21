@@ -114,6 +114,10 @@ model Store {
   // 상권 정보
   district String?
 
+  // 좌표 (네이버 Place API 의 mapx/mapy — WGS84 경위도)
+  mapx Float? // 경도 (longitude)
+  mapy Float? // 위도 (latitude)
+
   // 매출 관련
   avgOrderValue Int? // 객단가 (원) — ROI 계산용
 
@@ -335,6 +339,9 @@ model SeasonalEvent {
   endDate     DateTime @db.Date
   keywords    String[]
   description String?
+  // TourAPI 좌표 (거리 기반 필터용)
+  mapx        Float? // 경도
+  mapy        Float? // 위도
 
   @@index([startDate, endDate])
   @@index([region])
