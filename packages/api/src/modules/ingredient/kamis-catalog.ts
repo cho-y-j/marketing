@@ -39,6 +39,29 @@ export const KAMIS_CATALOG = {
 /** 모든 KAMIS 품목을 단일 배열로 (AI 프롬프트 주입용) */
 export const KAMIS_ALL_ITEMS: string[] = Object.values(KAMIS_CATALOG).flat();
 
+/** 한글 카테고리 → KAMIS 부류 코드 */
+export const CATEGORY_NAME_TO_CODE: Record<string, string> = {
+  "식량작물": "100",
+  "채소류": "200",
+  "특용작물": "300",
+  "과일류": "400",
+  "축산물": "500",
+  "수산물": "600",
+};
+
+/** 품목명 → KAMIS 부류 코드 (역매핑) */
+export function findCategoryCode(itemName: string): string | null {
+  const norm = itemName.replace(/\s+/g, "").trim();
+  for (const [catName, items] of Object.entries(KAMIS_CATALOG)) {
+    const hit = items.some((it) => {
+      const itn = it.replace(/\s+/g, "").trim();
+      return itn === norm || itn.includes(norm) || norm.includes(itn);
+    });
+    if (hit) return CATEGORY_NAME_TO_CODE[catName] ?? null;
+  }
+  return null;
+}
+
 /** KAMIS 등록 여부 검증 (정확 일치 + 부분 일치) */
 export function isKamisRegistered(name: string): boolean {
   const n = name.replace(/\s+/g, "").trim();

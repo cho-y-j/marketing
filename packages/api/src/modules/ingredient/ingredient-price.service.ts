@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { KamisProvider } from "../../providers/data/kamis.provider";
+import { findCategoryCode } from "./kamis-catalog";
 
 /**
  * KAMIS 기반 주재료 가격 수집/조회/알림.
@@ -100,7 +101,11 @@ export class IngredientPriceService {
   }
 
   /**
-   * 매장별 주재료 현재가 + 변동률 조회 (대시보드 위젯용).
+   * 매장별 주재료 현재가 + 변동률 조회.
+   *
+   * KAMIS API 응답의 시계열 필드(dpr1/dpr3/dpr5)를 실시간 활용.
+   * DB 누적 데이터 없이도 즉시 전주/전월 변동률 계산 가능.
+   * Redis 캐시(KamisProvider 내부 12h) 활용으로 중복 호출 방지.
    */
   async getStorePriceStatus(storeId: string) {
     const store = await this.prisma.store.findUnique({
@@ -111,64 +116,90 @@ export class IngredientPriceService {
       return { items: [], alerts: [] };
     }
 
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const week = new Date(today);
-    week.setDate(week.getDate() - 7);
-    const month = new Date(today);
-    month.setDate(month.getDate() - 30);
+    const today = new Date().toISOString().slice(0, 10);
 
-    const items: Array<{
-      itemName: string;
-      unit: string;
-      current: number | null;
-      previousWeek: number | null;
-      previousMonth: number | null;
-      weeklyChange: number | null;
-      weeklyChangeAmount: number | null;
-      monthlyChange: number | null;
-      monthlyChangeAmount: number | null;
-      lastUpdated: string | null;
-    }> = [];
+    // 품목별로 KAMIS 카테고리 파악 → 카테고리별 1회만 API 호출 (캐시)
+    const categoryCache = new Map<
+      string,
+      Array<{ itemName: string; kindName: string; unit: string; today: number; week: number; month: number }>
+    >();
+
+    const items: Array<any> = [];
 
     for (const name of store.keyIngredients) {
-      // 최신 가격 (최대 today)
-      const latest = await this.prisma.ingredientPrice.findFirst({
-        where: { itemName: name, priceType: "retail", date: { lte: today } },
-        orderBy: { date: "desc" },
-      });
-      // 전주/전월 가격
-      const prevWeek = await this.prisma.ingredientPrice.findFirst({
-        where: { itemName: name, priceType: "retail", date: { lte: week } },
-        orderBy: { date: "desc" },
-      });
-      const prevMonth = await this.prisma.ingredientPrice.findFirst({
-        where: { itemName: name, priceType: "retail", date: { lte: month } },
-        orderBy: { date: "desc" },
-      });
+      const catCode = findCategoryCode(name);
+      if (!catCode) {
+        // KAMIS 미등록
+        items.push({
+          itemName: name,
+          unit: "",
+          current: null,
+          previousWeek: null,
+          previousMonth: null,
+          weeklyChange: null,
+          weeklyChangeAmount: null,
+          monthlyChange: null,
+          monthlyChangeAmount: null,
+          lastUpdated: null,
+        });
+        continue;
+      }
 
-      const weeklyRate =
-        latest && prevWeek && prevWeek.price > 0
-          ? ((latest.price - prevWeek.price) / prevWeek.price) * 100
-          : null;
-      const monthlyRate =
-        latest && prevMonth && prevMonth.price > 0
-          ? ((latest.price - prevMonth.price) / prevMonth.price) * 100
-          : null;
+      // 카테고리 첫 조회 시 캐시
+      if (!categoryCache.has(catCode)) {
+        try {
+          const list = await this.kamis.getMultiPointPrices(catCode, today);
+          categoryCache.set(catCode, list);
+        } catch (e: any) {
+          this.logger.warn(`KAMIS ${catCode} 조회 실패: ${e.message}`);
+          categoryCache.set(catCode, []);
+        }
+      }
+
+      const list = categoryCache.get(catCode)!;
+      // 이름 매칭 (정확 → 부분)
+      const norm = name.replace(/\s+/g, "");
+      let matched = list.find((it) => it.itemName.replace(/\s+/g, "") === norm);
+      if (!matched) {
+        matched = list.find((it) => {
+          const itn = it.itemName.replace(/\s+/g, "");
+          return itn.includes(norm) || norm.includes(itn);
+        });
+      }
+
+      if (!matched || matched.today <= 0) {
+        items.push({
+          itemName: name,
+          unit: matched?.unit ?? "",
+          current: null,
+          previousWeek: null,
+          previousMonth: null,
+          weeklyChange: null,
+          weeklyChangeAmount: null,
+          monthlyChange: null,
+          monthlyChangeAmount: null,
+          lastUpdated: null,
+        });
+        continue;
+      }
+
+      // KAMIS 응답에서 직접 변동률 계산 (dpr1 vs dpr3 vs dpr5)
+      const weeklyChange =
+        matched.week > 0 ? ((matched.today - matched.week) / matched.week) * 100 : null;
+      const monthlyChange =
+        matched.month > 0 ? ((matched.today - matched.month) / matched.month) * 100 : null;
 
       items.push({
         itemName: name,
-        unit: latest?.unit ?? "kg",
-        current: latest?.price ?? null,
-        previousWeek: prevWeek?.price ?? null,
-        previousMonth: prevMonth?.price ?? null,
-        weeklyChange: weeklyRate != null ? +weeklyRate.toFixed(1) : null,
-        weeklyChangeAmount:
-          latest && prevWeek ? latest.price - prevWeek.price : null,
-        monthlyChange: monthlyRate != null ? +monthlyRate.toFixed(1) : null,
-        monthlyChangeAmount:
-          latest && prevMonth ? latest.price - prevMonth.price : null,
-        lastUpdated: latest?.date.toISOString().slice(0, 10) ?? null,
+        unit: matched.unit,
+        current: matched.today,
+        previousWeek: matched.week > 0 ? matched.week : null,
+        previousMonth: matched.month > 0 ? matched.month : null,
+        weeklyChange: weeklyChange != null ? +weeklyChange.toFixed(1) : null,
+        weeklyChangeAmount: matched.week > 0 ? matched.today - matched.week : null,
+        monthlyChange: monthlyChange != null ? +monthlyChange.toFixed(1) : null,
+        monthlyChangeAmount: matched.month > 0 ? matched.today - matched.month : null,
+        lastUpdated: today,
       });
     }
 
@@ -202,70 +233,87 @@ export class IngredientPriceService {
   }
 
   /**
-   * 변동률 기반 알림 생성.
+   * 변동률 기반 알림 생성 — KAMIS 응답의 시계열 직접 활용.
    */
   private async generateAlerts(
     stores: Array<{ id: string; keyIngredients: string[] }>,
     today: Date,
   ): Promise<number> {
-    const week = new Date(today);
-    week.setDate(week.getDate() - 7);
-    const month = new Date(today);
-    month.setDate(month.getDate() - 30);
+    const todayStr = today.toISOString().slice(0, 10);
+
+    // 카테고리별 데이터 한번에 캐시
+    const categoryCache = new Map<
+      string,
+      Array<{ itemName: string; unit: string; today: number; week: number; month: number }>
+    >();
 
     let count = 0;
     for (const store of stores) {
       for (const name of store.keyIngredients) {
-        const latest = await this.prisma.ingredientPrice.findFirst({
-          where: { itemName: name, priceType: "retail", date: { equals: today } },
-        });
-        if (!latest) continue;
-        const prevWeek = await this.prisma.ingredientPrice.findFirst({
-          where: { itemName: name, priceType: "retail", date: { lte: week } },
-          orderBy: { date: "desc" },
-        });
-        const prevMonth = await this.prisma.ingredientPrice.findFirst({
-          where: { itemName: name, priceType: "retail", date: { lte: month } },
-          orderBy: { date: "desc" },
-        });
+        const catCode = findCategoryCode(name);
+        if (!catCode) continue;
 
-        const weeklyRate = prevWeek && prevWeek.price > 0
-          ? ((latest.price - prevWeek.price) / prevWeek.price) * 100
-          : null;
-        const monthlyRate = prevMonth && prevMonth.price > 0
-          ? ((latest.price - prevMonth.price) / prevMonth.price) * 100
-          : null;
+        if (!categoryCache.has(catCode)) {
+          try {
+            const list = await this.kamis.getMultiPointPrices(catCode, todayStr);
+            categoryCache.set(catCode, list);
+          } catch {
+            categoryCache.set(catCode, []);
+          }
+        }
+
+        const list = categoryCache.get(catCode)!;
+        const norm = name.replace(/\s+/g, "");
+        let matched = list.find((it) => it.itemName.replace(/\s+/g, "") === norm);
+        if (!matched) {
+          matched = list.find((it) => {
+            const itn = it.itemName.replace(/\s+/g, "");
+            return itn.includes(norm) || norm.includes(itn);
+          });
+        }
+        if (!matched || matched.today <= 0) continue;
+
+        const weeklyRate =
+          matched.week > 0 ? ((matched.today - matched.week) / matched.week) * 100 : null;
+        const monthlyRate =
+          matched.month > 0 ? ((matched.today - matched.month) / matched.month) * 100 : null;
 
         // 중복 알림 방지 — 오늘 같은 타입 알림 있으면 skip
         const already = await this.prisma.ingredientAlert.findFirst({
-          where: {
-            storeId: store.id,
-            itemName: name,
-            createdAt: { gte: today },
-          },
+          where: { storeId: store.id, itemName: name, createdAt: { gte: today } },
         });
         if (already) continue;
 
-        const rules: Array<{ condition: boolean; type: string; rate: number }> = [
-          { condition: (monthlyRate ?? 0) >= 20, type: "MONTHLY_20", rate: monthlyRate ?? 0 },
-          { condition: (weeklyRate ?? 0) >= 10, type: "WEEKLY_10", rate: weeklyRate ?? 0 },
+        const rules: Array<{ condition: boolean; type: string; rate: number; prev: number }> = [
+          {
+            condition: (monthlyRate ?? 0) >= 20,
+            type: "MONTHLY_20",
+            rate: monthlyRate ?? 0,
+            prev: matched.month,
+          },
+          {
+            condition: (weeklyRate ?? 0) >= 10,
+            type: "WEEKLY_10",
+            rate: weeklyRate ?? 0,
+            prev: matched.week,
+          },
         ];
         const hit = rules.find((r) => r.condition);
         if (!hit) continue;
 
-        const prev = hit.type === "MONTHLY_20" ? prevMonth! : prevWeek!;
+        const diff = matched.today - hit.prev;
         const message =
           hit.type === "MONTHLY_20"
-            ? `${name} 전월 대비 +${hit.rate.toFixed(1)}% (+${(latest.price - prev.price).toLocaleString()}원/${latest.unit}) 상승 — 세트 메뉴 가격 점검 권장`
-            : `${name} 전주 대비 +${hit.rate.toFixed(1)}% (+${(latest.price - prev.price).toLocaleString()}원/${latest.unit}) 상승`;
+            ? `${name} 전월 대비 +${hit.rate.toFixed(1)}% (+${diff.toLocaleString()}원/${matched.unit}) 상승 — 세트 메뉴 가격 점검 권장`
+            : `${name} 전주 대비 +${hit.rate.toFixed(1)}% (+${diff.toLocaleString()}원/${matched.unit}) 상승`;
         await this.prisma.ingredientAlert.create({
           data: {
             storeId: store.id,
             itemName: name,
             alertType: hit.type,
             message,
-            currentPrice: latest.price,
-            previousPrice: prev.price,
+            currentPrice: matched.today,
+            previousPrice: hit.prev,
             changeRate: +hit.rate.toFixed(2),
           },
         });
