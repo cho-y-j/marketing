@@ -26,8 +26,8 @@ export default function ForeignMarketPage() {
       <Card>
         <CardContent className="p-6">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center">
-              <Target size={24} className="text-blue-600" />
+            <div className="w-12 h-12 rounded-xl bg-brand-subtle flex items-center justify-center">
+              <Target size={24} className="text-brand" />
             </div>
             <div>
               <h3 className="font-bold">노출보다 "방문으로 이어지는 유입"</h3>
@@ -146,12 +146,12 @@ function CheckItem({
 }: { num: number; icon: any; title: string; desc: string }) {
   return (
     <div className="flex items-start gap-3">
-      <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-        <Icon size={15} className="text-blue-600" />
+      <div className="w-8 h-8 rounded-lg bg-brand-subtle flex items-center justify-center shrink-0">
+        <Icon size={15} className="text-brand" />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-bold text-blue-600 bg-blue-100 rounded-full w-4 h-4 flex items-center justify-center">
+          <span className="text-[10px] font-bold text-brand bg-brand-subtle rounded-full w-4 h-4 flex items-center justify-center">
             {num}
           </span>
           <span className="font-semibold text-sm">{title}</span>

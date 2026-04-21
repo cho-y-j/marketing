@@ -36,7 +36,7 @@ function getStatus(rate: number | null, delta: number | null) {
   if (rate == null || delta == null) return { label: "수집중", color: "bg-muted text-muted-foreground border-border" };
   if (rate >= 1.5) return { label: "급증", color: "bg-orange-100 text-orange-700 border-orange-300" };
   if (rate >= 0.5) return { label: "활발", color: "bg-green-100 text-green-700 border-green-300" };
-  if (rate > 0) return { label: "평온", color: "bg-sky-50 text-sky-700 border-sky-200" };
+  if (rate > 0) return { label: "평온", color: "bg-muted/60 text-foreground/70 border-border" };
   if (rate === 0) return { label: "정체", color: "bg-amber-50 text-amber-700 border-amber-200" };
   return { label: "감소", color: "bg-red-100 text-red-700 border-red-300" };
 }
@@ -383,7 +383,7 @@ export default function CompetitorsPage() {
               <div className="grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-1.5 border-b bg-muted/40 text-[10px] font-semibold text-muted-foreground">
                 <div></div>
                 <div></div>
-                <div className="col-span-3 text-center border-l border-r border-border/50 bg-sky-50/50">방문자 리뷰</div>
+                <div className="col-span-3 text-center border-l border-r border-border/50 bg-muted/50">방문자 리뷰</div>
                 <div className="col-span-3 text-center border-r border-border/50 bg-emerald-50/50">블로그 리뷰</div>
                 <div></div>
               </div>
@@ -427,7 +427,7 @@ export default function CompetitorsPage() {
         <span>증감률 기준:</span>
         <Badge variant="outline" className="bg-orange-100 text-orange-700 border-orange-300">급증 ≥1.5%</Badge>
         <Badge variant="outline" className="bg-green-100 text-green-700 border-green-300">활발 0.5~1.5%</Badge>
-        <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200">평온 0~0.5%</Badge>
+        <Badge variant="outline" className="bg-muted/60 text-foreground/70 border-border">평온 0~0.5%</Badge>
         <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">정체 0%</Badge>
         <Badge variant="outline" className="bg-red-100 text-red-700 border-red-300">감소 &lt;0%</Badge>
       </div>

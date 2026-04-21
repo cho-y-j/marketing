@@ -137,7 +137,7 @@ export default function EventsPage() {
       {ongoing.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 px-1">
-            <Badge className="bg-red-100 text-red-700 border-red-300">🔴 진행 중</Badge>
+            <Badge className="bg-red-100 text-red-700 border-red-300">진행 중</Badge>
             <span className="text-xs text-muted-foreground">{ongoing.length}건</span>
           </div>
           {ongoing.map((ev) => (
@@ -150,7 +150,7 @@ export default function EventsPage() {
       {upcoming.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 px-1">
-            <Badge className="bg-sky-50 text-sky-700 border-sky-300">📅 다가오는 축제</Badge>
+            <Badge className="bg-muted text-muted-foreground border-border">다가오는 축제</Badge>
             <span className="text-xs text-muted-foreground">{upcoming.length}건 — 미리 키워드 준비하세요</span>
           </div>
           {upcoming.map((ev) => (
@@ -218,7 +218,7 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
       : `D-${event.daysUntilStart}`;
 
   return (
-    <Card className={event.status === "ongoing" ? "border-red-200" : event.isNearby ? "border-sky-200" : ""}>
+    <Card className={event.status === "ongoing" ? "border-red-200" : event.isNearby ? "border-foreground/20" : ""}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex-1 min-w-0">
@@ -226,7 +226,7 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
               <PartyPopper size={14} className="text-amber-600 shrink-0" />
               <h3 className="font-bold text-base truncate">{event.name}</h3>
               {event.isNearby && (
-                <Badge variant="outline" className="text-[10px] bg-sky-50 text-sky-700 border-sky-200">
+                <Badge variant="outline" className="text-[10px] bg-brand-subtle text-brand border-brand/20">
                   같은 지역
                 </Badge>
               )}
@@ -241,7 +241,7 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
                 </span>
               )}
               {event.distanceKm != null && (
-                <Badge variant="outline" className={`text-[10px] ${event.distanceKm <= 10 ? "bg-green-50 text-green-700 border-green-200" : event.distanceKm <= 30 ? "bg-sky-50 text-sky-700 border-sky-200" : "bg-muted text-muted-foreground"}`}>
+                <Badge variant="outline" className={`text-[10px] ${event.distanceKm <= 10 ? "bg-brand-subtle text-brand border-brand/20" : "bg-muted text-muted-foreground border-border"}`}>
                   📍 {event.distanceKm}km
                 </Badge>
               )}

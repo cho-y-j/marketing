@@ -230,10 +230,10 @@ export default function IngredientsPage() {
       )}
 
       {/* 정보 */}
-      <Card className="border-sky-200 bg-sky-50/30">
+      <Card className="border-border bg-muted/30">
         <CardContent className="p-4 text-xs space-y-1.5">
-          <div className="font-semibold text-sky-900">알림 기준</div>
-          <div className="text-sky-800/90 space-y-0.5">
+          <div className="font-semibold">알림 기준</div>
+          <div className="text-muted-foreground space-y-0.5">
             <div>• 전주 대비 <strong>+10~30%</strong> 상승 시 일반 알림</div>
             <div>• 전월 대비 <strong>+20~50%</strong> 상승 시 강한 알림 (가격 재검토 권장)</div>
             <div>• 하락 시 알림 없음 (원가 절감 기회로 가정)</div>
@@ -284,7 +284,7 @@ function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }
         ? { label: "상승", color: "bg-amber-100 text-amber-700 border-amber-300" }
         : (item.weeklyChange ?? 0) < 0
           ? { label: "하락", color: "bg-green-50 text-green-700 border-green-200" }
-          : { label: "안정", color: "bg-sky-50 text-sky-700 border-sky-200" };
+          : { label: "안정", color: "bg-muted text-muted-foreground border-border" };
 
   const fmtRate = (v: number | null) =>
     v == null ? "-" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;

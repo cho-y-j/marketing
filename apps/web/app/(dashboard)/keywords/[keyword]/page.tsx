@@ -184,7 +184,7 @@ export default function KeywordDetailPage({
                         </span>
                       ) : (
                         <span className={
-                          p.rank <= 3 ? "text-blue-600" :
+                          p.rank <= 3 ? "text-brand" :
                           p.rank <= 10 ? "text-foreground" : "text-muted-foreground"
                         }>{p.rank}</span>
                       )}
@@ -241,7 +241,7 @@ export default function KeywordDetailPage({
                   <div className="text-[10px] text-muted-foreground">{t.date.slice(5)}</div>
                   <div className={`text-sm font-bold ${
                     t.rank == null ? "text-muted-foreground" :
-                    t.rank <= 3 ? "text-blue-600" :
+                    t.rank <= 3 ? "text-brand" :
                     t.rank <= 10 ? "text-foreground" : "text-red-500"
                   }`}>
                     {t.rank ? `${t.rank}위` : "권외"}
@@ -264,7 +264,7 @@ function KeyMetric({
   color?: "default" | "blue" | "red";
   deltas?: { daily?: number | null; weekly?: number | null; monthly?: number | null };
 }) {
-  const colorClass = color === "blue" ? "text-blue-600" : color === "red" ? "text-red-600" : "text-foreground";
+  const colorClass = color === "blue" ? "text-brand" : color === "red" ? "text-red-600" : "text-foreground";
   const fmt = (n: number | null | undefined) => {
     if (n == null) return null;
     if (n === 0) return <span className="text-muted-foreground">0</span>;

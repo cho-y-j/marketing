@@ -305,7 +305,7 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
   // 순위 색상
   const rankColor =
     myRank == null ? "text-muted-foreground" :
-    myRank <= 3 ? "text-blue-600" :
+    myRank <= 3 ? "text-brand" :
     myRank <= 10 ? "text-foreground" :
     "text-red-500";
 
@@ -407,7 +407,7 @@ function PlaceRow({ place }: { place: any }) {
           <Crown size={14} className="text-yellow-500 mx-auto" />
         ) : (
           <span className={`text-sm font-bold ${
-            place.rank <= 3 ? "text-blue-600" :
+            place.rank <= 3 ? "text-brand" :
             place.rank <= 10 ? "text-foreground" : "text-muted-foreground"
           }`}>{place.rank}</span>
         )}
