@@ -1,4 +1,11 @@
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
+
+# Debian base — host nvm node + Claude CLI 바이너리(glibc) 마운트 호환
+# (alpine musl libc 에서는 host binary 실행 불가)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssl \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 RUN npm install -g pnpm
@@ -26,7 +33,13 @@ RUN PRISMA_SRC=$(find /app/node_modules/.pnpm -path '*/.prisma/client' -type d |
     cp -rL "$PRISMA_SRC"/* /app/deployed/node_modules/.prisma/client/
 
 # 프로덕션 이미지
-FROM node:20-alpine
+FROM node:20-slim
+
+# Prisma/Claude CLI 런타임 필수 라이브러리
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssl \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
