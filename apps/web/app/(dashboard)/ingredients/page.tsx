@@ -285,9 +285,21 @@ function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }
   return (
     <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_90px_50px] gap-2 px-4 py-3 border-b last:border-b-0 text-sm items-center hover:bg-muted/10 transition-colors">
       <div>
-        <div className="font-semibold">{item.itemName}</div>
+        <div className="font-semibold flex items-center gap-1.5">
+          {item.itemName}
+          {!hasData && (
+            <Badge variant="outline" className="text-[9px] bg-gray-100 text-gray-600 border-gray-300">
+              KAMIS 미등록
+            </Badge>
+          )}
+        </div>
         {!hasData && (
-          <div className="text-[10px] text-muted-foreground mt-0.5">수집 대기 중 — KAMIS 에 당일 데이터 없을 수 있음</div>
+          <div
+            className="text-[10px] text-muted-foreground mt-0.5"
+            title="KAMIS 공개 가격 데이터에 없는 품목입니다. 대체 품목을 사용하거나 삭제 후 다른 재료를 추가하세요."
+          >
+            실가격 추적 불가 — 대체 품목 등록 권장
+          </div>
         )}
       </div>
       <div className="text-right">

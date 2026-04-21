@@ -11,6 +11,7 @@ import { BriefingService } from "../../modules/briefing/briefing.service";
 import { DailySnapshotJob } from "../../jobs/daily-snapshot.job";
 import { CompetitorBackfillService } from "../../modules/competitor/competitor-backfill.service";
 import { EventCollectorService } from "./event-collector.service";
+import { KAMIS_CATALOG, KAMIS_ALL_ITEMS, isKamisRegistered } from "../../modules/ingredient/kamis-catalog";
 
 @Injectable()
 export class StoreSetupService {
@@ -815,8 +816,8 @@ export class StoreSetupService {
   }
 
   /**
-   * 매장 업종/메뉴에서 KAMIS 가격 추적 대상 주재료 8~12개 자동 판정.
-   * 원가 관리에 의미 있는 모든 재료를 카테고리별 균형있게 선정.
+   * KAMIS 등록 품목 중에서만 매장 주재료 8~12개 자동 판정.
+   * 보리/흑마늘/참기름 등 KAMIS 미등록 품목은 애초에 추천되지 않음.
    */
   private async detectKeyIngredients(
     storeName: string,
@@ -824,48 +825,54 @@ export class StoreSetupService {
     aiKeywords: string[],
   ): Promise<string[]> {
     if (!category) return [];
-    const systemPrompt = `당신은 자영업 원가 분석 전문가. 매장 원가 구조에서 KAMIS(농수산물유통공사) 가격 추적 대상 재료 **8~12개**를 균형있게 선정한다.
 
-## 선정 기준 — 4가지 카테고리로 고르게
-1. **주재료** (2~3개): 대표 메뉴의 핵심 재료
-   예: 보리밥집 → 멥쌀/보리쌀, 치킨집 → 닭, 소고기집 → 한우
-2. **양념/조미료** (2~4개): 한식 원가에 의미 있는 것
-   예: 고추장, 된장, 간장, 참기름, 들기름, 고춧가루, 식용유, 고추
-3. **채소/부재료** (3~4개): 자주 쓰는 채소류
-   예: 깐마늘, 대파, 양파, 배추, 콩나물, 시금치, 무, 감자, 파프리카
-4. **특수재료** (1~2개): 매장 특색 재료
-   예: 흑마늘, 해물찜 → 미더덕, 한정식 → 달걀
+    // KAMIS 카탈로그를 프롬프트 요약 형태로
+    const catalogText = Object.entries(KAMIS_CATALOG)
+      .map(([cat, items]) => `- ${cat}: ${items.join(", ")}`)
+      .join("\n");
+
+    const systemPrompt = `당신은 자영업 원가 분석 전문가. **KAMIS(농수산물유통공사) 공개 가격 데이터에 실제로 존재하는 품목** 중에서만 매장 주재료 8~12개를 균형있게 선정한다.
+
+## ⚠️ 절대 규칙 — 아래 KAMIS 등록 품목에서만 선택
+아래 리스트에 **없는** 이름(예: 보리, 보리쌀, 흑마늘, 참기름, 된장, 고추장, 아귀, 미더덕, 낙지, 고사리)은 **절대 추천 금지**.
+
+### KAMIS 등록 품목 (정확한 이름으로 사용)
+${catalogText}
+
+## 카테고리별 추천 균형
+1. 주재료 2~3개 (예: 보리밥집 → 쌀/찹쌀, 아귀찜집 → 고등어/꽃게, 치킨집 → 닭, 소고기집 → 소)
+2. 채소/부재료 4~5개 (예: 깐마늘(국산), 대파(→"파"), 양파, 배추, 시금치, 무, 호박, 콩나물(→"콩"), 깻잎, 미나리)
+3. 양념/조미료 1~2개 — **KAMIS에 있는 것만** (참깨, 건고추, 고춧가루, 붉은고추)
+   ※ 고추장/된장/간장/참기름은 KAMIS 미등록이므로 사용 금지
+4. 특수재료 1~2개 (예: 축산물에서 소/돼지/계란/닭, 수산물에서 해당 업종 어류)
 
 ## 규칙
-- KAMIS 표준 품목명 사용 (예: "아귀", "한우 등심", "깐마늘", "멥쌀", "돼지 삼겹살", "고추장", "참기름")
-- 가격 변동이 거의 없는 가공식품(식초, 설탕 등)은 제외
-- 해당 업종과 무관한 재료 제외 (한식당에 파스타면 X)
-- 총 **8~12개** 엄수 (2~3개는 너무 적음)
+- 반드시 위 카탈로그의 **정확한 이름** 사용 (예: "마늘" 대신 "깐마늘(국산)", "파" 대신 "파")
+- 업종과 무관한 재료 제외 (한식당에 과일/아보카도 금지)
+- 총 **8~12개**
 
 ## 출력 (JSON 배열만, 설명 없이)
-["재료1", "재료2", ..., "재료10"]
+["재료1", "재료2", ...]
 
-## 예시 — 한식 한정식/보리밥집
-["멥쌀", "보리쌀", "흑마늘", "깐마늘", "대파", "양파", "고추장", "된장", "참기름", "고춧가루", "돼지 삼겹살", "달걀"]
+## 예시 — 보리밥/한정식 매장
+["쌀", "찹쌀", "배추", "시금치", "무", "양파", "깐마늘(국산)", "호박", "돼지", "계란", "고춧가루", "느타리버섯"]
 
-## 예시 — 아귀찜/해물찜 전문점
-["아귀", "미더덕", "콩나물", "대파", "양파", "고추장", "고춧가루", "참기름", "미나리", "무"]
+## 예시 — 아귀찜/해물찜
+["조기", "꽃게", "홍합", "새우", "콩", "무", "양파", "미나리", "고춧가루", "깐마늘(국산)", "파"]
 
 ## 예시 — 소고기 구이집
-["한우 등심", "한우 갈비", "깻잎", "대파", "양파", "된장", "참기름", "마늘", "상추", "배"]
+["소", "깻잎", "상추", "파", "양파", "깐마늘(국산)", "배", "호박"]
 
 ## 예시 — 치킨집
-["닭", "식용유", "고추", "깐마늘", "양파", "고추장", "설탕 금지", "파프리카"]
-
-## 예시 — 삼겹살집
-["돼지 삼겹살", "돼지 목살", "깻잎", "상추", "대파", "양파", "된장", "쌈장", "고추", "마늘"]`;
+["닭", "양파", "깐마늘(국산)", "파", "고춧가루", "파프리카", "계란", "호박"]`;
 
     const userPrompt = `매장 정보:
 - 매장명: ${storeName}
 - 카테고리: ${category}
 - 주요 키워드 (대표 메뉴 힌트): ${aiKeywords.slice(0, 10).join(", ")}
 
-위 매장의 KAMIS 가격 추적 대상 재료 **8~12개**를 4가지 카테고리(주재료/양념/채소/특수재료) 균형있게 JSON 배열로 응답.`;
+위 KAMIS 카탈로그 품목 중 이 매장의 원가 관리에 의미 있는 **8~12개**를 JSON 배열로 응답.
+카탈로그에 없는 이름 (보리/흑마늘/참기름/된장/고추장/아귀/미더덕/낙지)은 절대 사용 금지.`;
 
     try {
       const response = await this.ai.analyze(systemPrompt, userPrompt);
@@ -875,11 +882,11 @@ export class StoreSetupService {
       const cleaned = (parsed as any[])
         .filter((k) => typeof k === "string")
         .map((k: string) => k.trim())
-        .filter((k: string) => k.length >= 2 && k.length <= 15)
-        // 명백한 가공식품/노이즈 제거
-        .filter((k: string) => !/금지|설탕|조미료|소스/.test(k));
-      // 중복 제거
+        .filter((k: string) => k.length >= 2 && k.length <= 20)
+        // KAMIS 미등록 품목 자동 제거 (AI가 실수로 넣어도 걸러냄)
+        .filter((k: string) => isKamisRegistered(k));
       const unique = [...new Set(cleaned)];
+      this.logger.log(`AI KAMIS 재료 판정 [${response.provider}] ${unique.length}개: ${unique.join(", ")}`);
       return unique.slice(0, 12);
     } catch (e: any) {
       this.logger.warn(`AI 주재료 판정 실패: ${e.message}`);
