@@ -10,6 +10,7 @@ import { AnalysisService } from "../../modules/analysis/analysis.service";
 import { BriefingService } from "../../modules/briefing/briefing.service";
 import { DailySnapshotJob } from "../../jobs/daily-snapshot.job";
 import { CompetitorBackfillService } from "../../modules/competitor/competitor-backfill.service";
+import { EventCollectorService } from "./event-collector.service";
 
 @Injectable()
 export class StoreSetupService {
@@ -33,6 +34,7 @@ export class StoreSetupService {
     private dailySnapshotJob: DailySnapshotJob,
     @Inject(forwardRef(() => CompetitorBackfillService))
     private backfillService: CompetitorBackfillService,
+    private eventCollector: EventCollectorService,
   ) {}
 
   /**
@@ -285,6 +287,49 @@ export class StoreSetupService {
         this.logger.log(`30일 역산 backfill 완료`);
       } catch (e: any) {
         this.logger.warn(`30일 backfill 실패 (나중에 재시도 가능): ${e.message}`);
+      }
+
+      // 7-2.5단계: 주재료 자동 판정 (KAMIS 가격 추적 대상)
+      await this.updateSetupStatus(storeId, "RUNNING", "주재료 자동 판정 중...");
+      try {
+        const ingredients = await this.detectKeyIngredients(store.name, finalCategory, aiKeywords);
+        if (ingredients.length > 0) {
+          await this.prisma.store.update({
+            where: { id: storeId },
+            data: { keyIngredients: ingredients },
+          });
+          this.logger.log(`주재료 ${ingredients.length}개 등록: ${ingredients.join(", ")}`);
+        }
+      } catch (e: any) {
+        this.logger.warn(`주재료 판정 실패 (나중에 수동 설정 가능): ${e.message}`);
+      }
+
+      // 7-3단계: 주변 축제/이벤트 수집 (TourAPI) — 매장 지역 90일치
+      await this.updateSetupStatus(storeId, "RUNNING", "주변 축제/이벤트 수집 중...");
+      try {
+        const eventCount = await this.eventCollector.collectForStore(storeId, 90);
+        this.logger.log(`축제 ${eventCount}개 수집 완료`);
+
+        // 진행 중인 축제 키워드를 SEASONAL 로 StoreKeyword 에 자동 추가
+        const active = await this.eventCollector.getActiveEventsForStore(storeId);
+        let seasonalAdded = 0;
+        for (const ev of active.slice(0, 3)) {
+          const topKeywords = (ev.keywords as any[])?.slice(0, 2) || [];
+          for (const kw of topKeywords) {
+            if (typeof kw !== "string" || kw.length < 2 || kw.length > 20) continue;
+            try {
+              await this.prisma.storeKeyword.create({
+                data: { storeId, keyword: kw, type: "SEASONAL" },
+              });
+              seasonalAdded++;
+            } catch {} // unique 충돌은 무시
+          }
+        }
+        if (seasonalAdded > 0) {
+          this.logger.log(`시즌 키워드 ${seasonalAdded}개 자동 등록`);
+        }
+      } catch (e: any) {
+        this.logger.warn(`축제 수집 실패 (나중에 재시도 가능): ${e.message}`);
       }
 
       // 8단계: 첫 브리핑 생성
@@ -750,6 +795,59 @@ export class StoreSetupService {
 
     this.logger.warn(`AI 완전 실패 — 규칙 기반 폴백 ${fallback.length}개 생성`);
     return this.sanitizeKeywords(fallback, primaryRegion);
+  }
+
+  /**
+   * 매장 업종/메뉴에서 KAMIS 가격 추적 대상 주재료 2~3개 자동 판정.
+   * AI(Claude)가 카테고리와 AI 키워드를 보고 대표 원재료 선정.
+   * KAMIS 카테고리 범주: 채소/과일/축산/수산/식량작물/특용작물 등
+   */
+  private async detectKeyIngredients(
+    storeName: string,
+    category: string,
+    aiKeywords: string[],
+  ): Promise<string[]> {
+    if (!category) return [];
+    const systemPrompt = `당신은 자영업 원가 분석 전문가. 매장의 대표 메뉴에서 KAMIS(농수산물유통공사) 가격 추적 대상 주재료 2~3개를 선정.
+
+## 선정 기준
+- **원가에서 차지하는 비중이 큰 재료** (메뉴 원가에 직접 영향)
+- **가격 변동이 심한 농/축/수산물** (식당 마진에 직접 영향)
+- KAMIS 에 등록된 표준 품목명으로 반환 (예: "아귀", "한우 등심", "깐마늘", "멥쌀", "돼지 삼겹살")
+- 가공식품/조미료는 제외 (가격 변동 적음)
+
+## 출력 (JSON 배열만, 설명 없이)
+["재료1", "재료2", "재료3"]
+
+## 예시
+- 아귀찜/해물찜 전문점 → ["아귀", "미더덕", "콩나물"]
+- 보리밥/한정식 → ["멥쌀", "흑마늘", "보리"]
+- 소고기 구이집 → ["한우 등심", "한우 갈비"]
+- 삼겹살집 → ["돼지 삼겹살", "깻잎"]
+- 치킨집 → ["닭", "식용유"]
+- 떡볶이집 → ["쌀떡", "고추장"]`;
+
+    const userPrompt = `매장 정보:
+- 매장명: ${storeName}
+- 카테고리: ${category}
+- 주요 키워드 (대표 메뉴 힌트): ${aiKeywords.slice(0, 8).join(", ")}
+
+위 매장의 KAMIS 가격 추적 대상 주재료 2~3개를 JSON 배열로 응답.`;
+
+    try {
+      const response = await this.ai.analyze(systemPrompt, userPrompt);
+      const match = response.content.match(/\[[\s\S]*\]/);
+      if (!match) return [];
+      const parsed = JSON.parse(match[0]);
+      const cleaned = (parsed as any[])
+        .filter((k) => typeof k === "string")
+        .map((k: string) => k.trim())
+        .filter((k: string) => k.length >= 2 && k.length <= 15);
+      return cleaned.slice(0, 3);
+    } catch (e: any) {
+      this.logger.warn(`AI 주재료 판정 실패: ${e.message}`);
+      return [];
+    }
   }
 
   /**

@@ -8,6 +8,7 @@ import { CompetitorRefreshJob } from "./competitor-refresh.job";
 import { KeywordManagementJob } from "./keyword-management.job";
 import { EffectMeasurementJob } from "./effect-measurement.job";
 import { WeeklyReportJob } from "./weekly-report.job";
+import { IngredientPriceJob } from "./ingredient-price.job";
 import { AnalysisProcessor } from "./processors/analysis.processor";
 import { RankCheckProcessor } from "./processors/rank-check.processor";
 import { BriefingProcessor } from "./processors/briefing.processor";
@@ -20,6 +21,7 @@ import { KeywordModule } from "../modules/keyword/keyword.module";
 import { ReviewModule } from "../modules/review/review.module";
 import { DataModule } from "../providers/data/data.module";
 import { CompetitorModule } from "../modules/competitor/competitor.module";
+import { IngredientModule } from "../modules/ingredient/ingredient.module";
 
 /**
  * Bull 큐 + 배치 cron 모듈.
@@ -62,6 +64,7 @@ import { CompetitorModule } from "../modules/competitor/competitor.module";
     ReviewModule,
     DataModule,
     CompetitorModule,
+    IngredientModule,
   ],
   providers: [
     BatchAnalysisJob,
@@ -71,6 +74,7 @@ import { CompetitorModule } from "../modules/competitor/competitor.module";
     KeywordManagementJob,
     EffectMeasurementJob,
     WeeklyReportJob,
+    IngredientPriceJob,
     AnalysisProcessor,
     RankCheckProcessor,
     BriefingProcessor,

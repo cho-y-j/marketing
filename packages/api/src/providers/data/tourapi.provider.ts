@@ -184,15 +184,29 @@ export class TourapiProvider {
    */
   async resolveAreaCode(name: string): Promise<string | null> {
     if (!name) return null;
+    // 짧은 표기 → 정식명 매핑 (TourAPI areaCode 는 정식명 기준)
+    const shortToFull: Record<string, string> = {
+      충북: "충청북도", 충남: "충청남도",
+      전북: "전라북도", 전남: "전라남도",
+      경북: "경상북도", 경남: "경상남도",
+      경기: "경기도", 강원: "강원특별자치도",
+      서울: "서울특별시", 부산: "부산광역시",
+      대구: "대구광역시", 인천: "인천광역시",
+      광주: "광주광역시", 대전: "대전광역시",
+      울산: "울산광역시", 세종: "세종특별자치시",
+      제주: "제주특별자치도",
+    };
     try {
       const list = await this.getAreaCodes();
       const norm = name.replace(/\s+/g, "");
-      // 정확 일치 우선
-      const exact = list.find((a) => a.name === norm);
-      if (exact) return exact.code;
+      const candidates = [norm, shortToFull[norm]].filter(Boolean) as string[];
+      for (const c of candidates) {
+        const exact = list.find((a) => a.name === c);
+        if (exact) return exact.code;
+      }
       // 부분 일치
-      const partial = list.find(
-        (a) => norm.includes(a.name) || a.name.includes(norm),
+      const partial = list.find((a) =>
+        candidates.some((c) => c.includes(a.name) || a.name.includes(c)),
       );
       return partial?.code ?? null;
     } catch (e: any) {

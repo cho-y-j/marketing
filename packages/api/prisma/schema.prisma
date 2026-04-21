@@ -117,6 +117,10 @@ model Store {
   // 매출 관련
   avgOrderValue Int? // 객단가 (원) — ROI 계산용
 
+  // 주재료 (KAMIS 가격 추적 대상) — 매장 셋업 시 AI가 카테고리에서 자동 판정
+  // 예: ["아귀", "새우"] / ["흑마늘", "멥쌀"] / ["한우등심", "한우갈비"]
+  keyIngredients String[] @default([])
+
   // 스마트플레이스 연동
   smartPlaceBizId String? // 스마트플레이스 Biz ID (리뷰 관리 바로가기용)
 
@@ -592,6 +596,38 @@ model ExcludedKeyword {
 
   @@unique([storeId, keyword])
   @@index([storeId])
+}
+
+// ===== 주재료 가격 히스토리 (KAMIS) =====
+// 매일 수집, 매장 keyIngredients 에 매칭되는 것만 저장
+model IngredientPrice {
+  id         String   @id @default(cuid())
+  itemName   String // "아귀", "흑마늘", "멥쌀" 등 KAMIS 품목명
+  unit       String // "kg", "500g" 등
+  price      Int // 원
+  priceType  String   @default("retail") // retail | wholesale
+  date       DateTime @db.Date // 기록 날짜
+  recordedAt DateTime @default(now())
+
+  @@unique([itemName, priceType, date])
+  @@index([itemName, date])
+}
+
+// ===== 가격 변동 알림 (매장별) =====
+model IngredientAlert {
+  id         String   @id @default(cuid())
+  storeId    String
+  itemName   String
+  alertType  String // WEEKLY_10 | MONTHLY_20 | TREND_2W | DROP
+  message    String // "아귀 전주 대비 +15% 상승 — 세트 가격 점검 권장"
+  currentPrice Int
+  previousPrice Int
+  changeRate Float // %
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([storeId, isRead])
 }
 
 // ===== 상담 신청 (CTA 전환 추적) =====

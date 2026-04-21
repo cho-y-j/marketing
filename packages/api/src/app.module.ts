@@ -6,6 +6,7 @@ import { AuthModule } from "./modules/auth/auth.module";
 import { StoreModule } from "./modules/store/store.module";
 import { AnalysisModule } from "./modules/analysis/analysis.module";
 import { CompetitorModule } from "./modules/competitor/competitor.module";
+import { IngredientModule } from "./modules/ingredient/ingredient.module";
 import { KeywordModule } from "./modules/keyword/keyword.module";
 import { BriefingModule } from "./modules/briefing/briefing.module";
 import { ContentModule } from "./modules/content/content.module";
@@ -34,6 +35,7 @@ import { JobsModule } from "./jobs/jobs.module";
     StoreModule,
     AnalysisModule,
     CompetitorModule,
+    IngredientModule,
     KeywordModule,
     BriefingModule,
     ContentModule,
