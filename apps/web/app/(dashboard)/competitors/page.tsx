@@ -374,21 +374,45 @@ export default function CompetitorsPage() {
         </CardContent>
       </Card>
 
-      {/* ===== 순위 테이블 (방문자+블로그 함께) ===== */}
-      <Card>
+      {/* ===== 모바일: 카드 리스트 ===== */}
+      <div className="md:hidden space-y-2">
+        {sortedRows.map((r, idx) => (
+          <MobileRankCard
+            key={r.key}
+            rank={idx + 1}
+            row={r}
+            periodLabel={periodLabel}
+            onDelete={r.isMine || !r.competitorId ? undefined : () => {
+              if (!confirm(`"${r.name}" 삭제?`)) return;
+              deleteComp.mutate(r.competitorId!, { onSuccess: () => toast.success("삭제됨") });
+            }}
+          />
+        ))}
+        {sortedRows.length <= 1 && (
+          <Card>
+            <CardContent className="py-8 text-center text-xs text-muted-foreground">
+              <AlertTriangle size={16} className="mx-auto mb-2 text-amber-500" />
+              등록된 경쟁사가 없습니다 — 아래서 추가하세요
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* ===== 데스크탑: 테이블 ===== */}
+      <Card className="hidden md:block">
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <div className="min-w-[900px]">
+            <div className="min-w-[700px]">
               {/* 헤더 - 그룹 */}
-              <div className="grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-1.5 border-b bg-muted/40 text-[10px] font-semibold text-muted-foreground">
+              <div className="grid grid-cols-[36px_minmax(140px,220px)_repeat(3,72px)_repeat(3,72px)_32px] gap-1 px-3 py-1.5 border-b bg-muted/40 text-[10px] font-semibold text-muted-foreground">
                 <div></div>
                 <div></div>
                 <div className="col-span-3 text-center border-l border-r border-border/50 bg-muted/50">방문자 리뷰</div>
-                <div className="col-span-3 text-center border-r border-border/50 bg-emerald-50/50">블로그 리뷰</div>
+                <div className="col-span-3 text-center border-r border-border/50 bg-muted/50">블로그 리뷰</div>
                 <div></div>
               </div>
               {/* 헤더 - 세부 */}
-              <div className="grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-2 border-b bg-muted/30 text-[10px] font-semibold text-muted-foreground">
+              <div className="grid grid-cols-[36px_minmax(140px,220px)_repeat(3,72px)_repeat(3,72px)_32px] gap-1 px-3 py-2 border-b bg-muted/30 text-[10px] font-semibold text-muted-foreground">
                 <div className="text-center">#</div>
                 <div>매장명</div>
                 <div className="text-right border-l border-border/50">누적</div>
@@ -468,6 +492,101 @@ export default function CompetitorsPage() {
   );
 }
 
+// 모바일 카드 리스트용
+function MobileRankCard({
+  rank, row, periodLabel, onDelete,
+}: {
+  rank: number;
+  row: Row;
+  periodLabel: string;
+  onDelete?: () => void;
+}) {
+  const fmtDelta = (v: number | null) =>
+    v == null ? "-" : v === 0 ? "0" : v > 0 ? `+${v.toLocaleString()}` : `${v.toLocaleString()}`;
+  const fmtRate = (v: number | null) =>
+    v == null ? "-" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+  const clr = (v: number | null) =>
+    v == null ? "text-muted-foreground" : v > 0 ? "text-red-600" : v < 0 ? "text-green-600" : "text-muted-foreground";
+
+  const vStatus = getStatus(row.visitor.rate, row.visitor.delta);
+  const bStatus = getStatus(row.blog.rate, row.blog.delta);
+
+  return (
+    <Card className={row.isMine ? "bg-primary/10 border-l-2 border-l-primary" : ""}>
+      <CardContent className="p-3">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            {rank === 1 && <Crown size={12} className="text-amber-500 shrink-0" />}
+            <span className={`text-xs font-bold shrink-0 ${row.isMine ? "text-primary" : "text-muted-foreground"}`}>
+              {rank}
+            </span>
+            <span className={`text-sm font-semibold truncate ${row.isMine ? "text-primary" : ""}`}>
+              {row.name}
+            </span>
+            {row.isMine && (
+              <span className="text-[9px] px-1 py-0 rounded bg-primary text-primary-foreground font-bold shrink-0">
+                나
+              </span>
+            )}
+          </div>
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              className="text-muted-foreground/40 hover:text-red-500 transition-colors shrink-0"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          {/* 방문자 */}
+          <div className="rounded-md bg-muted/40 p-2.5">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-muted-foreground font-semibold">방문자 리뷰</span>
+              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${vStatus.color}`}>
+                {vStatus.label}
+              </Badge>
+            </div>
+            <div className="font-mono font-bold text-sm">
+              {row.visitor.cumulative != null ? row.visitor.cumulative.toLocaleString() : "-"}
+            </div>
+            <div className="flex items-baseline justify-between text-[10px] mt-0.5">
+              <span className={`font-mono font-semibold ${clr(row.visitor.delta)}`}>
+                {fmtDelta(row.visitor.delta)}
+              </span>
+              <span className={`font-mono ${clr(row.visitor.rate)}`}>
+                {fmtRate(row.visitor.rate)}
+              </span>
+            </div>
+          </div>
+
+          {/* 블로그 */}
+          <div className="rounded-md bg-muted/40 p-2.5">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-muted-foreground font-semibold">블로그 리뷰</span>
+              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${bStatus.color}`}>
+                {bStatus.label}
+              </Badge>
+            </div>
+            <div className="font-mono font-bold text-sm">
+              {row.blog.cumulative != null ? row.blog.cumulative.toLocaleString() : "-"}
+            </div>
+            <div className="flex items-baseline justify-between text-[10px] mt-0.5">
+              <span className={`font-mono font-semibold ${clr(row.blog.delta)}`}>
+                {fmtDelta(row.blog.delta)}
+              </span>
+              <span className={`font-mono ${clr(row.blog.rate)}`}>
+                {fmtRate(row.blog.rate)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function RankRow({
   rank, row, onDelete,
 }: {
@@ -495,7 +614,7 @@ function RankRow({
 
   return (
     <div
-      className={`grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-2.5 border-b last:border-b-0 text-sm items-center transition-colors ${
+      className={`grid grid-cols-[36px_minmax(140px,220px)_repeat(3,72px)_repeat(3,72px)_32px] gap-1 px-3 py-2.5 border-b last:border-b-0 text-sm items-center transition-colors ${
         row.isMine ? "bg-primary/10 border-l-2 border-l-primary font-semibold" : "hover:bg-muted/20"
       }`}
     >
