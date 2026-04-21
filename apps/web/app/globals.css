@@ -10,33 +10,39 @@
    하드코딩 색상 (text-blue-500 등) 금지
    ======================================== */
 @theme {
-  /* 브랜드 */
-  --color-brand: #4F46E5;
-  --color-brand-light: #818CF8;
-  --color-brand-subtle: #EEF2FF;
-  --color-brand-dark: #3730A3;
+  /* 브랜드 — Apple Blue (단일 액센트) */
+  --color-brand: #0071e3;        /* Apple Blue — CTA 버튼/포커스 */
+  --color-brand-light: #2997ff;  /* Bright Blue — 어두운 배경의 링크 */
+  --color-brand-subtle: #e8f3ff; /* 연한 액센트 */
+  --color-brand-dark: #0066cc;   /* Link Blue — 밝은 배경의 본문 링크 */
 
-  /* 시맨틱 */
+  /* 시맨틱 — 데이터 앱 특성상 amber/red 유지, 초록/파랑은 최소화 */
   --color-success: #10B981;
   --color-success-light: #D1FAE5;
   --color-warning: #F59E0B;
   --color-warning-light: #FEF3C7;
   --color-danger: #EF4444;
   --color-danger-light: #FEE2E2;
-  --color-info: #3B82F6;
-  --color-info-light: #DBEAFE;
+  --color-info: #0071e3;         /* info = brand (Apple 단일 액센트 원칙) */
+  --color-info-light: #e8f3ff;
 
-  /* 텍스트 */
-  --color-text-primary: #111827;
-  --color-text-secondary: #6B7280;
-  --color-text-tertiary: #9CA3AF;
+  /* 텍스트 — Apple의 warm black */
+  --color-text-primary: #1d1d1f;        /* Apple near-black (따뜻한 블랙) */
+  --color-text-secondary: rgba(0,0,0,0.8);
+  --color-text-tertiary: rgba(0,0,0,0.48);
 
-  /* 표면 */
-  --color-surface: #FFFFFF;
-  --color-surface-secondary: #F9FAFB;
-  --color-surface-tertiary: #F3F4F6;
-  --color-border-primary: #E5E7EB;
-  --color-border-secondary: #F3F4F6;
+  /* 표면 — Apple 배경 체계 */
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f5f5f7;   /* Apple 아이콘 light gray (blue-tinted) */
+  --color-surface-tertiary: #fafafc;    /* Filter 버튼 계열 */
+  --color-border-primary: rgba(0,0,0,0.08);
+  --color-border-secondary: rgba(0,0,0,0.04);
+
+  /* Apple 쉐도우 (드물게 사용) */
+  --shadow-apple-card: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+
+  /* Apple Pill 반경 */
+  --radius-pill: 980px;
 
   /* 차트 전용 (5색 — 서로 구분 쉽게) */
   --color-chart-blue: #4F46E5;
@@ -110,14 +116,14 @@ body {
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.55 0.15 250);
-  --primary-foreground: oklch(0.985 0 0);
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --card: #ffffff;
+  --card-foreground: #1d1d1f;
+  --popover: #ffffff;
+  --popover-foreground: #1d1d1f;
+  --primary: #0071e3;           /* Apple Blue */
+  --primary-foreground: #ffffff;
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
@@ -178,12 +184,78 @@ body {
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* ========================================
+   Apple Pill CTA 유틸리티
+   사용: <a className="apple-pill">더 알아보기</a>
+         <button className="apple-pill-filled">Shop</button>
+   ======================================== */
+@layer utilities {
+  .apple-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 18px;
+    height: 36px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-brand-dark);
+    color: var(--color-brand-dark);
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: -0.224px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+  .apple-pill:hover {
+    background: rgba(0, 113, 227, 0.06);
+  }
+  .apple-pill-filled {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 22px;
+    height: 36px;
+    border-radius: var(--radius-pill);
+    background: var(--color-brand);
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: -0.224px;
+    transition: filter 120ms ease;
+  }
+  .apple-pill-filled:hover {
+    filter: brightness(1.06);
+  }
+  /* Apple 섹션 배경 교차 시스템 */
+  .apple-section-light { background: var(--color-surface-secondary); }
+  .apple-section-dark  { background: #000000; color: #ffffff; }
+  /* Apple 카드 쉐도우 (드물게 사용) */
+  .apple-elevation {
+    box-shadow: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+  }
+  /* Apple 타이트 타이포 */
+  .apple-display {
+    font-weight: 600;
+    letter-spacing: -0.28px;
+    line-height: 1.07;
+  }
+  .apple-headline {
+    font-weight: 600;
+    letter-spacing: -0.019em;
+    line-height: 1.14;
+  }
+  .apple-body {
+    letter-spacing: -0.022em;
+    line-height: 1.47;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
+    letter-spacing: -0.022em; /* Apple body 기본 negative tracking */
   }
   html {
     @apply font-sans;
