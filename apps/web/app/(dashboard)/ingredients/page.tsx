@@ -20,8 +20,10 @@ type PriceItem = {
   previousMonth: number | null;
   weeklyChange: number | null;
   weeklyChangeAmount: number | null;
+  weeklySuspicious?: boolean;
   monthlyChange: number | null;
   monthlyChangeAmount: number | null;
+  monthlySuspicious?: boolean;
   lastUpdated: string | null;
 };
 
@@ -232,11 +234,12 @@ export default function IngredientsPage() {
         <CardContent className="p-4 text-xs space-y-1.5">
           <div className="font-semibold text-sky-900">알림 기준</div>
           <div className="text-sky-800/90 space-y-0.5">
-            <div>• 전주 대비 <strong>+10% 이상</strong> 상승 시 일반 알림</div>
-            <div>• 전월 대비 <strong>+20% 이상</strong> 상승 시 강한 알림 (가격 재검토 권장)</div>
+            <div>• 전주 대비 <strong>+10~30%</strong> 상승 시 일반 알림</div>
+            <div>• 전월 대비 <strong>+20~50%</strong> 상승 시 강한 알림 (가격 재검토 권장)</div>
             <div>• 하락 시 알림 없음 (원가 절감 기회로 가정)</div>
-            <div className="pt-1 text-sky-700/70">
-              주재료 변경은 설정 &gt; 매장 관리에서 가능 (예정)
+            <div>
+              • <span className="text-amber-600 font-semibold">⚠</span> 마크:
+              변동 ±30~50% 초과 — KAMIS 단위/품종 변경 가능성 (신뢰도 낮음, 알림 제외)
             </div>
           </div>
         </CardContent>
@@ -247,8 +250,10 @@ export default function IngredientsPage() {
 
 function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }) {
   const hasData = item.current != null;
-  const weeklyClr =
-    item.weeklyChange == null
+  // 이상치(단위 변경 가능성)는 회색 처리해서 "일반 변동"으로 오인 방지
+  const weeklyClr = item.weeklySuspicious
+    ? "text-muted-foreground"
+    : item.weeklyChange == null
       ? "text-muted-foreground"
       : item.weeklyChange >= 10
         ? "text-red-700 font-bold"
@@ -257,8 +262,9 @@ function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }
           : item.weeklyChange < 0
             ? "text-green-600"
             : "text-muted-foreground";
-  const monthlyClr =
-    item.monthlyChange == null
+  const monthlyClr = item.monthlySuspicious
+    ? "text-muted-foreground"
+    : item.monthlyChange == null
       ? "text-muted-foreground"
       : item.monthlyChange >= 20
         ? "text-red-700 font-bold"
@@ -268,8 +274,11 @@ function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }
             ? "text-green-600"
             : "text-muted-foreground";
 
-  const status =
-    (item.monthlyChange ?? 0) >= 20
+  // 이상치면 상태는 "확인 필요" (급등/상승 과장 방지)
+  const isSuspicious = item.weeklySuspicious || item.monthlySuspicious;
+  const status = isSuspicious
+    ? { label: "확인 필요", color: "bg-gray-100 text-gray-600 border-gray-300" }
+    : (item.monthlyChange ?? 0) >= 20
       ? { label: "급등", color: "bg-red-100 text-red-700 border-red-300" }
       : (item.weeklyChange ?? 0) >= 10
         ? { label: "상승", color: "bg-amber-100 text-amber-700 border-amber-300" }
@@ -312,14 +321,26 @@ function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }
           <span className="text-muted-foreground">-</span>
         )}
       </div>
-      <div className={`text-right ${weeklyClr}`}>
-        <div className="font-mono font-semibold">{fmtRate(item.weeklyChange)}</div>
+      <div
+        className={`text-right ${weeklyClr}`}
+        title={item.weeklySuspicious ? "변동폭이 비정상 — KAMIS 측정 단위/품종 변경 가능성" : ""}
+      >
+        <div className="font-mono font-semibold">
+          {fmtRate(item.weeklyChange)}
+          {item.weeklySuspicious && <span className="ml-0.5 text-amber-500">⚠</span>}
+        </div>
         {fmtAmt(item.weeklyChangeAmount) && (
           <div className="text-[10px]">{fmtAmt(item.weeklyChangeAmount)}</div>
         )}
       </div>
-      <div className={`text-right ${monthlyClr}`}>
-        <div className="font-mono font-semibold">{fmtRate(item.monthlyChange)}</div>
+      <div
+        className={`text-right ${monthlyClr}`}
+        title={item.monthlySuspicious ? "변동폭이 비정상 — KAMIS 측정 단위/품종 변경 가능성" : ""}
+      >
+        <div className="font-mono font-semibold">
+          {fmtRate(item.monthlyChange)}
+          {item.monthlySuspicious && <span className="ml-0.5 text-amber-500">⚠</span>}
+        </div>
         {fmtAmt(item.monthlyChangeAmount) && (
           <div className="text-[10px]">{fmtAmt(item.monthlyChangeAmount)}</div>
         )}

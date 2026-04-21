@@ -189,6 +189,11 @@ export class IngredientPriceService {
       const monthlyChange =
         matched.month > 0 ? ((matched.today - matched.month) / matched.month) * 100 : null;
 
+      // 이상치 판정 — KAMIS 가 품종/단위 변경 시 비정상 변동률 나옴
+      //   전주 ±30% / 전월 ±50% 초과는 측정 변경 가능성 높음
+      const weeklySuspicious = weeklyChange != null && Math.abs(weeklyChange) > 30;
+      const monthlySuspicious = monthlyChange != null && Math.abs(monthlyChange) > 50;
+
       items.push({
         itemName: name,
         unit: matched.unit,
@@ -197,8 +202,10 @@ export class IngredientPriceService {
         previousMonth: matched.month > 0 ? matched.month : null,
         weeklyChange: weeklyChange != null ? +weeklyChange.toFixed(1) : null,
         weeklyChangeAmount: matched.week > 0 ? matched.today - matched.week : null,
+        weeklySuspicious,
         monthlyChange: monthlyChange != null ? +monthlyChange.toFixed(1) : null,
         monthlyChangeAmount: matched.month > 0 ? matched.today - matched.month : null,
+        monthlySuspicious,
         lastUpdated: today,
       });
     }
@@ -284,15 +291,17 @@ export class IngredientPriceService {
         });
         if (already) continue;
 
+        // 이상치 제외 — KAMIS 측정 변경으로 인한 허위 급등 방지
+        //   전주 +30% 초과 / 전월 +50% 초과는 실제 가격 변동이 아닐 가능성 높음
         const rules: Array<{ condition: boolean; type: string; rate: number; prev: number }> = [
           {
-            condition: (monthlyRate ?? 0) >= 20,
+            condition: (monthlyRate ?? 0) >= 20 && (monthlyRate ?? 0) <= 50,
             type: "MONTHLY_20",
             rate: monthlyRate ?? 0,
             prev: matched.month,
           },
           {
-            condition: (weeklyRate ?? 0) >= 10,
+            condition: (weeklyRate ?? 0) >= 10 && (weeklyRate ?? 0) <= 30,
             type: "WEEKLY_10",
             rate: weeklyRate ?? 0,
             prev: matched.week,
