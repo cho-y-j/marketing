@@ -563,64 +563,148 @@ export class StoreSetupService {
       gu?.replace(/구$/, "") ||
       "";
 
-    // 의뢰자(마케팅 전문가) 공식 프롬프트 — 임의 변경 금지
-    const systemPrompt = `특정 매장 기준으로 검색 키워드를 구성해줘.
-단순 검색량 기준이 아니라, 실제 고객 유입 흐름을 반영해서 키워드를 만들어줘.
-
-조건은 아래 기준을 반드시 지켜줘.
-
-1. 지역 키워드:
-   - 해당 지역에 **지하철역이 있으면** '지역명' + '지역명+역' 두 형태 모두 포함 (예: 공덕 맛집, 공덕역 맛집)
-   - **역이 없는 시골/읍/면 지역**은 '지역명' 만 사용 (억지로 '역' 붙이지 말 것 — 예: 단양읍역 ❌)
-   - 주변 유명 랜드마크/상권명이 있으면 추가 (예: 뱅뱅사거리, 명동입구 등)
-2. 키워드는 반드시 아래 3가지 구조로 나눌 것
-   - 유입 키워드 (예: 맛집)
-   - 상황 키워드 (예: 점심, 술집, 회식, 데이트, 가족모임 등)
-   - 메뉴 키워드 (예: 대표 음식명 — 아구찜, 해물찜 같은 세부 메뉴)
-3. 각 카테고리를 균형 있게 포함하여 **총 10개 이하** 로 구성
-4. 고객 검색 흐름을 반영 (유입 → 상황 → 메뉴 선택 단계)
-5. 실제 매장 방문으로 이어질 가능성이 높은 구조로 구성
-6. 업종이 명확하면 '고기집' 같은 **포괄적 키워드는 제외**하고 대표 메뉴/세부 카테고리 키워드 사용
-7. 단순 정보 탐색이 아닌, **실제 방문 의도가 있는 키워드만** 포함
-8. 유사 의미 키워드는 중복되지 않도록 최적화
-9. **최소 5개 이상** 생성
-
-※ 출력은 설명 없이 키워드만 JSON 배열 형태로 제공.
-   예 (역 있는 지역): ["공덕 맛집", "공덕역 맛집", "공덕 아구찜", "공덕 해물찜", "공덕 회식"]
-   예 (역 없는 지역): ["단양 맛집", "단양 보리밥", "단양 흑마늘", "단양 가족모임", "단양 한방밥상"]`;
-
-    // AI 혼란 방지: 접미사 제거한 "간단 지명" 전달
+    // AI 혼란 방지: 접미사 제거
     const cleanDong = dong?.replace(/(동|읍|면)$/, "");
     const cleanGu = gu?.replace(/구$/, "");
-    const isMetro = /특별시|광역시|서울|부산|대구|인천|광주|대전|울산/.test(address); // 수도권/광역시
+
+    // 의뢰자(마케팅 전문가) 공식 프롬프트 — AI가 먼저 지역 맥락을 추론한 뒤 키워드 생성
+    const systemPrompt = `당신은 자영업 마케팅 전문가. 주어진 매장에 대해 **먼저 지역 맥락을 파악**한 뒤, 실제 고객 유입으로 이어지는 검색 키워드를 생성해야 함.
+
+## 작업 순서
+
+### 1단계: 지역 분석 (너 머릿속에서 먼저 판단)
+- **핵심 유입 지역명**: 고객이 실제 검색할 때 쓰는 지역명 (행정동명 X, 상권명/역명/구명 O)
+  예: 주소가 "서울 마포구 도화동"이고 매장명이 "공덕직영점"이면 핵심 지역은 **"공덕"** (도화동 X)
+- **주변 지하철역**: 매장 반경 1km 내 지하철역 (있으면 최대 2개, 없으면 null)
+- **주변 상권/랜드마크**: 유명 상권명 (있으면 최대 2개, 없으면 null)
+  예: 강남역 주변 → "뱅뱅사거리", "신논현"
+
+### 2단계: 키워드 생성 — 아래 규칙 **모두** 준수
+1. 지역 키워드:
+   - 지하철역이 있으면 '지역명' + '지역명+역' 두 형태 (예: 공덕 맛집, 공덕역 맛집)
+   - 역이 없는 지방 지역은 '지역명'만 (억지로 '역' 붙이지 말 것)
+   - 추가 상권/랜드마크가 있으면 포함 (예: 뱅뱅사거리 맛집)
+2. 키워드는 3가지 카테고리로 분류해서 생성:
+   - **유입** (예: 맛집, 식당) — 최소 2개
+   - **상황** (예: 회식, 점심, 데이트, 가족모임, 혼밥) — 최소 2개
+   - **메뉴** (예: 아구찜, 소고기 같은 세부 메뉴) — 최소 2개
+3. 총 7~10개로 구성
+4. 고객 검색 흐름 반영 (유입 → 상황 → 메뉴)
+5. '고기집', '한식', '음식점' 같은 포괄적 키워드 **단독 사용 금지** — 반드시 지역명 결합 or 세부 메뉴
+6. 카테고리 원문 절대 포함 금지 (예: "음식점>한식" ❌)
+7. 단순 정보 탐색 키워드 금지 (예: "한식 역사" ❌)
+8. 유사 의미 키워드 중복 최소화
+
+## 출력 형식 (JSON만, 설명 없이)
+
+\`\`\`json
+{
+  "analysis": {
+    "primaryRegion": "공덕",
+    "subwayStations": ["공덕역"],
+    "landmarks": ["공덕오거리"]
+  },
+  "keywords": [
+    {"kw": "공덕 맛집", "category": "유입"},
+    {"kw": "공덕역 맛집", "category": "유입"},
+    {"kw": "공덕 회식", "category": "상황"},
+    {"kw": "공덕역 회식", "category": "상황"},
+    {"kw": "공덕 점심", "category": "상황"},
+    {"kw": "공덕 아구찜", "category": "메뉴"},
+    {"kw": "공덕 해물찜", "category": "메뉴"},
+    {"kw": "공덕역 아구찜", "category": "메뉴"}
+  ]
+}
+\`\`\`
+
+## 예시 — 육목원 (강남 소고기집)
+\`\`\`json
+{
+  "analysis": {"primaryRegion": "강남", "subwayStations": ["강남역"], "landmarks": ["뱅뱅사거리"]},
+  "keywords": [
+    {"kw": "강남 맛집", "category": "유입"},
+    {"kw": "강남역 맛집", "category": "유입"},
+    {"kw": "강남 회식", "category": "상황"},
+    {"kw": "강남역 회식", "category": "상황"},
+    {"kw": "강남 소고기", "category": "메뉴"},
+    {"kw": "강남역 소고기", "category": "메뉴"},
+    {"kw": "뱅뱅사거리 맛집", "category": "유입"}
+  ]
+}
+\`\`\`
+
+## 예시 — 지방 매장 (단양 보리밥집, 역 없음)
+\`\`\`json
+{
+  "analysis": {"primaryRegion": "단양", "subwayStations": null, "landmarks": ["수안보"]},
+  "keywords": [
+    {"kw": "단양 맛집", "category": "유입"},
+    {"kw": "단양 한정식", "category": "유입"},
+    {"kw": "단양 가족모임", "category": "상황"},
+    {"kw": "단양 점심", "category": "상황"},
+    {"kw": "단양 보리밥", "category": "메뉴"},
+    {"kw": "단양 흑마늘", "category": "메뉴"},
+    {"kw": "수안보 맛집", "category": "유입"}
+  ]
+}
+\`\`\``;
+
     const userPrompt = `매장 정보:
 - 매장명: ${storeName}
-- **핵심 지역명(역/랜드마크 조합 용)**: ${regionHint || "-"}
-- 구/동/읍/면: ${cleanGu || "-"} / ${cleanDong || "-"}
-- 도로명주소: ${extraInfo?.roadAddress || address}
-- 카테고리: ${category}
+- 주소: ${extraInfo?.roadAddress || address}
+- 매장명 브랜드 지역 힌트: ${brandLocationHint || "-"} (있으면 도로명주소보다 우선)
+- 구/동(정제): ${cleanGu || "-"} / ${cleanDong || "-"}
+- 업종 카테고리: ${category}
 - 대표 메뉴/세부 카테고리: ${categoryParts.join(", ") || "-"}
-- 지역 타입: ${isMetro ? "대도시/광역시 (지하철역 있음 — '지역명+역' 키워드 생성 권장)" : "지방 소도시/군/읍 (지하철역 없을 가능성 — '지역명+역' 키워드 만들지 말 것)"}
+- 리뷰 규모: 방문자 ${extraInfo?.reviewCount ?? "?"}건 / 블로그 ${extraInfo?.blogReviewCount ?? "?"}건
 
-위 조건을 지켜서 **최소 5개 이상** 키워드 JSON 배열만 응답. 설명 금지.`;
+위 매장에 대해 1단계 지역 분석 → 2단계 키워드 생성 → JSON 출력. 설명 없이 JSON만.`;
 
-    try {
-      const response = await this.ai.analyze(systemPrompt, userPrompt);
-      const match = response.content.match(/\[[\s\S]*\]/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        const cleaned = this.sanitizeKeywords(
-          parsed.filter((k: any) => typeof k === "string"),
-          regionHint || gu?.replace(/구$/, "") || dong?.replace(/동$/, "") || "",
-        );
-        if (cleaned.length >= 3) {
-          this.logger.log(`AI 키워드 생성 [${response.provider}]: ${cleaned.length}개 — ${cleaned.join(", ")}`);
-          return cleaned;
+    // AI 호출 + 검증 + 1회 재시도
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await this.ai.analyze(systemPrompt, userPrompt);
+        const match = response.content.match(/\{[\s\S]*\}/);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          const analysis = parsed.analysis || {};
+          const kwEntries: Array<{ kw: string; category: string }> = parsed.keywords || [];
+          const rawKws = kwEntries.map((k) => k.kw).filter((s) => typeof s === "string");
+
+          // 분석 결과 로그
+          this.logger.log(
+            `AI 지역 분석 [${response.provider}] — 핵심지역: ${analysis.primaryRegion}, 역: ${JSON.stringify(analysis.subwayStations)}, 랜드마크: ${JSON.stringify(analysis.landmarks)}`,
+          );
+
+          // 지역 힌트: AI가 뽑은 primaryRegion 우선, 없으면 내가 추출한 regionHint
+          const effectiveRegion = analysis.primaryRegion || regionHint || cleanGu || cleanDong || "";
+          const cleaned = this.sanitizeKeywords(rawKws, effectiveRegion);
+
+          // 카테고리별 분포 검증
+          const byCategory: Record<string, number> = {};
+          for (const e of kwEntries) {
+            if (cleaned.includes(e.kw?.trim())) {
+              byCategory[e.category] = (byCategory[e.category] || 0) + 1;
+            }
+          }
+          const balanced =
+            (byCategory["유입"] || 0) >= 2 &&
+            (byCategory["메뉴"] || 0) >= 1 &&
+            cleaned.length >= 5;
+
+          if (balanced) {
+            this.logger.log(
+              `AI 키워드 검증 통과 (시도 ${attempt}) — 유입 ${byCategory["유입"] || 0} / 상황 ${byCategory["상황"] || 0} / 메뉴 ${byCategory["메뉴"] || 0}: ${cleaned.join(", ")}`,
+            );
+            return cleaned;
+          }
+          this.logger.warn(
+            `AI 키워드 검증 실패 (시도 ${attempt}) — 유입 ${byCategory["유입"] || 0} 메뉴 ${byCategory["메뉴"] || 0} 총 ${cleaned.length} — ${attempt < 2 ? "재시도" : "폴백"}`,
+          );
         }
-        this.logger.warn(`AI 키워드 검증 후 ${cleaned.length}개만 남음 — 폴백 사용`);
+      } catch (e: any) {
+        this.logger.warn(`AI 키워드 생성 실패 (시도 ${attempt}): ${e.message}`);
       }
-    } catch (e: any) {
-      this.logger.warn(`AI 키워드 생성 실패: ${e.message}`);
     }
 
     // AI 완전 실패 시: 매우 보수적 최소 폴백 (지역+맛집 형태만)

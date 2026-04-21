@@ -37,13 +37,35 @@ export class KeywordDiscoveryService {
       return { discovered: [], hidden: [], aiRecommended: [], message: "시드 키워드가 없습니다. 키워드를 먼저 추가해주세요." };
     }
 
-    // 1. 검색광고 API 연관 키워드 (여러 시드로 조회)
+    // 1. 검색광고 API 연관 키워드 + 지역 필터 + 포괄어 필터
+    //    (네이버 API는 "단양맛집" 시드에 "거창맛집" 같은 전국 지역맛집을 반환 — 접미사 패턴 매칭뿐)
+    //    → 우리 매장 지역과 무관한 지역명 포함 키워드 자동 폐기
+    const regionTokens = this.extractRegionTokens(store.address || "", store.district || "", store.name);
+    const otherRegionBlacklist = this.buildOtherRegionBlacklist(regionTokens);
+    const POLYMERIC_SOLO = new Set([
+      "맛집", "한식", "양식", "일식", "중식", "분식", "음식점", "고기집",
+      "술집", "카페", "치킨", "피자", "족발", "보쌈", "고기", "식당",
+      "찜닭", "조개구이", "해물찜", "코다리", "아귀찜", "회",
+    ]);
+
+    const isAcceptable = (kw: string): boolean => {
+      const trimmed = kw.trim();
+      if (trimmed.length < 2 || trimmed.length > 30) return false;
+      if (trimmed.includes(">") || trimmed.includes("{") || trimmed.includes("}")) return false;
+      if (POLYMERIC_SOLO.has(trimmed)) return false;
+      // 매장 지역 토큰 중 하나라도 포함해야 함 (토큰이 있을 때만 검증)
+      if (regionTokens.length > 0 && !regionTokens.some((t) => trimmed.includes(t))) return false;
+      // 다른 지역명 포함 금지 (거창맛집 등)
+      if (otherRegionBlacklist.some((t) => trimmed.includes(t))) return false;
+      return true;
+    };
+
     const allRelated: Map<string, any> = new Map();
     for (const seed of seeds.slice(0, 3)) {
       try {
         const related = await this.searchad.getRelatedKeywords(seed);
         for (const r of related) {
-          if (!existingKeywords.has(r.relKeyword) && !allRelated.has(r.relKeyword)) {
+          if (!existingKeywords.has(r.relKeyword) && !allRelated.has(r.relKeyword) && isAcceptable(r.relKeyword)) {
             allRelated.set(r.relKeyword, {
               keyword: r.relKeyword,
               monthlyVolume: (r.monthlyPcQcCnt || 0) + (r.monthlyMobileQcCnt || 0),
@@ -158,5 +180,52 @@ export class KeywordDiscoveryService {
       aiRecommended: aiWithVolume,
       seed: seeds[0],
     };
+  }
+
+  /**
+   * 매장의 주소/지역/이름에서 "지역 토큰" 추출.
+   * 여기 포함된 토큰이 키워드 문자열에 들어가야만 통과.
+   * 예) "충북 단양군 단양읍 별곡9길" → ["단양", "별곡"]
+   *     "서울 마포구 도화동" + 매장명 "공덕직영점" → ["마포", "도화", "공덕"]
+   */
+  private extractRegionTokens(address: string, district: string, storeName: string): string[] {
+    const tokens = new Set<string>();
+    const addParts = (src: string) => {
+      for (const p of src.split(/\s+/).filter(Boolean)) {
+        const stripped = p.replace(/(시|군|구|동|읍|면|도|광역시|특별시)$/, "");
+        if (stripped.length >= 2) tokens.add(stripped);
+      }
+    };
+    addParts(address);
+    addParts(district);
+    // 매장명 지역 힌트 추출 (예: "공덕직영점" → "공덕", "강남역점" → "강남")
+    const brandHint = storeName.match(/([가-힣]{2,4}?)(직영점|역점|지점|점)/)?.[1];
+    if (brandHint && brandHint.length >= 2) tokens.add(brandHint);
+    // 너무 일반적인 시·도 이름은 제외 (과매칭 방지)
+    const TOO_GENERIC = new Set(["서울", "경기", "충북", "충남", "경북", "경남", "전북", "전남", "강원", "제주"]);
+    return [...tokens].filter((t) => !TOO_GENERIC.has(t));
+  }
+
+  /**
+   * 전국 유명 지역명 블랙리스트 중, 매장 지역 토큰과 겹치지 않는 것만 반환.
+   * 키워드에 이 블랙리스트의 지역명이 포함돼 있으면 매장과 무관 판정 → 폐기.
+   */
+  private buildOtherRegionBlacklist(myTokens: string[]): string[] {
+    const ALL_REGIONS = [
+      // 서울 25개 구
+      "강남", "강동", "강북", "강서", "관악", "광진", "구로", "금천", "노원", "도봉",
+      "동대문", "동작", "마포", "서대문", "서초", "성동", "성북", "송파", "양천", "영등포",
+      "용산", "은평", "종로", "중구", "중랑",
+      // 경기 주요 시
+      "수원", "성남", "고양", "용인", "부천", "안산", "안양", "남양주", "화성", "평택", "의정부", "시흥", "파주", "김포",
+      // 광역시
+      "부산", "대구", "인천", "광주", "대전", "울산", "세종",
+      // 지방 소도시 일부
+      "단양", "제천", "청주", "천안", "아산", "공주", "거창", "창녕", "곡성", "영천", "괴산", "태안",
+      "춘천", "원주", "강릉", "속초", "포항", "경주", "울진", "남해", "여수", "순천", "군산", "전주",
+    ];
+    const mine = new Set(myTokens);
+    // 내 지역 토큰이 블랙리스트 단어를 포함하면 그 단어도 제외 (예: 내가 "강남" → "강남" 빼기)
+    return ALL_REGIONS.filter((r) => !mine.has(r) && ![...mine].some((t) => t.includes(r) || r.includes(t)));
   }
 }
