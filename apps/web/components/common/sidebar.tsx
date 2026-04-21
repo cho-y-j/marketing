@@ -18,6 +18,7 @@ import {
   FileBarChart,
   Shield,
   Globe,
+  DollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +49,7 @@ const navGroups = [
     label: "성과 확인",
     items: [
       { href: "/reports", label: "리포트", icon: FileBarChart },
+      { href: "/ingredients", label: "원가 관리", icon: DollarSign },
       { href: "/foreign-market", label: "외국인 상권", icon: Globe },
     ],
   },

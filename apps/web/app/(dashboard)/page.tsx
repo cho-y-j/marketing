@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { OnboardingCard } from "@/components/dashboard/onboarding-card";
 import { SetupProgressCard } from "@/components/dashboard/setup-progress-card";
-import { IngredientPriceWidget } from "@/components/dashboard/ingredient-price-widget";
+import { IngredientAlertBar } from "@/components/dashboard/ingredient-alert-bar";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useCreateStore } from "@/hooks/useStore";
 import { useDashboard } from "@/hooks/useDashboard";
@@ -136,8 +136,8 @@ export default function DashboardPage() {
       {/* 셋업 진행 */}
       {storeId && <SetupProgressCard storeId={storeId} />}
 
-      {/* 주재료 가격 (KAMIS) */}
-      <IngredientPriceWidget storeId={storeId} />
+      {/* 주재료 가격 급등 알림 (평소 숨김) */}
+      <IngredientAlertBar storeId={storeId} />
 
       {/* 마케팅 단계 배너 */}
       {marketingPhase && (

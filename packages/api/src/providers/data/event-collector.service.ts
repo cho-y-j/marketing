@@ -44,18 +44,12 @@ export class EventCollectorService {
       throw new TourapiNotConfiguredError();
     }
 
-    // 1) 주소에서 광역명 추출 → areaCode
-    const region = this.extractRegion(store.address || store.district || "");
-    if (!region) {
-      this.logger.warn(
-        `[${store.name}] 주소에서 광역 추출 실패 — 전국 축제로 폴백`,
-      );
-    }
-    const areaCode = region
-      ? await this.tourapi.resolveAreaCode(region)
-      : null;
+    // 1) 주소에서 법정동 시도/시군구 코드 추출
+    const fullAddr = store.address || store.district || "";
+    const region = this.extractRegion(fullAddr);
+    const ldong = await this.tourapi.resolveLdongCodes(fullAddr);
     this.logger.log(
-      `[${store.name}] 지역=${region ?? "전국"} areaCode=${areaCode ?? "(없음)"}`,
+      `[${store.name}] 지역=${ldong.regnName}/${ldong.signguName} lDong=${ldong.regn}/${ldong.signgu}`,
     );
 
     // 2) 날짜 범위
@@ -65,21 +59,48 @@ export class EventCollectorService {
     const startDate = this.fmt(today);
     const endDate = this.fmt(future);
 
-    // 3) 페이징하여 모두 수집 (최대 5페이지 = 250건 — 일 트래픽 1,000 건 보호)
+    // 3) 3단 폴백 체인으로 축제 수집
+    //    - 1순위: 시군구 (예: 단양군) — 가장 정확
+    //    - 2순위: 시도 (예: 충북) — 근방 전체
+    //    - 3순위: 전국 — 관광지 대형 축제
     const all: TourapiFestival[] = [];
-    for (let page = 1; page <= 5; page++) {
-      const list = await this.tourapi.searchFestivals({
-        startDate,
-        endDate,
-        areaCode: areaCode ?? undefined,
-        numOfRows: 50,
-        pageNo: page,
-      });
-      if (list.length === 0) break;
-      all.push(...list);
-      if (list.length < 50) break;
+    const fetchPaged = async (params: {
+      lDongRegnCd?: string;
+      lDongSignguCd?: string;
+    }) => {
+      const collected: TourapiFestival[] = [];
+      for (let page = 1; page <= 3; page++) {
+        const list = await this.tourapi.searchFestivals({
+          startDate, endDate, numOfRows: 50, pageNo: page, ...params,
+        });
+        if (list.length === 0) break;
+        collected.push(...list);
+        if (list.length < 50) break;
+      }
+      return collected;
+    };
+
+    let tier: "sigungu" | "sido" | "nation" = "nation";
+    if (ldong.regn && ldong.signgu) {
+      const list = await fetchPaged({ lDongRegnCd: ldong.regn, lDongSignguCd: ldong.signgu });
+      if (list.length > 0) {
+        all.push(...list);
+        tier = "sigungu";
+      }
     }
-    this.logger.log(`[${store.name}] 축제 ${all.length}건 수집됨`);
+    if (all.length === 0 && ldong.regn) {
+      const list = await fetchPaged({ lDongRegnCd: ldong.regn });
+      if (list.length > 0) {
+        all.push(...list);
+        tier = "sido";
+      }
+    }
+    if (all.length === 0) {
+      // 전국 축제 (마지막 폴백) — 대형 행사나 전국 관광 대상
+      all.push(...(await fetchPaged({})));
+      tier = "nation";
+    }
+    this.logger.log(`[${store.name}] 축제 ${all.length}건 수집됨 (${tier} 매칭)`);
 
     // 4) DB upsert — contentid 를 자연 키로 사용 (SeasonalEvent 에 unique 가 없으므로 name+startDate 매칭)
     let count = 0;

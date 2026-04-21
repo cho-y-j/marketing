@@ -34,6 +34,8 @@ export interface TourapiFestival {
   eventenddate: string;
   areacode?: string;
   sigungucode?: string;
+  lDongRegnCd?: string;
+  lDongSignguCd?: string;
   firstimage?: string;
   mapx?: string;
   mapy?: string;
@@ -44,6 +46,28 @@ export interface TourapiArea {
   code: string;
   name: string;
 }
+
+// 시도 → 법정동 시도 코드 (lDongRegnCd)
+// TourAPI v2 의 lDong 필터는 표준 법정동 코드 사용 (areaCode 와 다른 체계)
+const SIDO_TO_LDONG_REGN: Record<string, string> = {
+  서울: "11", 서울특별시: "11",
+  부산: "26", 부산광역시: "26",
+  대구: "27", 대구광역시: "27",
+  인천: "28", 인천광역시: "28",
+  광주: "29", 광주광역시: "29",
+  대전: "30", 대전광역시: "30",
+  울산: "31", 울산광역시: "31",
+  세종: "36", 세종특별자치시: "36",
+  경기: "41", 경기도: "41",
+  강원: "51", 강원특별자치도: "51", 강원도: "51",
+  충북: "43", 충청북도: "43",
+  충남: "44", 충청남도: "44",
+  전북: "52", 전북특별자치도: "52", 전라북도: "52",
+  전남: "46", 전라남도: "46",
+  경북: "47", 경상북도: "47",
+  경남: "48", 경상남도: "48",
+  제주: "50", 제주특별자치도: "50",
+};
 
 @Injectable()
 export class TourapiProvider {
@@ -80,13 +104,14 @@ export class TourapiProvider {
     endDate?: string;
     areaCode?: string;
     sigunguCode?: string;
+    lDongRegnCd?: string;
+    lDongSignguCd?: string;
     numOfRows?: number;
     pageNo?: number;
   }): Promise<TourapiFestival[]> {
     if (!this.isConfigured()) throw new TourapiNotConfiguredError();
 
-    // 캐시 키 — 동일 파라미터 24h 캐싱
-    const cacheKey = `tourapi:festival:${opts.startDate}:${opts.endDate ?? "_"}:${opts.areaCode ?? "_"}:${opts.sigunguCode ?? "_"}:${opts.pageNo ?? 1}`;
+    const cacheKey = `tourapi:festival:${opts.startDate}:${opts.endDate ?? "_"}:${opts.areaCode ?? "_"}:${opts.sigunguCode ?? "_"}:${opts.lDongRegnCd ?? "_"}:${opts.lDongSignguCd ?? "_"}:${opts.pageNo ?? 1}`;
     const cached = await this.cache.get<TourapiFestival[]>(cacheKey);
     if (cached) return cached;
 
@@ -95,7 +120,7 @@ export class TourapiProvider {
       MobileOS: this.mobileOs,
       MobileApp: this.mobileApp,
       _type: "json",
-      arrange: "C", // 수정일 순
+      arrange: "C",
       eventStartDate: opts.startDate,
       numOfRows: opts.numOfRows ?? 50,
       pageNo: opts.pageNo ?? 1,
@@ -103,6 +128,8 @@ export class TourapiProvider {
     if (opts.endDate) params.eventEndDate = opts.endDate;
     if (opts.areaCode) params.areaCode = opts.areaCode;
     if (opts.sigunguCode) params.sigunguCode = opts.sigunguCode;
+    if (opts.lDongRegnCd) params.lDongRegnCd = opts.lDongRegnCd;
+    if (opts.lDongSignguCd) params.lDongSignguCd = opts.lDongSignguCd;
 
     const url = `${this.base}/searchFestival2`;
 
@@ -182,6 +209,92 @@ export class TourapiProvider {
    * 광역 이름으로 코드 조회 (예: '충북' → '33').
    * 부분 일치.
    */
+  /**
+   * 시도의 하위 시군구 법정동 코드 조회 (ldongCode2).
+   * 예: lDongRegnCd=43 (충북) → [{code:"800", name:"단양군"}, {code:"750", name:"진천군"}, ...]
+   */
+  async getLdongSignguCodes(lDongRegnCd: string): Promise<TourapiArea[]> {
+    if (!this.isConfigured()) throw new TourapiNotConfiguredError();
+    const cacheKey = `tourapi:ldong:${lDongRegnCd}`;
+    const cached = await this.cache.get<TourapiArea[]>(cacheKey);
+    if (cached) return cached;
+
+    const params = {
+      serviceKey: this.key,
+      MobileOS: this.mobileOs,
+      MobileApp: this.mobileApp,
+      _type: "json",
+      numOfRows: 100,
+      pageNo: 1,
+      lDongRegnCd,
+    };
+    const resp = await axios.get(`${this.base}/ldongCode2`, {
+      params,
+      timeout: 15000,
+      paramsSerializer: (p) =>
+        Object.entries(p)
+          .map(([k, v]) => `${k}=${v}`)
+          .join("&"),
+    });
+    const items = resp.data?.response?.body?.items?.item;
+    const list: TourapiArea[] = (Array.isArray(items) ? items : items ? [items] : []).map(
+      (i: any) => ({ code: String(i.code), name: String(i.name) }),
+    );
+    await this.cache.set(cacheKey, list, 86400 * 7);
+    return list;
+  }
+
+  /**
+   * 주소 문자열에서 법정동 시도/시군구 코드 쌍 추출.
+   * 예: "충북 단양군 단양읍" → { regn: "43", signgu: "800" }
+   *     "서울 마포구 도화동" → { regn: "11", signgu: "440" }
+   */
+  async resolveLdongCodes(
+    address: string,
+  ): Promise<{ regn: string | null; signgu: string | null; regnName: string; signguName: string }> {
+    const parts = address.split(/\s+/).filter(Boolean);
+    // 시도 추출
+    let sido = "";
+    for (const p of parts) {
+      if (SIDO_TO_LDONG_REGN[p]) { sido = p; break; }
+      // "충북" → "충북" 같이 앞부분 접두 매칭
+      const shortKey = Object.keys(SIDO_TO_LDONG_REGN).find((k) => p.startsWith(k) || k.startsWith(p));
+      if (shortKey) { sido = shortKey; break; }
+    }
+    const regn = sido ? SIDO_TO_LDONG_REGN[sido] : null;
+    if (!regn) {
+      return { regn: null, signgu: null, regnName: "", signguName: "" };
+    }
+
+    // 시군구 추출 — 주소에서 "XX군"/"XX시"/"XX구" 형태 찾기
+    let sigunguName = "";
+    for (const p of parts) {
+      if (/(군|시|구)$/.test(p) && p.length >= 2 && !SIDO_TO_LDONG_REGN[p]) {
+        sigunguName = p;
+        break;
+      }
+    }
+    if (!sigunguName) return { regn, signgu: null, regnName: sido, signguName: "" };
+
+    // ldongCode2 로 코드 조회
+    try {
+      const list = await this.getLdongSignguCodes(regn);
+      // 정확 일치
+      let hit = list.find((a) => a.name === sigunguName);
+      // 부분 일치 (예: "청주시 청원구"는 "청주시" 매장 주소에선 못 찾을 수 있음)
+      if (!hit) hit = list.find((a) => a.name.startsWith(sigunguName) || sigunguName.startsWith(a.name));
+      return {
+        regn,
+        signgu: hit?.code ?? null,
+        regnName: sido,
+        signguName: hit?.name ?? sigunguName,
+      };
+    } catch (e: any) {
+      this.logger.warn(`시군구 조회 실패 (${sido}): ${e.message}`);
+      return { regn, signgu: null, regnName: sido, signguName: sigunguName };
+    }
+  }
+
   async resolveAreaCode(name: string): Promise<string | null> {
     if (!name) return null;
     // 짧은 표기 → 정식명 매핑 (TourAPI areaCode 는 정식명 기준)
