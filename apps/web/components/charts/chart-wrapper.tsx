@@ -6,7 +6,7 @@ import { TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ChartWrapperProps {
-  title: string;
+  title: React.ReactNode;
   children: React.ReactNode;
   isLoading?: boolean;
   isEmpty?: boolean;

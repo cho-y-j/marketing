@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,27 +17,43 @@ import {
 import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
 import {
-  Plus, Loader2, RefreshCw, Crown, Trash2,
-  MessageSquare, FileText, AlertTriangle, Activity, Info,
-  TrendingUp, TrendingDown, Minus,
+  Plus, Loader2, RefreshCw, Crown, Trash2, AlertTriangle,
 } from "lucide-react";
 import { ConsultationCTA } from "@/components/common/consultation-cta";
-import { CompetitorTrendChart } from "@/components/charts/competitor-trend-chart";
 
-type Period = "date" | "day" | "week" | "month";
-const PERIOD_LABEL: Record<Period, string> = { date: "날짜", day: "일", week: "주", month: "월" };
+type Period = "day" | "week" | "month" | "date";
+const PERIOD_LABEL: Record<Period, string> = {
+  day: "오늘",
+  week: "7일",
+  month: "30일",
+  date: "날짜선택",
+};
+type Metric = "visitor" | "blog";
+type SortKey = "cumulative" | "delta" | "rate";
 
-type DailyRow = {
+// 증감률로 상태 판정 (이모지 없이, 색상과 텍스트로만 구분)
+function getStatus(rate: number | null, delta: number | null) {
+  if (rate == null || delta == null) return { label: "수집중", color: "bg-muted text-muted-foreground border-border" };
+  if (rate >= 1.5) return { label: "급증", color: "bg-orange-100 text-orange-700 border-orange-300" };
+  if (rate >= 0.5) return { label: "활발", color: "bg-green-100 text-green-700 border-green-300" };
+  if (rate > 0) return { label: "평온", color: "bg-sky-50 text-sky-700 border-sky-200" };
+  if (rate === 0) return { label: "정체", color: "bg-amber-50 text-amber-700 border-amber-200" };
+  return { label: "감소", color: "bg-red-100 text-red-700 border-red-300" };
+}
+
+type MetricData = {
+  cumulative: number | null;
+  delta: number | null;
+  rate: number | null;
+};
+type Row = {
+  key: string;
   name: string;
+  isMine: boolean;
   placeId: string | null;
-  visitorAvg7: number | null;
-  blogAvg7: number | null;
-  visitorTotal: number | null;
-  blogTotal: number | null;
-  deltas?: {
-    visitor: { day: number | null; week: number | null; month: number | null };
-    blog: { day: number | null; week: number | null; month: number | null };
-  };
+  competitorId?: string;
+  visitor: MetricData;
+  blog: MetricData;
 };
 
 export default function CompetitorsPage() {
@@ -46,119 +62,159 @@ export default function CompetitorsPage() {
   const { data: comparison, isLoading } = useCompetitorComparison(storeId);
   const addComp = useAddCompetitor(storeId);
   const deleteComp = useDeleteCompetitor(storeId);
+
   const [newName, setNewName] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<Period>("week");
-  const [selectedDate, setSelectedDate] = useState<string>("");
+  const [sortMetric, setSortMetric] = useState<Metric>("visitor"); // 순위 기준
+  const [sortKey, setSortKey] = useState<SortKey>("cumulative");
+  const [customDate, setCustomDate] = useState<string>("");
 
-  const { data: dailyResp } = useQuery<{ competitors: DailyRow[]; summary: any }>({
+  const { data: dailyResp } = useQuery<{ competitors: any[]; summary: any }>({
     queryKey: ["competitors-daily", storeId],
     queryFn: () => apiClient.get(`/stores/${storeId}/competitors/daily`).then((r) => r.data),
     enabled: !!storeId,
   });
-
   const { data: flow } = useQuery<any>({
     queryKey: ["store-flow", storeId],
     queryFn: () => apiClient.get(`/stores/${storeId}/flow`).then((r) => r.data),
     enabled: !!storeId,
   });
-
-  const { data: timelineResp } = useQuery<{ competitors: Array<{ placeId: string; name: string; days: Array<{ date: string; visitorDelta: number | null; blogDelta: number | null; visitor: number | null; blog: number | null }> }> }>({
+  const { data: timelineResp } = useQuery<{
+    competitors: Array<{ placeId: string; name: string; days: Array<any> }>;
+  }>({
     queryKey: ["competitors-timeline", storeId],
     queryFn: () => apiClient.get(`/stores/${storeId}/competitors/timeline`).then((r) => r.data),
     enabled: !!storeId,
   });
 
-  // 이용 가능한 날짜 목록 (가장 최근 순)
-  const availableDates = Array.from(
-    new Set(
-      (timelineResp?.competitors ?? []).flatMap((c) => c.days.map((d) => d.date)),
-    ),
-  ).sort((a, b) => (a < b ? 1 : -1));
-
-  // 기본 선택 날짜 = 최신
-  const effectiveDate = selectedDate || availableDates[0] || "";
-
-  const timelineByPid = new Map<string, Map<string, { visitorDelta: number | null; blogDelta: number | null; visitor: number | null; blog: number | null }>>();
+  const dailyByPid = new Map<string, any>();
+  const dailyByName = new Map<string, any>();
+  for (const d of dailyResp?.competitors ?? []) {
+    if (d.placeId) dailyByPid.set(d.placeId, d);
+    dailyByName.set(d.name, d);
+  }
+  const timelineByPid = new Map<string, Map<string, any>>();
   for (const c of timelineResp?.competitors ?? []) {
+    if (!c.placeId) continue;
     const m = new Map<string, any>();
-    for (const d of c.days) m.set(d.date, d);
-    if (c.placeId) timelineByPid.set(c.placeId, m);
+    for (const day of c.days) m.set(day.date, day);
+    timelineByPid.set(c.placeId, m);
   }
-
-  // === 차트 데이터 조립: 최근 30일 × (내 매장 + 경쟁사 N) ===
-  const chartDates = availableDates.slice().reverse(); // 오래된 순
-  const competitorSeries = (timelineResp?.competitors ?? []).map((c) => ({
-    key: `comp_${c.placeId}`,
-    label: c.name,
-    days: new Map(c.days.map((d) => [d.date, d])),
-  }));
-  const myFlowTimeline: Array<{ date: string; visitor: number | null; blog: number | null }> =
-    flow?.timeline ?? [];
-  const myByDate = new Map<string, { visitor: number | null; blog: number | null }>();
+  const myFlowTimeline: Array<any> = flow?.timeline ?? [];
+  const myByDate = new Map<string, any>();
   for (const t of myFlowTimeline) {
-    const key = typeof t.date === "string" ? t.date.slice(0, 10) : new Date(t.date as any).toISOString().slice(0, 10);
-    myByDate.set(key, { visitor: t.visitor ?? null, blog: t.blog ?? null });
+    const k = typeof t.date === "string" ? t.date.slice(0, 10) : new Date(t.date as any).toISOString().slice(0, 10);
+    myByDate.set(k, t);
   }
-  const visitorChartData = chartDates.map((date) => {
-    const row: any = { date };
-    row["내 매장"] = myByDate.get(date)?.visitor ?? null;
-    for (const s of competitorSeries) {
-      row[s.key] = s.days.get(date)?.visitor ?? null;
+  const availableDates = Array.from(
+    new Set((timelineResp?.competitors ?? []).flatMap((c) => c.days.map((d: any) => d.date)))
+  ).sort((a, b) => (a < b ? 1 : -1));
+  const effectiveDate = customDate || availableDates[0] || "";
+
+  // === 한 지표의 데이터 계산 ===
+  const calcMetric = (
+    cumulative: number | null,
+    delta: number | null,
+  ): MetricData => {
+    let rate: number | null = null;
+    if (cumulative != null && delta != null) {
+      const base = cumulative - delta;
+      rate = base > 0 ? (delta / base) * 100 : null;
     }
-    return row;
-  });
-  const blogChartData = chartDates.map((date) => {
-    const row: any = { date };
-    row["내 매장"] = myByDate.get(date)?.blog ?? null;
-    for (const s of competitorSeries) {
-      row[s.key] = s.days.get(date)?.blog ?? null;
+    return { cumulative, delta, rate };
+  };
+
+  const makeCompetitorRow = (c: any): Row => {
+    const d = (c.placeId && dailyByPid.get(c.placeId)) || dailyByName.get(c.name) || null;
+    const vCum = d?.visitorTotal ?? c.receiptReviewCount ?? null;
+    const bCum = d?.blogTotal ?? c.blogReviewCount ?? null;
+
+    let vDelta: number | null = null;
+    let bDelta: number | null = null;
+    if (period === "date") {
+      const snap = c.placeId ? timelineByPid.get(c.placeId)?.get(effectiveDate) : null;
+      vDelta = snap?.visitorDelta ?? null;
+      bDelta = snap?.blogDelta ?? null;
+    } else {
+      vDelta = d?.deltas?.visitor?.[period] ?? null;
+      bDelta = d?.deltas?.blog?.[period] ?? null;
     }
-    return row;
-  });
-  const chartSeries = [
-    { key: "내 매장", label: "내 매장", isMine: true },
-    ...competitorSeries.map((s) => ({ key: s.key, label: s.label })),
-  ];
 
-  const comps = competitors ?? [];
-  const myStore = comparison?.store;
-  const compData: any[] = comparison?.competitors ?? [];
-  const dailyRows = dailyResp?.competitors ?? [];
-
-  // placeId/이름 기준 daily 머지
-  const dailyByKey = new Map<string, DailyRow>();
-  for (const d of dailyRows) {
-    if (d.placeId) dailyByKey.set(`pid:${d.placeId}`, d);
-    dailyByKey.set(`name:${d.name}`, d);
-  }
-
-  const myVisitorAvg = flow?.visitor?.last7DaysAvg ?? null;
-  const myBlogAvg = flow?.blog?.last7DaysAvg ?? null;
-  const myVisitorTotal = flow?.visitor?.current ?? myStore?.receiptReviewCount ?? 0;
-  const myBlogTotal = flow?.blog?.current ?? myStore?.blogReviewCount ?? 0;
-
-  const merged = compData.map((c) => {
-    const d =
-      (c.placeId && dailyByKey.get(`pid:${c.placeId}`)) ||
-      dailyByKey.get(`name:${c.name}`) ||
-      null;
     return {
-      ...c,
-      visitorAvg7: d?.visitorAvg7 ?? null,
-      blogAvg7: d?.blogAvg7 ?? null,
-      dailySum: (d?.visitorAvg7 ?? 0) + (d?.blogAvg7 ?? 0),
+      key: `comp_${c.id ?? c.placeId ?? c.name}`,
+      name: c.name,
+      isMine: false,
+      placeId: c.placeId ?? null,
+      competitorId: c.id,
+      visitor: calcMetric(vCum, vDelta),
+      blog: calcMetric(bCum, bDelta),
     };
-  });
+  };
 
-  // 일평균 발행량 기준 정렬
-  const sorted = [...merged].sort((a, b) => b.dailySum - a.dailySum);
-  const topByDaily = sorted[0];
+  const makeMyRow = (): Row => {
+    const vCum = flow?.visitor?.current ?? null;
+    const bCum = flow?.blog?.current ?? null;
+    let vDelta: number | null = null;
+    let bDelta: number | null = null;
+    if (period === "date") {
+      const snap = myByDate.get(effectiveDate);
+      vDelta = snap?.visitorDelta ?? null;
+      bDelta = snap?.blogDelta ?? null;
+    } else {
+      const key = period === "day" ? "deltaDay" : period === "week" ? "deltaWeek" : "deltaMonth";
+      vDelta = flow?.visitor?.[key] ?? null;
+      bDelta = flow?.blog?.[key] ?? null;
+    }
+    return {
+      key: "me",
+      name: flow?.storeName || "내 매장",
+      isMine: true,
+      placeId: null,
+      visitor: calcMetric(vCum, vDelta),
+      blog: calcMetric(bCum, bDelta),
+    };
+  };
+
+  const allRows: Row[] = useMemo(() => {
+    const compRows = (comparison?.competitors ?? []).map(makeCompetitorRow);
+    return [makeMyRow(), ...compRows];
+  }, [comparison, dailyResp, flow, timelineResp, period, effectiveDate]);
+
+  // 정렬 (sortMetric 기준)
+  const sortedRows = useMemo(() => {
+    const arr = [...allRows];
+    arr.sort((a, b) => {
+      const am = sortMetric === "visitor" ? a.visitor : a.blog;
+      const bm = sortMetric === "visitor" ? b.visitor : b.blog;
+      const va = (sortKey === "cumulative" ? am.cumulative : sortKey === "delta" ? am.delta : am.rate) ?? -Infinity;
+      const vb = (sortKey === "cumulative" ? bm.cumulative : sortKey === "delta" ? bm.delta : bm.rate) ?? -Infinity;
+      return vb - va;
+    });
+    return arr;
+  }, [allRows, sortKey, sortMetric]);
+
+  const myRow = sortedRows.find((r) => r.isMine);
+  const myRank = myRow ? sortedRows.indexOf(myRow) + 1 : null;
+  const totalRows = sortedRows.length;
+
+  // 진단: 순위 기준 지표로 계산
+  const keyMetric = (r: Row) => (sortMetric === "visitor" ? r.visitor : r.blog);
+  const topGrowth = [...allRows]
+    .filter((r) => !r.isMine && keyMetric(r).rate != null)
+    .sort((a, b) => (keyMetric(b).rate ?? -Infinity) - (keyMetric(a).rate ?? -Infinity))[0];
+  const topCumulative = [...allRows]
+    .filter((r) => !r.isMine && keyMetric(r).cumulative != null)
+    .sort((a, b) => (keyMetric(b).cumulative ?? -Infinity) - (keyMetric(a).cumulative ?? -Infinity))[0];
+  const competitorRates = allRows.filter((r) => !r.isMine && keyMetric(r).rate != null).map((r) => keyMetric(r).rate!);
+  const avgCompetitorRate = competitorRates.length > 0
+    ? competitorRates.reduce((s, n) => s + n, 0) / competitorRates.length
+    : null;
 
   const handleAdd = () => {
     const name = newName.trim();
     if (name.length < 2) return toast.error("2글자 이상 입력");
-    if (comps.some((c: any) => c.competitorName === name)) return toast.error("이미 등록됨");
+    if (competitors?.some((c: any) => c.competitorName === name)) return toast.error("이미 등록됨");
     addComp.mutate({ competitorName: name }, {
       onSuccess: () => {
         toast.success(`"${name}" 추가 — 데이터 수집 중...`);
@@ -168,7 +224,6 @@ export default function CompetitorsPage() {
       onError: (e: any) => toast.error(e.response?.data?.message || "추가 실패"),
     });
   };
-
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
@@ -178,14 +233,12 @@ export default function CompetitorsPage() {
       refetch();
     } catch {
       toast.error("갱신 실패");
-    } finally {
-      setRefreshing(false);
-    }
+    } finally { setRefreshing(false); }
   };
 
   if (isLoading) {
     return (
-      <div className="space-y-4 max-w-5xl mx-auto">
+      <div className="space-y-4 max-w-6xl mx-auto">
         <Skeleton className="h-12 w-64" />
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-96 w-full" />
@@ -193,16 +246,17 @@ export default function CompetitorsPage() {
     );
   }
 
-  const hasDailyData = sorted.some((c) => c.visitorAvg7 != null || c.blogAvg7 != null);
+  const periodLabel = period === "date" ? (effectiveDate || "날짜") : PERIOD_LABEL[period];
+  const sortMetricLabel = sortMetric === "visitor" ? "방문자 리뷰" : "블로그 리뷰";
 
   return (
-    <div className="space-y-5 max-w-5xl mx-auto">
-      {/* 헤더 */}
+    <div className="space-y-4 max-w-6xl mx-auto">
+      {/* ===== 헤더 ===== */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-xl md:text-2xl font-bold">경쟁 비교</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            일평균 발행 속도 기준 · 경쟁사 {comps.length}곳
+            누적량과 증감률을 한눈에 · 경쟁사 {competitors?.length ?? 0}곳
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={handleRefresh} disabled={refreshing}>
@@ -211,127 +265,174 @@ export default function CompetitorsPage() {
         </Button>
       </div>
 
-      {/* === 누적 수치 요약 (상단 한 줄) === */}
-      {myStore && sorted.length > 0 && (
-        <Card className="bg-muted/30">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Info size={12} className="text-muted-foreground" />
-              <span className="text-[11px] text-muted-foreground font-semibold">누적 수치 (참고)</span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-              <SummaryPill label="내 방문자 리뷰" value={myVisitorTotal} />
-              <SummaryPill label="내 블로그 리뷰" value={myBlogTotal} />
-              <SummaryPill
-                label="경쟁사 평균 방문자"
-                value={Math.round(sorted.reduce((s, c) => s + (c.receiptReviewCount ?? 0), 0) / sorted.length)}
-              />
-              <SummaryPill
-                label="경쟁사 평균 블로그"
-                value={Math.round(sorted.reduce((s, c) => s + (c.blogReviewCount ?? 0), 0) / sorted.length)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* === 누적 리뷰 추이 차트 (나 vs 경쟁사) === */}
-      {sorted.length > 0 && chartDates.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <CompetitorTrendChart
-            title="방문자 리뷰 누적 추이"
-            data={visitorChartData}
-            series={chartSeries}
-          />
-          <CompetitorTrendChart
-            title="블로그 리뷰 누적 추이"
-            data={blogChartData}
-            series={chartSeries}
-          />
-        </div>
-      )}
-
-      {/* === 속도 비교 안내 (스냅샷 부족 시) === */}
-      {!hasDailyData && sorted.length > 0 && (
-        <Card className="border-sky-200 bg-sky-50/50">
-          <CardContent className="p-4 text-xs flex items-start gap-2">
-            <Activity size={14} className="mt-0.5 text-sky-600" />
-            <div>
-              <div className="font-semibold text-sky-900 mb-0.5">누적 수치는 오늘자 확보 완료 — 속도 비교는 2~3일 대기</div>
-              <span className="text-sky-800/80">
-                아래 카드마다 경쟁사 누적 리뷰 수치는 이미 표시됩니다. 일별 발행 속도(어제 대비 +N) 비교는 매일 01:00 스냅샷이 2~3일 쌓이면 자동 계산됩니다.
+      {/* ===== 진단 박스 ===== */}
+      {myRank && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="p-4 space-y-1.5 text-sm">
+            <div className="font-bold">
+              내 매장 순위{" "}
+              <span className="text-primary">{myRank}위 / {totalRows}</span>
+              <span className="text-muted-foreground font-normal ml-2 text-xs">
+                ({sortMetricLabel}, {periodLabel} 기준)
               </span>
             </div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              {topCumulative && (
+                <div>
+                  <span className="font-semibold text-foreground">추격 대상:</span>{" "}
+                  <span className="font-semibold">{topCumulative.name}</span> — 누적{" "}
+                  {keyMetric(topCumulative).cumulative?.toLocaleString()}
+                  {" "}
+                  <span className="text-muted-foreground/80">
+                    (나보다 {((keyMetric(topCumulative).cumulative ?? 0) - (keyMetric(myRow!).cumulative ?? 0)).toLocaleString()} 앞섬)
+                  </span>
+                </div>
+              )}
+              {topGrowth && keyMetric(topGrowth).rate != null && keyMetric(topGrowth).rate! >= 0.5 && (
+                <div>
+                  <span className="font-semibold text-foreground">급성장 중:</span>{" "}
+                  <span className="font-semibold">{topGrowth.name}</span> — {periodLabel} 증감률{" "}
+                  <span className="text-orange-600 font-bold">+{keyMetric(topGrowth).rate!.toFixed(2)}%</span>
+                </div>
+              )}
+              {keyMetric(myRow!).rate != null && avgCompetitorRate != null && (
+                <div>
+                  <span className="font-semibold text-foreground">내 속도:</span>{" "}
+                  <span className={`font-bold ${keyMetric(myRow!).rate! > avgCompetitorRate ? "text-green-600" : "text-red-600"}`}>
+                    {keyMetric(myRow!).rate! > 0 ? "+" : ""}{keyMetric(myRow!).rate!.toFixed(2)}%
+                  </span>{" "}
+                  vs 경쟁사 평균 {avgCompetitorRate > 0 ? "+" : ""}{avgCompetitorRate.toFixed(2)}%{" "}
+                  <span className="text-muted-foreground">
+                    ({keyMetric(myRow!).rate! > avgCompetitorRate ? "앞섬" : keyMetric(myRow!).rate! < avgCompetitorRate ? "뒤처짐" : "동등"})
+                  </span>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {sorted.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-sm font-bold">기간별 발행 변동량 비교</h3>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] text-muted-foreground mr-1">기간</span>
-              {(["date", "day", "week", "month"] as Period[]).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setPeriod(p)}
-                  className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                    period === p
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-white hover:bg-muted/50 border-border"
-                  }`}
-                >
-                  {PERIOD_LABEL[p]}
-                </button>
+      {/* ===== 컨트롤 ===== */}
+      <Card>
+        <CardContent className="p-3 space-y-2.5">
+          {/* 기간 */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] text-muted-foreground mr-1 w-10">기간</span>
+            {(["day", "week", "month", "date"] as Period[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={`px-3 py-1.5 text-xs rounded-md border transition-colors font-medium ${
+                  period === p ? "bg-primary text-primary-foreground border-primary" : "bg-white hover:bg-muted/50 border-border"
+                }`}
+              >
+                {PERIOD_LABEL[p]}
+              </button>
+            ))}
+            {period === "date" && (
+              <input
+                type="date"
+                value={effectiveDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                min={availableDates[availableDates.length - 1]}
+                max={availableDates[0]}
+                className="ml-2 px-2 py-1.5 text-xs border border-border rounded-md bg-white"
+              />
+            )}
+          </div>
+          {/* 순위 기준 + 정렬 */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] text-muted-foreground mr-1 w-10">순위</span>
+            {(["visitor", "blog"] as Metric[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setSortMetric(m)}
+                className={`px-3 py-1.5 text-xs rounded-md border transition-colors font-medium ${
+                  sortMetric === m ? "bg-foreground text-background border-foreground" : "bg-white hover:bg-muted/50 border-border"
+                }`}
+              >
+                {m === "visitor" ? "방문자 기준" : "블로그 기준"}
+              </button>
+            ))}
+            <span className="text-[11px] text-muted-foreground ml-3">정렬</span>
+            {([
+              ["cumulative", "누적순"],
+              ["delta", "증감순"],
+              ["rate", "증감률순"],
+            ] as [SortKey, string][]).map(([k, l]) => (
+              <button
+                key={k}
+                onClick={() => setSortKey(k)}
+                className={`px-2.5 py-1 text-[11px] rounded-md border transition-colors ${
+                  sortKey === k ? "bg-foreground text-background border-foreground" : "bg-white hover:bg-muted/50 border-border"
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ===== 순위 테이블 (방문자+블로그 함께) ===== */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <div className="min-w-[900px]">
+              {/* 헤더 - 그룹 */}
+              <div className="grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-1.5 border-b bg-muted/40 text-[10px] font-semibold text-muted-foreground">
+                <div></div>
+                <div></div>
+                <div className="col-span-3 text-center border-l border-r border-border/50 bg-sky-50/50">방문자 리뷰</div>
+                <div className="col-span-3 text-center border-r border-border/50 bg-emerald-50/50">블로그 리뷰</div>
+                <div></div>
+              </div>
+              {/* 헤더 - 세부 */}
+              <div className="grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-2 border-b bg-muted/30 text-[10px] font-semibold text-muted-foreground">
+                <div className="text-center">#</div>
+                <div>매장명</div>
+                <div className="text-right border-l border-border/50">누적</div>
+                <div className="text-right">{periodLabel}증감</div>
+                <div className="text-right border-r border-border/50">증감률</div>
+                <div className="text-right">누적</div>
+                <div className="text-right">{periodLabel}증감</div>
+                <div className="text-right border-r border-border/50">증감률</div>
+                <div></div>
+              </div>
+              {/* Rows */}
+              {sortedRows.map((r, idx) => (
+                <RankRow
+                  key={r.key}
+                  rank={idx + 1}
+                  row={r}
+                  onDelete={r.isMine || !r.competitorId ? undefined : () => {
+                    if (!confirm(`"${r.name}" 삭제?`)) return;
+                    deleteComp.mutate(r.competitorId!, { onSuccess: () => toast.success("삭제됨") });
+                  }}
+                />
               ))}
-              {period === "date" && availableDates.length > 0 && (
-                <select
-                  value={effectiveDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className="ml-2 px-2 py-1 text-xs border rounded-md bg-white"
-                >
-                  {availableDates.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
+              {sortedRows.length <= 1 && (
+                <div className="py-8 text-center text-xs text-muted-foreground">
+                  <AlertTriangle size={16} className="mx-auto mb-2 text-amber-500" />
+                  등록된 경쟁사가 없습니다 — 아래서 추가하세요
+                </div>
               )}
             </div>
           </div>
-          <p className="text-[10px] text-muted-foreground">
-            {period === "date"
-              ? effectiveDate
-                ? `${effectiveDate} 당일 발행량(전일 대비 증가량)`
-                : "선택 가능한 날짜가 없습니다 — 스냅샷 수집 대기 중"
-              : period === "day"
-                ? "최근 1일 총 증가량 · 많이 쌓는 매장 순"
-                : period === "week"
-                  ? "최근 7일 총 증가량 · 많이 쌓는 매장 순"
-                  : "최근 30일 총 증가량 · 많이 쌓는 매장 순"}
-          </p>
-          {sorted.map((c, idx) => (
-            <DailyCompetitorCard
-              key={c.id}
-              rank={idx + 1}
-              isTop={topByDaily?.id === c.id}
-              competitor={c}
-              myFlow={flow}
-              period={period}
-              date={effectiveDate}
-              dateRow={c.placeId ? timelineByPid.get(c.placeId)?.get(effectiveDate) ?? null : null}
-              myTimeline={flow?.timeline ?? []}
-              onDelete={() => {
-                if (!confirm(`"${c.name}" 삭제?`)) return;
-                deleteComp.mutate(c.id, {
-                  onSuccess: () => toast.success("삭제됨"),
-                });
-              }}
-            />
-          ))}
-        </div>
-      )}
+        </CardContent>
+      </Card>
 
-      {/* === 경쟁사 추가 === */}
+      {/* ===== 범례 ===== */}
+      <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground px-1">
+        <span>증감률 기준:</span>
+        <Badge variant="outline" className="bg-orange-100 text-orange-700 border-orange-300">급증 ≥1.5%</Badge>
+        <Badge variant="outline" className="bg-green-100 text-green-700 border-green-300">활발 0.5~1.5%</Badge>
+        <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200">평온 0~0.5%</Badge>
+        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">정체 0%</Badge>
+        <Badge variant="outline" className="bg-red-100 text-red-700 border-red-300">감소 &lt;0%</Badge>
+      </div>
+
+      {/* ===== 경쟁사 추가 ===== */}
       <Card>
         <CardContent className="p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -339,7 +440,7 @@ export default function CompetitorsPage() {
             <span className="font-semibold text-sm">경쟁사 추가</span>
           </div>
           <p className="text-xs text-muted-foreground mb-3">
-            매장명 입력 → 네이버 자동 검색 → 일별 스냅샷 수집 시작
+            매장명 입력 → 네이버 자동 검색 → 과거 30일 추이 자동 수집
           </p>
           <div className="flex gap-2">
             <Input
@@ -355,16 +456,7 @@ export default function CompetitorsPage() {
         </CardContent>
       </Card>
 
-      {sorted.length === 0 && (
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            <AlertTriangle size={20} className="mx-auto mb-2 text-amber-500" />
-            등록된 경쟁사가 없습니다 — 위에서 추가하세요
-          </CardContent>
-        </Card>
-      )}
-
-      {storeId && sorted.length > 0 && (
+      {storeId && sortedRows.length > 1 && (
         <ConsultationCTA
           type="GENERAL"
           storeId={storeId}
@@ -376,262 +468,85 @@ export default function CompetitorsPage() {
   );
 }
 
-function SummaryPill({ label, value }: { label: string; value: number }) {
-  return (
-    <div>
-      <div className="text-[10px] text-muted-foreground">{label}</div>
-      <div className="text-base font-bold">{value.toLocaleString()}</div>
-    </div>
-  );
-}
-
-function DailyCompetitorCard({
-  rank, isTop, competitor: c, myFlow, period, date, dateRow, myTimeline, onDelete,
+function RankRow({
+  rank, row, onDelete,
 }: {
   rank: number;
-  isTop: boolean;
-  competitor: any;
-  myFlow: any;
-  period: Period;
-  date: string;
-  dateRow: { visitorDelta: number | null; blogDelta: number | null } | null;
-  myTimeline: Array<{ date: string; visitorDelta: number | null; blogDelta: number | null }>;
-  onDelete: () => void;
+  row: Row;
+  onDelete?: () => void;
 }) {
-  // 기간별 경쟁사 변동량 (delta 없으면 null — 그래도 누적값으로 카드 표시)
-  let cV: number | null = null;
-  let cB: number | null = null;
-  let myV: number | null = null;
-  let myB: number | null = null;
+  const fmtDelta = (v: number | null) => {
+    if (v == null) return "-";
+    if (v === 0) return "0";
+    return v > 0 ? `+${v.toLocaleString()}` : `${v.toLocaleString()}`;
+  };
+  const fmtRate = (v: number | null) => {
+    if (v == null) return "-";
+    return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+  };
+  const clr = (v: number | null) =>
+    v == null ? "text-muted-foreground" :
+    v > 0 ? "text-green-600" :
+    v < 0 ? "text-red-600" :
+    "text-muted-foreground";
 
-  if (period === "date") {
-    cV = dateRow?.visitorDelta ?? null;
-    cB = dateRow?.blogDelta ?? null;
-    const myRow = myTimeline.find((t) => {
-      const d = typeof t.date === "string" ? t.date.slice(0, 10) : new Date(t.date as any).toISOString().slice(0, 10);
-      return d === date;
-    });
-    myV = myRow?.visitorDelta ?? null;
-    myB = myRow?.blogDelta ?? null;
-  } else {
-    cV = c.deltas?.visitor?.[period] ?? null;
-    cB = c.deltas?.blog?.[period] ?? null;
-    const myVKey = period === "day" ? "deltaDay" : period === "week" ? "deltaWeek" : "deltaMonth";
-    myV = myFlow?.visitor?.[myVKey] ?? null;
-    myB = myFlow?.blog?.[myVKey] ?? null;
-  }
-
-  const hasData = cV != null || cB != null || myV != null || myB != null;
-  // 누적 리뷰 수치 (오늘 기준 절대값 — delta 없어도 항상 존재)
-  const cumulativeV = c.receiptReviewCount ?? c.visitorTotal ?? null;
-  const cumulativeB = c.blogReviewCount ?? c.blogTotal ?? null;
-  const myCumV = myFlow?.visitor?.current ?? null;
-  const myCumB = myFlow?.blog?.current ?? null;
-
-  const visitorDelta = myV != null && cV != null ? +(myV - cV).toFixed(1) : null;
-  const blogDelta = myB != null && cB != null ? +(myB - cB).toFixed(1) : null;
-
-  const aheadCount = [visitorDelta, blogDelta].filter((d) => d != null && d > 0).length;
-  const behindCount = [visitorDelta, blogDelta].filter((d) => d != null && d < 0).length;
-
-  // 스냅샷이 아직 1일치밖에 없을 때도 누적값은 노출 — "수집 중"으로 숨기지 않음
-  const hasCumulative = cumulativeV != null || cumulativeB != null;
-  let statusLabel = hasCumulative ? "수치만 수집 완료" : "데이터 수집 중";
-  let statusColor = hasCumulative
-    ? "bg-sky-50 text-sky-700 border-sky-200"
-    : "bg-muted text-muted-foreground border-border";
-  let diagnosis = hasCumulative
-    ? `오늘 기준 누적 리뷰 확보. 일별 속도 비교는 스냅샷 2~3일치가 쌓이면 계산됩니다.`
-    : "매장 정보 수집 중 — 잠시 후 새로고침하세요.";
-
-  if (hasData && (visitorDelta != null || blogDelta != null)) {
-    if (aheadCount === 2) {
-      statusLabel = "속도 우위";
-      statusColor = "bg-green-100 text-green-700 border-green-200";
-      diagnosis = "내 매장이 방문자·블로그 모두 빠른 속도로 발행 중. 이 속도 유지가 핵심.";
-    } else if (aheadCount === 1 && behindCount === 0) {
-      statusLabel = "부분 우위";
-      statusColor = "bg-green-50 text-green-600 border-green-200";
-      diagnosis = "일부 지표만 앞섬. 뒤처진 축을 맞추면 완전 우위 가능.";
-    } else if (behindCount === 2) {
-      const gapSum = Math.abs((visitorDelta ?? 0)) + Math.abs((blogDelta ?? 0));
-      if (gapSum > 10) {
-        statusLabel = "속도 크게 뒤처짐";
-        statusColor = "bg-red-100 text-red-700 border-red-200";
-        diagnosis = "경쟁사 발행 속도가 매우 빠름 — 현 속도로는 격차 계속 벌어짐. 리뷰·블로그 생성 집중 필요.";
-      } else {
-        statusLabel = "속도 부족";
-        statusColor = "bg-red-50 text-red-600 border-red-200";
-        diagnosis = "두 지표 모두 경쟁사보다 느림. 일평균 발행량을 끌어올려야 추격 가능.";
-      }
-    } else if (behindCount === 1 && aheadCount === 1) {
-      statusLabel = "혼재";
-      statusColor = "bg-amber-50 text-amber-600 border-amber-200";
-      diagnosis = "한쪽은 앞서고 한쪽은 뒤처짐. 약점 축 보강으로 균형 잡기.";
-    } else {
-      statusLabel = "동등";
-      statusColor = "bg-muted/50 text-muted-foreground border-border";
-      diagnosis = "속도가 비슷한 구간. 콘텐츠 품질·전환 중심 전략.";
-    }
-  }
+  const vStatus = getStatus(row.visitor.rate, row.visitor.delta);
+  const bStatus = getStatus(row.blog.rate, row.blog.delta);
 
   return (
-    <Card className={isTop ? "border-amber-300" : ""}>
-      <CardContent className="p-5">
-        <div className="flex items-center justify-between mb-4 gap-2">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-muted-foreground font-semibold">#{rank}</span>
-              {isTop && <Crown size={12} className="text-amber-500" />}
-              <h4 className="font-bold text-base">{c.name}</h4>
-              <Badge variant="outline" className={`text-[10px] py-0 ${statusColor}`}>
-                {statusLabel}
-              </Badge>
-            </div>
-          </div>
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onDelete}>
-            <Trash2 size={12} className="text-muted-foreground hover:text-red-500" />
-          </Button>
-        </div>
-
-        {/* 누적 리뷰 요약 — 항상 노출 (delta 없어도 의미있는 정보) */}
-        <div className="grid grid-cols-2 gap-2 mb-3 p-3 bg-muted/30 rounded-md">
-          <CumulativeCell icon={MessageSquare} label="방문자 리뷰 누적" mine={myCumV} their={cumulativeV} />
-          <CumulativeCell icon={FileText} label="블로그 리뷰 누적" mine={myCumB} their={cumulativeB} />
-        </div>
-
-        {/* 속도 비교 — delta 있을 때만 의미있으므로 조건부 */}
-        <div className="space-y-3">
-          <DailyBar
-            label="방문자 리뷰"
-            periodLabel={period === "date" ? date : `최근 ${PERIOD_LABEL[period]}`}
-            icon={MessageSquare}
-            my={myV}
-            their={cV}
-            delta={visitorDelta}
-            cumulativeTheir={c.receiptReviewCount}
-          />
-          <DailyBar
-            label="블로그 리뷰"
-            periodLabel={period === "date" ? date : `최근 ${PERIOD_LABEL[period]}`}
-            icon={FileText}
-            my={myB}
-            their={cB}
-            delta={blogDelta}
-            cumulativeTheir={c.blogReviewCount}
-          />
-        </div>
-
-        <div className="mt-4 pt-3 border-t flex items-start gap-2">
-          <span className="text-xs">💡</span>
-          <p className="text-xs text-muted-foreground leading-relaxed flex-1">
-            <span className="font-semibold text-foreground">진단: </span>
-            {diagnosis}
-          </p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DailyBar({
-  label, periodLabel, icon: Icon, my, their, delta, cumulativeTheir,
-}: {
-  label: string;
-  periodLabel: string;
-  icon: any;
-  my: number | null;
-  their: number | null;
-  delta: number | null;
-  cumulativeTheir: number | null;
-}) {
-  const myVal = my ?? 0;
-  const theirVal = their ?? 0;
-  const max = Math.max(myVal, theirVal, 1);
-  const myWidth = Math.min(100, (myVal / max) * 100);
-  const theirWidth = Math.min(100, (theirVal / max) * 100);
-
-  const fmt = (v: number | null) => (v == null ? "-" : v > 0 ? `+${v}` : `${v}`);
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Icon size={11} />
-          {label}
-          <span className="text-[10px] text-muted-foreground/70">· {periodLabel} 변동량</span>
-        </div>
-        <DeltaBadge value={delta} />
+    <div
+      className={`grid grid-cols-[40px_1.2fr_repeat(3,90px)_repeat(3,90px)_30px] gap-1 px-3 py-2.5 border-b last:border-b-0 text-sm items-center transition-colors ${
+        row.isMine ? "bg-primary/10 border-l-2 border-l-primary font-semibold" : "hover:bg-muted/20"
+      }`}
+    >
+      {/* 순위 */}
+      <div className="text-center">
+        {rank === 1 && <Crown size={12} className="inline text-amber-500 mr-0.5" />}
+        <span className={`text-xs font-bold ${row.isMine ? "text-primary" : "text-muted-foreground"}`}>
+          {rank}
+        </span>
       </div>
-
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-muted-foreground w-10 shrink-0 font-semibold">나</span>
-          <div className="flex-1 h-5 bg-muted/30 rounded-md overflow-hidden">
-            <div
-              className="h-full bg-primary rounded-md transition-all flex items-center justify-end px-2"
-              style={{ width: `${myWidth}%` }}
-            >
-              <span className="text-[10px] font-bold text-white">{fmt(my)}</span>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-muted-foreground w-10 shrink-0">경쟁</span>
-          <div className="flex-1 h-5 bg-muted/30 rounded-md overflow-hidden">
-            <div
-              className="h-full bg-muted-foreground/40 rounded-md transition-all flex items-center justify-end px-2"
-              style={{ width: `${theirWidth}%` }}
-            >
-              <span className="text-[10px] font-bold text-white">{fmt(their)}</span>
-            </div>
-          </div>
-          {cumulativeTheir != null && cumulativeTheir > 0 && (
-            <span className="text-[9px] text-muted-foreground w-16 shrink-0 text-right">
-              누적 {cumulativeTheir.toLocaleString()}
-            </span>
-          )}
-        </div>
+      {/* 매장명 */}
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className={`truncate ${row.isMine ? "text-primary" : ""}`}>{row.name}</span>
+        {row.isMine && <span className="text-[9px] px-1 py-0 rounded bg-primary text-primary-foreground font-bold">나</span>}
       </div>
-    </div>
-  );
-}
-
-function DeltaBadge({ value }: { value: number | null }) {
-  if (value == null) {
-    return <span className="text-[10px] text-muted-foreground/60 inline-flex items-center gap-0.5" title="2~3일치 스냅샷 쌓이면 계산"><Minus size={11} />속도 대기</span>;
-  }
-  if (value > 0) {
-    return <span className="text-xs font-bold text-green-600 inline-flex items-center gap-0.5"><TrendingUp size={12} />+{value}</span>;
-  }
-  if (value < 0) {
-    return <span className="text-xs font-bold text-red-600 inline-flex items-center gap-0.5"><TrendingDown size={12} />{value}</span>;
-  }
-  return <span className="text-xs font-semibold text-muted-foreground inline-flex items-center gap-0.5"><Minus size={12} />0</span>;
-}
-
-function CumulativeCell({ icon: Icon, label, mine, their }: { icon: any; label: string; mine: number | null; their: number | null }) {
-  const ahead = mine != null && their != null ? mine - their : null;
-  return (
-    <div>
-      <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
-        <Icon size={10} />
-        <span>{label}</span>
+      {/* 방문자 */}
+      <div className="text-right font-mono text-xs border-l border-border/50 pl-1">
+        {row.visitor.cumulative != null ? row.visitor.cumulative.toLocaleString() : "-"}
       </div>
-      <div className="flex items-baseline gap-2">
-        <div>
-          <div className="text-[9px] text-muted-foreground">나</div>
-          <div className="text-sm font-bold">{mine != null ? mine.toLocaleString() : "-"}</div>
-        </div>
-        <div className="text-muted-foreground/50 text-xs">vs</div>
-        <div>
-          <div className="text-[9px] text-muted-foreground">경쟁</div>
-          <div className="text-sm font-bold text-muted-foreground">{their != null ? their.toLocaleString() : "-"}</div>
-        </div>
-        {ahead != null && (
-          <div className={`text-[10px] font-semibold ml-auto ${ahead > 0 ? "text-green-600" : ahead < 0 ? "text-red-600" : "text-muted-foreground"}`}>
-            {ahead > 0 ? `+${ahead}` : ahead}
-          </div>
+      <div className={`text-right font-mono text-xs font-bold ${clr(row.visitor.delta)}`}>
+        {fmtDelta(row.visitor.delta)}
+      </div>
+      <div className="text-right font-mono text-xs border-r border-border/50 pr-1 flex items-center justify-end gap-1">
+        <span className={`font-bold ${clr(row.visitor.rate)}`}>{fmtRate(row.visitor.rate)}</span>
+        <Badge variant="outline" className={`text-[9px] px-1 py-0 font-normal ${vStatus.color}`}>
+          {vStatus.label}
+        </Badge>
+      </div>
+      {/* 블로그 */}
+      <div className="text-right font-mono text-xs pl-1">
+        {row.blog.cumulative != null ? row.blog.cumulative.toLocaleString() : "-"}
+      </div>
+      <div className={`text-right font-mono text-xs font-bold ${clr(row.blog.delta)}`}>
+        {fmtDelta(row.blog.delta)}
+      </div>
+      <div className="text-right font-mono text-xs border-r border-border/50 pr-1 flex items-center justify-end gap-1">
+        <span className={`font-bold ${clr(row.blog.rate)}`}>{fmtRate(row.blog.rate)}</span>
+        <Badge variant="outline" className={`text-[9px] px-1 py-0 font-normal ${bStatus.color}`}>
+          {bStatus.label}
+        </Badge>
+      </div>
+      {/* 삭제 */}
+      <div className="text-center">
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            className="text-muted-foreground/40 hover:text-red-500 transition-colors"
+            title="삭제"
+          >
+            <Trash2 size={12} />
+          </button>
         )}
       </div>
     </div>

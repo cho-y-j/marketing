@@ -51,3 +51,6 @@ docker-compose.server.yml
 
 # Reference files (adlog HTML)
 adlog/
+
+# 일회성 스크립트 (재셋업/검증용 — 배포 대상 아님)
+packages/api/scripts/

@@ -10,6 +10,7 @@ import { KeywordModule } from "../../modules/keyword/keyword.module";
 import { AnalysisModule } from "../../modules/analysis/analysis.module";
 import { BriefingModule } from "../../modules/briefing/briefing.module";
 import { StoreModule } from "../../modules/store/store.module";
+import { CompetitorModule } from "../../modules/competitor/competitor.module";
 
 @Global()
 @Module({
@@ -18,6 +19,7 @@ import { StoreModule } from "../../modules/store/store.module";
     forwardRef(() => AnalysisModule),
     forwardRef(() => BriefingModule),
     forwardRef(() => StoreModule),
+    forwardRef(() => CompetitorModule),
   ],
   providers: [
     DataCollectorService,

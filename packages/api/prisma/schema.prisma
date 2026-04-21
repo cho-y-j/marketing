@@ -540,6 +540,7 @@ model StoreDailySnapshot {
   blogReviewCount    Int? // 블로그 리뷰 누적
   visitorDelta       Int? // 전일 대비 증가량
   blogDelta          Int? // 전일 대비 증가량
+  isEstimated        Boolean  @default(false) // 역산 추정치 여부 (실관측 시 false)
   raw                Json? // 원본 응답 (디버깅용)
   collectedAt        DateTime @default(now())
 
@@ -558,6 +559,7 @@ model CompetitorDailySnapshot {
   blogReviewCount    Int?
   visitorDelta       Int?
   blogDelta          Int?
+  isEstimated        Boolean  @default(false) // 역산 추정치 여부 (실관측 시 false)
   collectedAt        DateTime @default(now())
 
   @@unique([storeId, competitorPlaceId, date])

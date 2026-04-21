@@ -86,6 +86,7 @@ export class CompetitorBackfillService {
           blogReviewCount: s.blog,
           visitorDelta: s.visitorDelta,
           blogDelta: s.blogDelta,
+          isEstimated: s.isEstimated,
         },
       });
       if (s.visitor != null) visitorDays++;
@@ -135,6 +136,7 @@ export class CompetitorBackfillService {
           blogReviewCount: s.blog,
           visitorDelta: s.visitorDelta,
           blogDelta: s.blogDelta,
+          isEstimated: s.isEstimated,
         },
       });
       if (s.visitor != null) visitorDays++;
@@ -214,10 +216,14 @@ export class CompetitorBackfillService {
 
   /**
    * 오늘 누적값 + 일별 증가량 맵으로 과거 N일 누적값 역산.
-   * cum[today] = total
-   * cum[today-1] = total - add[today]
-   * cum[today-2] = cum[today-1] - add[today-1]
-   * ...
+   *
+   * 증거(실 관측 날짜)가 충분하면 실데이터로 역산.
+   * 증거가 부족하면 선형 추정 fallback:
+   *  - 실 관측된 일평균 속도 > 0 이면 그 속도로 과거 분포
+   *  - 관측 속도 없으면 총 누적에서 가상 속도(누적/365일) 선형 분배
+   *  - 분포는 최근일 쪽 가중치 ↑ (실제 매장 성장 패턴 근사)
+   *
+   * 추정치인 날은 isEstimated=true 로 표시.
    */
   private computeBackwardCumulative(
     today: { visitor: number; blog: number },
@@ -230,37 +236,69 @@ export class CompetitorBackfillService {
     blog: number;
     visitorDelta: number | null;
     blogDelta: number | null;
+    isEstimated: boolean;
   }> {
+    const todayUtc = new Date();
+    todayUtc.setUTCHours(0, 0, 0, 0);
+
+    // 1단계: 각 날짜별 증거(실 관측) 증가량 수집
+    const observedV: Array<number | null> = [];
+    const observedB: Array<number | null> = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(todayUtc);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      observedV.push(visitorAdd.has(key) ? visitorAdd.get(key)! : null);
+      observedB.push(blogAdd.has(key) ? blogAdd.get(key)! : null);
+    }
+
+    // 2단계: 관측 일평균 속도 계산 (증거 부족 시 가상 속도)
+    const estV = this.estimateDailyRate(observedV, today.visitor, days);
+    const estB = this.estimateDailyRate(observedB, today.blog, days);
+
+    // 3단계: 각 날짜 확정 — 관측 있으면 관측값, 없으면 추정값
+    const addsV: number[] = [];
+    const addsB: number[] = [];
+    const estimatedFlags: boolean[] = [];
+    for (let i = 0; i < days; i++) {
+      const vObs = observedV[i];
+      const bObs = observedB[i];
+      // 가중치: 최근일 쪽이 약간 더 높게 (1.0 → 0.7 선형 감쇠)
+      const weight = 1.0 - (0.3 * i) / Math.max(1, days - 1);
+      const vEstDay = estV * weight;
+      const bEstDay = estB * weight;
+      addsV.push(vObs ?? vEstDay);
+      addsB.push(bObs ?? bEstDay);
+      // 방문자/블로그 중 하나라도 추정이면 그날은 추정으로 간주
+      estimatedFlags.push(vObs == null || bObs == null);
+    }
+
+    // 4단계: 오늘 누적값에서 과거로 역산
     const result: Array<{
       date: Date;
       visitor: number;
       blog: number;
       visitorDelta: number | null;
       blogDelta: number | null;
+      isEstimated: boolean;
     }> = [];
     let cumV = today.visitor;
     let cumB = today.blog;
-    const todayUtc = new Date();
-    todayUtc.setUTCHours(0, 0, 0, 0);
 
     for (let i = 0; i < days; i++) {
       const d = new Date(todayUtc);
       d.setUTCDate(d.getUTCDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      const vAdd = visitorAdd.get(key) ?? 0;
-      const bAdd = blogAdd.get(key) ?? 0;
-
       result.push({
         date: d,
-        visitor: cumV,
-        blog: cumB,
-        visitorDelta: i === 0 ? null : vAdd, // i=0 (today) delta 는 어제 대비 → 다음 루프에서 계산됨
-        blogDelta: i === 0 ? null : bAdd,
+        visitor: Math.max(0, Math.round(cumV)),
+        blog: Math.max(0, Math.round(cumB)),
+        visitorDelta: null, // 아래서 재계산
+        blogDelta: null,
+        isEstimated: estimatedFlags[i],
       });
-
-      // 과거로 한 칸 이동 — 해당 날의 증가분을 제거
-      cumV -= vAdd;
-      cumB -= bAdd;
+      // 과거로 한 칸 이동 (해당 날 증가분 제거)
+      cumV -= addsV[i];
+      cumB -= addsB[i];
       if (cumV < 0) cumV = 0;
       if (cumB < 0) cumB = 0;
     }
@@ -271,6 +309,30 @@ export class CompetitorBackfillService {
       result[i].blogDelta = result[i].blog - result[i + 1].blog;
     }
     return result;
+  }
+
+  /**
+   * 일평균 증가 속도 추정.
+   * - 관측 5일 이상 있으면 관측 평균
+   * - 관측 부족 시 "총 누적 / 가정 운영일수(365)" 로 약한 베이스라인
+   * - 너무 큰 속도는 최근 30일 기준 누적의 10% 로 클램프 (단일 매장이 30일간 누적의 10% 이상 증가 가정 방지)
+   */
+  private estimateDailyRate(
+    observed: Array<number | null>,
+    totalCumulative: number,
+    days: number,
+  ): number {
+    const real = observed.filter((v): v is number => v != null);
+    if (real.length >= 5) {
+      const avg = real.reduce((a, b) => a + b, 0) / real.length;
+      return Math.max(0, avg);
+    }
+    // 베이스라인 — 매우 보수적 (365일 운영 가정)
+    if (totalCumulative <= 0) return 0;
+    const baseline = totalCumulative / 365;
+    // 최근 30일간 누적의 10% 이내로 클램프
+    const clampMax = (totalCumulative * 0.1) / days;
+    return Math.min(baseline, clampMax);
   }
 
   /** 다양한 날짜 포맷 → YYYY-MM-DD */

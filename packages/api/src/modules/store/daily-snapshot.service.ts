@@ -58,6 +58,7 @@ export class DailySnapshotService {
         blogDelta: r.blogDelta,
         visitor: r.visitorReviewCount,
         blog: r.blogReviewCount,
+        isEstimated: r.isEstimated,
       })),
     };
   }
@@ -111,6 +112,7 @@ export class DailySnapshotService {
             blog: d.blogReviewCount,
             visitorDelta: d.visitorDelta,
             blogDelta: d.blogDelta,
+            isEstimated: d.isEstimated,
           })),
         };
       }),

@@ -32,6 +32,8 @@ services:
   api:
     image: ghcr.io/cho-y-j/marketing-api:latest
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     ports:
       - "4000:4000"
     depends_on:
@@ -79,6 +81,8 @@ services:
   web:
     image: ghcr.io/cho-y-j/marketing-web:latest
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     ports:
       - "3000:3000"
     depends_on:

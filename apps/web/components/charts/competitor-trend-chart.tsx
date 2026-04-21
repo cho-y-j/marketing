@@ -14,9 +14,10 @@ interface Series {
 
 interface CompetitorTrendChartProps {
   title: string;
-  data: Array<{ date: string; [key: string]: number | string | null }>;
+  data: Array<{ date: string; [key: string]: number | string | null | boolean }>;
   series: Series[];
   isLoading?: boolean;
+  estimatedRatio?: number; // 0~1 — 추정 데이터 비율
 }
 
 export function CompetitorTrendChart({
@@ -24,11 +25,25 @@ export function CompetitorTrendChart({
   data,
   series,
   isLoading,
+  estimatedRatio,
 }: CompetitorTrendChartProps) {
   const isInsufficient = data && data.length === 1;
+  const titleWithBadge = (
+    <span className="inline-flex items-center gap-2">
+      <span>{title}</span>
+      {estimatedRatio != null && estimatedRatio > 0 && (
+        <span
+          className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200"
+          title={`${Math.round(estimatedRatio * 100)}% 추정치 — 시간이 지나면 실관측 데이터로 자동 대체`}
+        >
+          추정 포함 {Math.round(estimatedRatio * 100)}%
+        </span>
+      )}
+    </span>
+  );
   return (
     <ChartWrapper
-      title={title}
+      title={titleWithBadge}
       isLoading={isLoading}
       isEmpty={!data || data.length === 0}
       emptyMessage="스냅샷이 아직 없습니다 — 내일 01:00 이후 첫 데이터 생성"
