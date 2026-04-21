@@ -132,9 +132,12 @@ export class StoreSetupService {
       // 규칙: 월 300 미만이라도 "매장 지역명 포함" 또는 "회식 등 전환 높은 키워드"는 유지
       const KEEP_KEYWORDS = /(회식|상견례|룸|단체|모임|돌잔치)/;
       const addressParts = address.split(/\s+/).filter(Boolean);
+      // 매장명 브랜드 힌트도 지역 토큰으로 포함 (예: "공덕직영점" → "공덕")
+      const brandHintForFilter = store.name.match(/([가-힣]{2,4}?)(직영점|역점|지점|점)/)?.[1];
       const regionTokens = [
         ...addressParts.map((p: string) => p.replace(/(시|군|구|동|읍|면)$/, "")),
         ...(district || "").split(/\s+/).map((p: string) => p.replace(/(시|군|구|동|읍|면)$/, "")),
+        ...(brandHintForFilter ? [brandHintForFilter] : []),
       ].filter((t: string) => t.length >= 2);
       const includesRegion = (kw: string) => regionTokens.some((t) => kw.includes(t));
       const lowVolume = await this.prisma.storeKeyword.findMany({
@@ -573,8 +576,13 @@ export class StoreSetupService {
 ## 작업 순서
 
 ### 1단계: 지역 분석 (너 머릿속에서 먼저 판단)
-- **핵심 유입 지역명**: 고객이 실제 검색할 때 쓰는 지역명 (행정동명 X, 상권명/역명/구명 O)
-  예: 주소가 "서울 마포구 도화동"이고 매장명이 "공덕직영점"이면 핵심 지역은 **"공덕"** (도화동 X)
+- **핵심 유입 지역명**: 고객이 실제 검색할 때 쓰는 **순수 지역명**
+  - **절대 규칙 — 다음 접미사는 절대 붙이지 마라**: "동", "읍", "면", "군", "구", "시"
+  - ❌ "단양읍", "단양군", "마포구", "도화동", "강남구"
+  - ✓ "단양", "마포", "강남", "공덕"
+  - 행정 경계가 아닌 **상권/역 이름 우선**:
+    - 주소가 "서울 마포구 도화동"이고 매장명이 "공덕직영점" → 핵심 지역은 **"공덕"** (도화 X, 마포 X)
+    - 주소가 "충북 단양군 단양읍" → 핵심 지역은 **"단양"** (단양읍 X, 단양군 X)
 - **주변 지하철역**: 매장 반경 1km 내 지하철역 (있으면 최대 2개, 없으면 null)
 - **주변 상권/랜드마크**: 유명 상권명 (있으면 최대 2개, 없으면 null)
   예: 강남역 주변 → "뱅뱅사거리", "신논현"
@@ -741,19 +749,32 @@ export class StoreSetupService {
     const seen = new Set<string>();
     for (const raw0 of raw) {
       if (typeof raw0 !== "string") continue;
-      const k = raw0.trim().replace(/,/g, "").replace(/\s+/g, " ");
+      // 1차 정제: trim, 쉼표 제거, 공백 정규화
+      let k = raw0.trim().replace(/,/g, "").replace(/\s+/g, " ");
+      // 2차 정제: 지명 접미사 자동 제거 — "단양읍 맛집" → "단양 맛집", "마포구 맛집" → "마포 맛집"
+      //   주의: "공덕역"처럼 역명은 유지, "도화동" 같은 행정동명은 축약
+      k = k.replace(/([가-힣]{2,4})(읍|면|군)(\s|$)/g, "$1$3");
+      // "{지명}구" 도 제거 (단 "중구" 같은 1글자 구명은 유지)
+      k = k.replace(/([가-힣]{3,})(구)(\s|$)/g, "$1$3");
+      // "{지명}동" 도 제거 (브랜드 힌트가 더 구체적이므로 행정동 → 지명으로 축약)
+      k = k.replace(/([가-힣]{2,})(동)(\s|$)/g, (match, name, _suffix, tail) => {
+        // "공덕동" → "공덕"으로. 단 "역동" 같은 기능어는 유지.
+        if (["역동", "서동", "북동", "남동"].includes(name + "동")) return match;
+        return name + tail;
+      });
+      k = k.trim().replace(/\s+/g, " ");
+
       if (k.length < 2 || k.length > 30) continue;
-      if (k.includes(">")) continue; // 카테고리 원문 차단
-      if (k.includes("{") || k.includes("}")) continue; // 템플릿 미처리 차단
-      if (POLYMERIC_TERMS.has(k)) continue; // 포괄어 단독 차단
-      // 지역 힌트가 있으면 반드시 포함
+      if (k.includes(">")) continue;
+      if (k.includes("{") || k.includes("}")) continue;
+      if (POLYMERIC_TERMS.has(k)) continue;
       if (regionHint && !k.includes(regionHint)) continue;
       const norm = k.replace(/\s+/g, "");
       if (seen.has(norm)) continue;
       seen.add(norm);
       result.push(k);
     }
-    return result.slice(0, 10); // 공식 프롬프트 규정: 10개 이하
+    return result.slice(0, 10);
   }
 
   /**
