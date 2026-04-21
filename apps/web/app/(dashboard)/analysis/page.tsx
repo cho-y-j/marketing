@@ -113,7 +113,7 @@ export default function AnalysisPage() {
   const myMetrics = dashboard?.myMetrics;
   const compList = competitors ?? [];
 
-  const keywords = (dashboard as any)?.keywords ?? [];
+  const keywords = (dashboard as any)?.keywordRanks ?? [];
 
   // 경쟁사 평균 계산
   const avgCompReview = compList.length > 0
@@ -554,7 +554,7 @@ function KeywordRankList({ keywords }: { keywords: any[] }) {
               "bg-red-50 border-red-300 text-red-800";
             return (
               <Link
-                key={kw.id}
+                key={kw.keyword}
                 href={`/keywords/${encodeURIComponent(kw.keyword)}`}
                 className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border ${color} hover:shadow-sm transition-shadow`}
               >
