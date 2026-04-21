@@ -402,9 +402,9 @@ export default function CompetitorsPage() {
       <Card className="hidden md:block">
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <div className="min-w-[700px]">
+            <div className="min-w-[760px]">
               {/* 헤더 - 그룹 */}
-              <div className="grid grid-cols-[36px_minmax(140px,220px)_repeat(3,72px)_repeat(3,72px)_32px] gap-1 px-3 py-1.5 border-b bg-muted/40 text-[10px] font-semibold text-muted-foreground">
+              <div className="grid grid-cols-[36px_minmax(140px,220px)_repeat(3,78px)_repeat(3,78px)_32px] gap-2 px-3 py-1.5 border-b bg-muted/40 text-[10px] font-semibold text-muted-foreground">
                 <div></div>
                 <div></div>
                 <div className="col-span-3 text-center border-l border-r border-border/50 bg-muted/50">방문자 리뷰</div>
@@ -412,7 +412,7 @@ export default function CompetitorsPage() {
                 <div></div>
               </div>
               {/* 헤더 - 세부 */}
-              <div className="grid grid-cols-[36px_minmax(140px,220px)_repeat(3,72px)_repeat(3,72px)_32px] gap-1 px-3 py-2 border-b bg-muted/30 text-[10px] font-semibold text-muted-foreground">
+              <div className="grid grid-cols-[36px_minmax(140px,220px)_repeat(3,78px)_repeat(3,78px)_32px] gap-2 px-3 py-2 border-b bg-muted/30 text-[10px] font-semibold text-muted-foreground">
                 <div className="text-center">#</div>
                 <div>매장명</div>
                 <div className="text-right border-l border-border/50">누적</div>
@@ -614,7 +614,7 @@ function RankRow({
 
   return (
     <div
-      className={`grid grid-cols-[36px_minmax(140px,220px)_repeat(3,72px)_repeat(3,72px)_32px] gap-1 px-3 py-2.5 border-b last:border-b-0 text-sm items-center transition-colors ${
+      className={`grid grid-cols-[36px_minmax(140px,220px)_repeat(3,78px)_repeat(3,78px)_32px] gap-2 px-3 py-2.5 border-b last:border-b-0 text-sm items-center transition-colors ${
         row.isMine ? "bg-primary/10 border-l-2 border-l-primary font-semibold" : "hover:bg-muted/20"
       }`}
     >
