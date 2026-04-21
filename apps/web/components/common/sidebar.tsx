@@ -150,7 +150,7 @@ export function Sidebar() {
       <div className="p-3">
         <Link
           href="/settings"
-          className="block rounded-xl bg-gradient-to-br from-brand-subtle to-violet-50 border border-brand/10 p-3 hover:border-brand/20 transition-colors"
+          className="block rounded-xl bg-brand-subtle border border-brand/10 p-3 hover:border-brand/30 transition-colors"
         >
           <div className="flex items-center gap-2 mb-1">
             <Crown size={14} className="text-brand" />
