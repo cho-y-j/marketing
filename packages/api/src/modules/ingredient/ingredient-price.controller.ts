@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { IngredientPriceService } from "./ingredient-price.service";
@@ -29,5 +29,38 @@ export class IngredientPriceController {
     @Param("alertId") alertId: string,
   ) {
     return this.service.markAlertRead(storeId, alertId);
+  }
+
+  @Put()
+  @ApiOperation({ summary: "주재료 리스트 전체 교체" })
+  setIngredients(
+    @Param("storeId") storeId: string,
+    @Body() body: { ingredients: string[] },
+  ) {
+    return this.service.setKeyIngredients(storeId, body.ingredients ?? []);
+  }
+
+  @Post()
+  @ApiOperation({ summary: "주재료 1개 추가" })
+  addIngredient(
+    @Param("storeId") storeId: string,
+    @Body() body: { name: string },
+  ) {
+    return this.service.addKeyIngredient(storeId, body.name);
+  }
+
+  @Delete(":name")
+  @ApiOperation({ summary: "주재료 1개 삭제" })
+  removeIngredient(
+    @Param("storeId") storeId: string,
+    @Param("name") name: string,
+  ) {
+    return this.service.removeKeyIngredient(storeId, decodeURIComponent(name));
+  }
+
+  @Get("search")
+  @ApiOperation({ summary: "KAMIS 품목 자동완성" })
+  search(@Query("q") q: string) {
+    return this.service.searchIngredientNames(q ?? "");
   }
 }

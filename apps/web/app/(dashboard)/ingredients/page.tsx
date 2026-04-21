@@ -1,12 +1,16 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { apiClient } from "@/lib/api-client";
-import { TrendingUp, TrendingDown, Minus, AlertTriangle, Info, DollarSign } from "lucide-react";
+import { toast } from "sonner";
+import { TrendingUp, TrendingDown, Minus, AlertTriangle, Info, DollarSign, Plus, X, Loader2 } from "lucide-react";
 
 type PriceItem = {
   itemName: string;
@@ -34,12 +38,55 @@ type Alert = {
 
 export default function IngredientsPage() {
   const { storeId } = useCurrentStoreId();
+  const qc = useQueryClient();
+  const [newIngredient, setNewIngredient] = useState("");
+  const [searchResults, setSearchResults] = useState<string[]>([]);
+
   const { data, isLoading } = useQuery<{ items: PriceItem[]; alerts: Alert[] }>({
     queryKey: ["ingredient-prices", storeId],
     queryFn: () =>
       apiClient.get(`/stores/${storeId}/ingredients/prices`).then((r) => r.data),
     enabled: !!storeId,
   });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["ingredient-prices", storeId] });
+
+  const addIngredient = async (name: string) => {
+    try {
+      await apiClient.post(`/stores/${storeId}/ingredients`, { name });
+      toast.success(`"${name}" 추가됨`);
+      setNewIngredient("");
+      setSearchResults([]);
+      invalidate();
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || "추가 실패");
+    }
+  };
+
+  const removeIngredient = async (name: string) => {
+    if (!confirm(`"${name}" 삭제하시겠습니까?`)) return;
+    try {
+      await apiClient.delete(`/stores/${storeId}/ingredients/${encodeURIComponent(name)}`);
+      toast.success(`"${name}" 삭제됨`);
+      invalidate();
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || "삭제 실패");
+    }
+  };
+
+  const handleSearch = async (q: string) => {
+    setNewIngredient(q);
+    if (q.length < 1) {
+      setSearchResults([]);
+      return;
+    }
+    try {
+      const { data } = await apiClient.get(`/stores/${storeId}/ingredients/search`, { params: { q } });
+      setSearchResults(data.slice(0, 8));
+    } catch {
+      setSearchResults([]);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -50,44 +97,80 @@ export default function IngredientsPage() {
     );
   }
 
-  if (!data || data.items.length === 0) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-4">
-        <div>
-          <h2 className="text-xl font-bold">원가 관리</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">주재료 가격 추적 + 급등 알림</p>
-        </div>
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            <DollarSign size={28} className="mx-auto mb-3 text-muted-foreground/40" />
-            <p className="font-medium">추적 대상 재료가 없습니다</p>
-            <p className="text-xs mt-1">
-              매장 가입 시 AI가 자동 판정. 설정에서 수동 추가도 가능합니다.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-xl md:text-2xl font-bold">원가 관리</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            KAMIS 농수산물유통정보 · 매일 자동 갱신 · 주재료 {data.items.length}개 추적
+            KAMIS 농수산물유통정보 · 매일 자동 갱신 · 주재료 {data?.items?.length ?? 0}개 추적
           </p>
         </div>
-        {data.items[0]?.lastUpdated && (
+        {data?.items?.[0]?.lastUpdated && (
           <Badge variant="outline" className="text-xs">
             {data.items[0].lastUpdated} 기준
           </Badge>
         )}
       </div>
 
+      {/* 재료 추가 */}
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-center gap-2 mb-1">
+            <Plus size={14} className="text-primary" />
+            <span className="font-semibold text-sm">재료 직접 추가</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            KAMIS 등록 품목 이름으로 추가 (예: 고추장, 참기름, 대파, 배추). 입력하면 자동 제안됩니다.
+          </p>
+          <div className="flex gap-2 relative">
+            <div className="flex-1 relative">
+              <Input
+                placeholder="재료명 (예: 고추장, 참기름)"
+                value={newIngredient}
+                onChange={(e) => handleSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newIngredient.trim()) {
+                    addIngredient(newIngredient.trim());
+                  }
+                }}
+              />
+              {searchResults.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-border rounded-md shadow-lg z-10 max-h-48 overflow-y-auto">
+                  {searchResults.map((s) => (
+                    <button
+                      key={s}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 border-b last:border-b-0"
+                      onClick={() => addIngredient(s)}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button
+              onClick={() => newIngredient.trim() && addIngredient(newIngredient.trim())}
+              disabled={!newIngredient.trim()}
+            >
+              추가
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {(!data || data.items.length === 0) && (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            <DollarSign size={28} className="mx-auto mb-3 text-muted-foreground/40" />
+            <p className="font-medium">추적 대상 재료가 없습니다</p>
+            <p className="text-xs mt-1">위에서 재료를 직접 추가해주세요</p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 급등/변동 알림 */}
-      {data.alerts.length > 0 && (
+      {data && data.alerts.length > 0 && (
         <Card className="border-amber-200 bg-amber-50/30">
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center gap-2 text-sm font-bold">
@@ -118,25 +201,31 @@ export default function IngredientsPage() {
       )}
 
       {/* 재료 목록 */}
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <div className="min-w-[700px]">
-              {/* 헤더 */}
-              <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-2 px-4 py-2.5 border-b bg-muted/30 text-[11px] font-semibold text-muted-foreground">
-                <div>재료</div>
-                <div className="text-right">현재 가격</div>
-                <div className="text-right">전주 대비</div>
-                <div className="text-right">전월 대비</div>
-                <div className="text-center">상태</div>
+      {data && data.items.length > 0 && (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <div className="min-w-[780px]">
+                <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_90px_50px] gap-2 px-4 py-2.5 border-b bg-muted/30 text-[11px] font-semibold text-muted-foreground">
+                  <div>재료</div>
+                  <div className="text-right">현재 가격</div>
+                  <div className="text-right">전주 대비</div>
+                  <div className="text-right">전월 대비</div>
+                  <div className="text-center">상태</div>
+                  <div></div>
+                </div>
+                {data.items.map((item) => (
+                  <PriceRow
+                    key={item.itemName}
+                    item={item}
+                    onRemove={() => removeIngredient(item.itemName)}
+                  />
+                ))}
               </div>
-              {data.items.map((item) => (
-                <PriceRow key={item.itemName} item={item} />
-              ))}
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 정보 */}
       <Card className="border-sky-200 bg-sky-50/30">
@@ -156,7 +245,7 @@ export default function IngredientsPage() {
   );
 }
 
-function PriceRow({ item }: { item: PriceItem }) {
+function PriceRow({ item, onRemove }: { item: PriceItem; onRemove?: () => void }) {
   const hasData = item.current != null;
   const weeklyClr =
     item.weeklyChange == null
@@ -194,7 +283,7 @@ function PriceRow({ item }: { item: PriceItem }) {
     v == null ? null : v > 0 ? `+${v.toLocaleString()}원` : `${v.toLocaleString()}원`;
 
   return (
-    <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-2 px-4 py-3 border-b last:border-b-0 text-sm items-center hover:bg-muted/10 transition-colors">
+    <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_90px_50px] gap-2 px-4 py-3 border-b last:border-b-0 text-sm items-center hover:bg-muted/10 transition-colors">
       <div>
         <div className="font-semibold">{item.itemName}</div>
         {!hasData && (
@@ -229,6 +318,17 @@ function PriceRow({ item }: { item: PriceItem }) {
           {item.weeklyChange != null && item.weeklyChange < 0 ? <TrendingDown size={10} className="mr-0.5" /> : null}
           {status.label}
         </Badge>
+      </div>
+      <div className="flex justify-center">
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            className="text-muted-foreground/40 hover:text-red-500 transition-colors"
+            title="이 재료 삭제"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
     </div>
   );

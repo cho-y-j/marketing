@@ -281,4 +281,53 @@ export class IngredientPriceService {
       data: { isRead: true },
     });
   }
+
+  /** 매장 keyIngredients 갱신 (전체 교체) */
+  async setKeyIngredients(storeId: string, ingredients: string[]): Promise<string[]> {
+    const cleaned = [...new Set(ingredients.map((s) => s.trim()).filter((s) => s.length >= 2 && s.length <= 15))];
+    const updated = await this.prisma.store.update({
+      where: { id: storeId },
+      data: { keyIngredients: cleaned },
+      select: { keyIngredients: true },
+    });
+    return updated.keyIngredients;
+  }
+
+  /** 재료 1개 추가 */
+  async addKeyIngredient(storeId: string, name: string): Promise<string[]> {
+    const trimmed = name.trim();
+    if (trimmed.length < 2 || trimmed.length > 15) throw new Error("재료명은 2~15자");
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { keyIngredients: true },
+    });
+    if (!store) throw new Error("매장 없음");
+    if (store.keyIngredients.includes(trimmed)) return store.keyIngredients;
+    const next = [...store.keyIngredients, trimmed];
+    return this.setKeyIngredients(storeId, next);
+  }
+
+  /** 재료 1개 삭제 */
+  async removeKeyIngredient(storeId: string, name: string): Promise<string[]> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { keyIngredients: true },
+    });
+    if (!store) throw new Error("매장 없음");
+    const next = store.keyIngredients.filter((k) => k !== name);
+    return this.setKeyIngredients(storeId, next);
+  }
+
+  /** KAMIS 자동완성 — 부분 일치 (이미 수집된 IngredientPrice 에서) */
+  async searchIngredientNames(query: string): Promise<string[]> {
+    const q = query.trim();
+    if (q.length < 1) return [];
+    const results = await this.prisma.ingredientPrice.findMany({
+      where: { itemName: { contains: q } },
+      select: { itemName: true },
+      distinct: ["itemName"],
+      take: 15,
+    });
+    return results.map((r) => r.itemName);
+  }
 }
