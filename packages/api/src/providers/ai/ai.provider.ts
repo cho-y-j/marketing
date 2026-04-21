@@ -294,12 +294,50 @@ export class AIProvider {
       });
     }
 
-    // 시스템 프롬프트로 분석/브리핑 구분
+    // 시스템 프롬프트로 용도 구분
+    const isReviewReply = /리뷰 답[변글]|reply|답글/.test(systemPrompt);
+    const isContent = /콘텐츠|플레이스|게시글|블로그 글|SNS/.test(systemPrompt);
     const isBriefing = /브리핑|매니저|오늘 할 일|todayActions/.test(systemPrompt);
+
+    if (isReviewReply) {
+      return JSON.stringify(this.buildReviewReplyFromData(ctx));
+    }
+    if (isContent) {
+      return JSON.stringify({
+        error: "ai_unavailable",
+        message: "AI 콘텐츠 생성 실패 — 나중에 재시도해주세요",
+      });
+    }
     if (isBriefing) {
       return JSON.stringify(this.buildBriefingFromData(ctx));
     }
     return JSON.stringify(this.buildAnalysisFromData(ctx));
+  }
+
+  /**
+   * AI 실패 시 리뷰 답글 폴백 — 간단한 템플릿 기반.
+   * 리뷰 평점/내용 톤에 맞춰 최소한의 답글 생성.
+   */
+  private buildReviewReplyFromData(ctx: any): any {
+    const storeName = ctx?.store?.name ?? "저희 매장";
+    const reviews: any[] = ctx?.reviews ?? (ctx?.review ? [ctx.review] : []);
+    const replies = reviews.map((r, i) => {
+      const rating = r.rating ?? r.body?.rating;
+      const body = (r.body || "").slice(0, 100);
+      const isNegative = rating != null && rating <= 2;
+      const mentionsBody = body.length > 20;
+      const reply = isNegative
+        ? `${r.author || "고객"}님, 소중한 의견 주셔서 감사합니다. 불편을 드려 죄송합니다. 말씀 주신 부분 꼼꼼히 살펴 개선하겠습니다. 다시 찾아주시면 달라진 모습 보여드리겠습니다.`
+        : mentionsBody
+          ? `${r.author || "고객"}님 방문해주셔서 정말 감사합니다. 좋은 리뷰까지 남겨주셔서 큰 힘이 됩니다. 앞으로도 꾸준히 더 맛있고 편안한 ${storeName} 되겠습니다. 또 뵙기를 기다리겠습니다.`
+          : `${r.author || "고객"}님, 소중한 리뷰 감사드립니다. ${storeName}을 찾아주신 마음에 보답할 수 있도록 더 노력하겠습니다. 또 오실 때 더 기분 좋은 경험 드리겠습니다.`;
+      return { index: r.index ?? i + 1, reply };
+    });
+    // 단일 리뷰인 경우 reply 단독 형태로
+    if (ctx?.review && replies[0]) {
+      return { reply: replies[0].reply };
+    }
+    return replies.length > 0 ? replies : { reply: `${storeName}을 찾아주셔서 감사합니다. 소중한 의견 참고하여 더 좋은 모습으로 찾아뵙겠습니다.` };
   }
 
   /** ===== 데이터 기반 분석 응답 빌더 ===== */

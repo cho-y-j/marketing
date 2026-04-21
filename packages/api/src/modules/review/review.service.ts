@@ -197,7 +197,7 @@ JSON 배열로 응답: [{ "index": 1, "reply": "답글 내용" }, { "index": 2, 
           const idx = pending.indexOf(review) + 1;
           const match = replies.find((r: any) => r.index === idx);
           const replyText = match?.reply || match?.body;
-          if (replyText && typeof replyText === "string") {
+          if (replyText && typeof replyText === "string" && this.isValidReply(replyText)) {
             await this.prisma.storeReview.update({
               where: { id: review.id },
               data: {
@@ -232,8 +232,17 @@ JSON 배열로 응답: [{ "index": 1, "reply": "답글 내용" }, { "index": 2, 
             });
             const resp = await this.ai.generate(CONTENT_REVIEW_REPLY_PROMPT, singlePrompt);
             const m = resp.content.match(/\{[\s\S]*\}/);
-            const parsed = JSON.parse(m ? m[0] : `{"reply":"${resp.content}"}`);
-            const text = parsed.reply || parsed.body || resp.content;
+            let text = "";
+            try {
+              const parsed = JSON.parse(m ? m[0] : `{"reply":${JSON.stringify(resp.content)}}`);
+              text = parsed.reply || parsed.body || "";
+            } catch {
+              text = resp.content;
+            }
+            if (!this.isValidReply(text)) {
+              this.logger.warn(`리뷰 ${review.id} 답글 검증 실패 — 저장 안 함`);
+              continue;
+            }
             await this.prisma.storeReview.update({
               where: { id: review.id },
               data: { replyStatus: "DRAFTED", draftReply: text, draftedAt: new Date() },
@@ -250,6 +259,21 @@ JSON 배열로 응답: [{ "index": 1, "reply": "답글 내용" }, { "index": 2, 
 
     this.logger.log(`[${store?.name}] AI 답글 초안 ${drafted}건 작성`);
     return drafted;
+  }
+
+  /**
+   * 답글 검증 — AI 오류로 저장된 JSON 덤프 / 에러 메시지 차단.
+   * 올바른 답글은 한국어 문장 5자 이상, JSON/키워드 포함 X.
+   */
+  private isValidReply(text: string): boolean {
+    if (!text || typeof text !== "string") return false;
+    const trimmed = text.trim();
+    if (trimmed.length < 5 || trimmed.length > 500) return false;
+    // 분석/브리핑 JSON 필드 포함되면 거부
+    if (/competitiveScore|_meta|strengths|weaknesses|recommendations|ai_unavailable/i.test(trimmed)) return false;
+    // JSON 형태 (중괄호 시작) 거부
+    if (/^\s*[\{\[]/.test(trimmed)) return false;
+    return true;
   }
 
   /** 검수 대기 목록 (DRAFTED) */
