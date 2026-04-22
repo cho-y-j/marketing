@@ -953,7 +953,6 @@ ${catalogText}
     myStore?: { visitorReviewCount?: number | null; blogReviewCount?: number | null; address?: string | null },
   ) {
     const normalizedStoreName = storeName.replace(/\s+/g, "");
-    const foundNames = new Set<string>();
     type Candidate = {
       name: string;
       placeId?: string;
@@ -961,10 +960,13 @@ ${catalogText}
       address?: string;
       visitorReviewCount?: number;
       blogReviewCount?: number;
+      // 교집합 스코어: 몇 개 쿼리에 등장했는가 (여러 키워드에 공통 노출 = 진짜 경쟁)
+      appearances: number;
+      queryMatches: string[];
     };
-    const candidates: Candidate[] = [];
+    const candMap = new Map<string, Candidate>();
 
-    // 1단계: 네이버 검색 상위 매장 수집 (쿼리당 10개 × queries)
+    // 1단계: 쿼리별로 상위 매장 수집 — 같은 후보가 다른 쿼리에서 또 나오면 appearances++
     for (const query of queries) {
       try {
         this.logger.log(`[경쟁사 후보 수집] "${query}"`);
@@ -973,18 +975,25 @@ ${catalogText}
           const name = r.title.replace(/<[^>]*>/g, "").trim();
           const normalized = name.replace(/\s+/g, "");
           if (
-            !foundNames.has(name) &&
-            normalized !== normalizedStoreName &&
-            !normalized.includes(normalizedStoreName) &&
-            !normalizedStoreName.includes(normalized) &&
-            name.length >= 2 &&
-            !/^\d+$/.test(name)
+            normalized === normalizedStoreName ||
+            normalized.includes(normalizedStoreName) ||
+            normalizedStoreName.includes(normalized) ||
+            name.length < 2 ||
+            /^\d+$/.test(name)
           ) {
-            foundNames.add(name);
-            candidates.push({
+            continue;
+          }
+          const existing = candMap.get(normalized);
+          if (existing) {
+            existing.appearances += 1;
+            if (!existing.queryMatches.includes(query)) existing.queryMatches.push(query);
+          } else {
+            candMap.set(normalized, {
               name,
               category: r.category,
               address: r.roadAddress || r.address,
+              appearances: 1,
+              queryMatches: [query],
             });
           }
         }
@@ -993,12 +1002,19 @@ ${catalogText}
       }
     }
 
+    const candidates = Array.from(candMap.values()).sort(
+      (a, b) => b.appearances - a.appearances,
+    );
+    this.logger.log(
+      `경쟁사 후보 ${candidates.length}개 — 교집합(≥2 쿼리 등장) ${candidates.filter((c) => c.appearances >= 2).length}개`,
+    );
+
     if (candidates.length === 0) {
       this.logger.warn(`경쟁사 후보 0개 — 네이버 검색 실패`);
       return;
     }
 
-    // Place API로 각 후보의 리뷰 수 보강 (최대 20개만)
+    // Place API로 각 후보의 리뷰 수 보강 (최대 20개, appearances 높은 것부터)
     const enriched: Candidate[] = [];
     for (const c of candidates.slice(0, 20)) {
       try {
@@ -1080,41 +1096,57 @@ ${catalogText}
       address?: string;
       visitorReviewCount?: number;
       blogReviewCount?: number;
+      appearances?: number;
+      queryMatches?: string[];
     }>,
   ): Promise<typeof candidates> {
     if (candidates.length === 0) return [];
 
     const candidateList = candidates
-      .map((c, i) =>
-        `${i + 1}. ${c.name} | 업종: ${c.category || "-"} | 주소: ${c.address || "-"} | 방문자리뷰: ${c.visitorReviewCount ?? "?"} | 블로그리뷰: ${c.blogReviewCount ?? "?"}`,
-      )
+      .map((c, i) => {
+        const hits = c.appearances ?? 1;
+        const queries = c.queryMatches?.join(", ") || "-";
+        return `${i + 1}. ${c.name} | 업종: ${c.category || "-"} | 주소: ${c.address || "-"} | 방문자리뷰: ${c.visitorReviewCount ?? "?"} | 블로그리뷰: ${c.blogReviewCount ?? "?"} | 공통등장: ${hits}회 (${queries})`;
+      })
       .join("\n");
+
+    // 내 매장의 "세부 업종" 토큰 추출 (예: "한식>아귀찜,해물찜" → [아귀찜, 해물찜])
+    const myDetailCategories = (myCategory || "")
+      .split(/[>,]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2 && !["음식점", "한식", "양식", "일식", "중식"].includes(s));
+    const myDetailStr = myDetailCategories.length > 0 ? myDetailCategories.join(", ") : myCategory;
 
     const systemPrompt = `당신은 자영업 마케팅 분석 전문가. 내 매장의 "진짜 경쟁자"를 선별합니다.
 
-진짜 경쟁자 기준:
-1. **같은 상권** — 내 매장과 같은 동/역/구에 있는 매장 우선
-2. **같은 업종 / 유사 업종** — 소비자가 대체재로 고려할 매장 (예: 아귀찜 ↔ 해물찜 ↔ 한식요리)
-3. **내 매장보다 규모가 크거나 비슷** — 방문자/블로그 리뷰 수가 내 매장 이상 (추격 목표로서 가치)
-4. **실제 운영 중** — 리뷰가 전혀 없거나 극소수인 매장은 제외
-5. **내 매장의 분점/체인 제외** — 같은 브랜드는 경쟁자가 아님
+## 진짜 경쟁자 기준 (엄격)
+1. **세부 업종 일치 최우선** — "같은 대분류(한식)"만으로는 경쟁자 아님. 실제로 같거나 아주 가까운 세부 메뉴여야 함.
+   ✓ 내가 "아귀찜,해물찜" → 아귀찜, 해물찜, 해물탕, 찜류, 매운탕 O.K.
+   ❌ 곱창/삼겹살/냉면/돈까스/초밥/디저트/카페 — 같은 한식이라도 다른 수요, 선별 금지.
+2. **같은 상권** — 같은 동/역/구 우선. 상권 다르면 후순위.
+3. **공통 등장 가중치** — 각 후보 끝의 "공통등장: N회" 는 서로 다른 검색 키워드에 몇 번 노출됐는지. 2회 이상 = 진짜 경쟁자 신호로 강하게 가중.
+4. **실제 운영 중** — 방문자/블로그 리뷰 합 30건 미만은 제외.
+5. **내 매장 규모 이상 또는 그에 준함** — 추격/참고 가치.
+6. **내 매장의 분점/체인 제외**.
 
-응답 형식 (JSON만):
-{"competitors": [{"index": 숫자, "reason": "선별 이유 한 줄"}]}
+## 출력
+JSON 만. 설명 없음.
+{"competitors": [{"index": 숫자, "reason": "한 줄 이유 (업종일치/공통등장/상권)"}]}
 
-총 6~8개 선별. 후보가 부족하면 적게 반환해도 됨. 후보 번호는 1부터 시작.`;
+6~8개 선별. 세부 업종 일치가 부족하면 적게 반환 (3~5개도 OK). 업종 다른 매장 억지로 채우지 말 것.`;
 
     const userPrompt = `내 매장:
 - 이름: ${myName}
-- 업종: ${myCategory || "-"}
+- 전체 업종: ${myCategory || "-"}
+- **세부 업종(경쟁 판단 기준)**: ${myDetailStr}
 - 주소: ${myAddress || "-"}
 - 방문자 리뷰: ${myVisitor}
 - 블로그 리뷰: ${myBlog}
 
-경쟁사 후보 ${candidates.length}개:
+경쟁사 후보 ${candidates.length}개 (공통등장 많은 순):
 ${candidateList}
 
-위 기준으로 "진짜 경쟁자" 6~8개를 선별해 JSON으로 응답.`;
+위 기준으로 "세부 업종 일치" + "공통등장 ≥2" 를 최우선으로 6~8개 선별. JSON만.`;
 
     try {
       const response = await this.ai.analyze(systemPrompt, userPrompt);
@@ -1141,28 +1173,38 @@ ${candidateList}
       this.logger.warn(`AI 경쟁사 선별 실패: ${e.message} — 폴백 사용`);
     }
 
-    // 폴백 1: 내 매장보다 리뷰 많은 매장 우선
-    const better = [...candidates]
-      .filter(
-        (c) =>
-          (c.visitorReviewCount ?? 0) >= myVisitor * 0.8 ||
-          (c.blogReviewCount ?? 0) >= myBlog * 0.8,
-      )
-      .sort(
-        (a, b) =>
-          ((b.visitorReviewCount ?? 0) + (b.blogReviewCount ?? 0)) -
-          ((a.visitorReviewCount ?? 0) + (a.blogReviewCount ?? 0)),
-      );
-    if (better.length >= 3) return better.slice(0, 8);
-
-    // 폴백 2 (완화): 리뷰 수 무관 상위 8개 — 최소한 경쟁사가 있어야 나머지 기능 동작
-    const any = [...candidates].sort(
-      (a, b) =>
-        ((b.visitorReviewCount ?? 0) + (b.blogReviewCount ?? 0)) -
-        ((a.visitorReviewCount ?? 0) + (a.blogReviewCount ?? 0)),
+    // 폴백 스코어링 — AI 실패 시에도 업종/공통등장 기반으로 그럴듯한 선별
+    const myDetailSet = new Set(
+      (myCategory || "")
+        .split(/[>,]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 2 && !["음식점", "한식", "양식", "일식", "중식"].includes(s)),
     );
-    this.logger.log(`경쟁사 완화 폴백: ${any.length}개 중 상위 8개 사용`);
-    return any.slice(0, 8);
+    const categoryMatches = (c: (typeof candidates)[number]) => {
+      if (!c.category) return 0;
+      const tokens = c.category.split(/[>,]/).map((s) => s.trim());
+      let hit = 0;
+      for (const t of tokens) {
+        if (myDetailSet.has(t)) hit += 2; // 세부 업종 완전 일치 가중치 큼
+        else if ([...myDetailSet].some((my) => t.includes(my) || my.includes(t))) hit += 1;
+      }
+      return hit;
+    };
+    const score = (c: (typeof candidates)[number]) =>
+      (c.appearances ?? 1) * 10 +              // 공통 등장 가중치 최대
+      categoryMatches(c) * 5 +                   // 세부 업종 일치
+      Math.min(5, (c.visitorReviewCount ?? 0) / 500) + // 리뷰 스케일 (상한)
+      Math.min(5, (c.blogReviewCount ?? 0) / 500);
+
+    const scored = [...candidates].sort((a, b) => score(b) - score(a));
+
+    // 업종 일치가 있는 후보 우선, 부족하면 교집합 높은 것으로 채움
+    const withMatch = scored.filter((c) => categoryMatches(c) > 0);
+    const picked = withMatch.length >= 3 ? withMatch.slice(0, 8) : scored.slice(0, 8);
+    this.logger.log(
+      `경쟁사 폴백(스코어): ${picked.length}개 — ${picked.map((c) => `${c.name}(${c.appearances ?? 1}회)`).join(", ")}`,
+    );
+    return picked;
   }
 
   // 같은 지역+업종 경쟁매장 자동 탐색 (레거시 - 단일 쿼리)
