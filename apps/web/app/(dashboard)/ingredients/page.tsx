@@ -204,29 +204,43 @@ export default function IngredientsPage() {
 
       {/* 재료 목록 */}
       {data && data.items.length > 0 && (
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <div className="min-w-[780px]">
-                <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_90px_50px] gap-2 px-4 py-2.5 border-b bg-muted/30 text-[11px] font-semibold text-muted-foreground">
-                  <div>재료</div>
-                  <div className="text-right">현재 가격</div>
-                  <div className="text-right">전주 대비</div>
-                  <div className="text-right">전월 대비</div>
-                  <div className="text-center">상태</div>
-                  <div></div>
+        <>
+          {/* 데스크탑 — 테이블 */}
+          <Card className="hidden md:block">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <div className="min-w-[780px]">
+                  <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_90px_50px] gap-2 px-4 py-2.5 border-b bg-muted/30 text-[11px] font-semibold text-muted-foreground">
+                    <div>재료</div>
+                    <div className="text-right">현재 가격</div>
+                    <div className="text-right">전주 대비</div>
+                    <div className="text-right">전월 대비</div>
+                    <div className="text-center">상태</div>
+                    <div></div>
+                  </div>
+                  {data.items.map((item) => (
+                    <PriceRow
+                      key={item.itemName}
+                      item={item}
+                      onRemove={() => removeIngredient(item.itemName)}
+                    />
+                  ))}
                 </div>
-                {data.items.map((item) => (
-                  <PriceRow
-                    key={item.itemName}
-                    item={item}
-                    onRemove={() => removeIngredient(item.itemName)}
-                  />
-                ))}
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+
+          {/* 모바일 — 카드 리스트 (현재가 + 전주 대비 한눈에) */}
+          <div className="md:hidden space-y-2">
+            {data.items.map((item) => (
+              <MobilePriceCard
+                key={item.itemName}
+                item={item}
+                onRemove={() => removeIngredient(item.itemName)}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {/* 정보 */}
@@ -245,6 +259,110 @@ export default function IngredientsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// 모바일 카드 — 현재가 + 전주 대비 한눈에
+function MobilePriceCard({ item, onRemove }: { item: PriceItem; onRemove?: () => void }) {
+  const hasData = item.current != null;
+
+  const fmtRate = (v: number | null) =>
+    v == null ? "-" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+  const fmtAmt = (v: number | null) =>
+    v == null ? null : v > 0 ? `+${v.toLocaleString()}원` : `${v.toLocaleString()}원`;
+
+  const weeklyColor = item.weeklySuspicious
+    ? "text-muted-foreground"
+    : item.weeklyChange == null
+      ? "text-muted-foreground"
+      : item.weeklyChange >= 10
+        ? "text-red-700"
+        : item.weeklyChange > 0
+          ? "text-red-600"
+          : item.weeklyChange < 0
+            ? "text-green-600"
+            : "text-muted-foreground";
+
+  const isSuspicious = item.weeklySuspicious || item.monthlySuspicious;
+  const status = isSuspicious
+    ? { label: "확인 필요", color: "bg-gray-100 text-gray-700 border-gray-300" }
+    : (item.monthlyChange ?? 0) >= 20
+      ? { label: "급등", color: "bg-red-100 text-red-700 border-red-300" }
+      : (item.weeklyChange ?? 0) >= 10
+        ? { label: "상승", color: "bg-amber-100 text-amber-700 border-amber-300" }
+        : (item.weeklyChange ?? 0) < 0
+          ? { label: "하락", color: "bg-green-50 text-green-700 border-green-200" }
+          : { label: "안정", color: "bg-muted text-muted-foreground border-border" };
+
+  return (
+    <Card>
+      <CardContent className="p-3">
+        {/* 1행 — 재료명 + 상태 + 삭제 */}
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="text-sm font-bold truncate">{item.itemName}</span>
+            {!hasData && (
+              <Badge variant="outline" className="text-[10px] bg-gray-100 text-gray-600 border-gray-300 shrink-0">
+                가격 미등록
+              </Badge>
+            )}
+            <Badge variant="outline" className={`text-[11px] shrink-0 ${status.color}`}>
+              {item.weeklyChange != null && item.weeklyChange > 0 && !item.weeklySuspicious && <TrendingUp size={10} className="mr-0.5" />}
+              {item.weeklyChange != null && item.weeklyChange < 0 && !item.weeklySuspicious && <TrendingDown size={10} className="mr-0.5" />}
+              {status.label}
+            </Badge>
+          </div>
+          {onRemove && (
+            <button
+              onClick={onRemove}
+              className="text-muted-foreground/40 hover:text-red-500 transition-colors shrink-0 p-2 -m-2 inline-flex items-center justify-center min-w-[36px] min-h-[36px]"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        {/* 2행 — 현재가 + 전주/전월 증감 한 줄 */}
+        {hasData ? (
+          <div className="flex items-baseline justify-between gap-3">
+            <div className="flex items-baseline gap-1.5">
+              <span className="font-mono font-black text-xl">
+                {item.current!.toLocaleString()}
+              </span>
+              <span className="text-xs text-muted-foreground">원/{item.unit}</span>
+            </div>
+            <div className="text-right shrink-0 flex items-baseline gap-3">
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] text-muted-foreground leading-none mb-0.5">전주</span>
+                <span className={`font-mono font-bold text-sm ${weeklyColor}`}>
+                  {fmtRate(item.weeklyChange)}
+                  {item.weeklySuspicious && <span className="ml-0.5 text-amber-500 text-xs">⚠</span>}
+                </span>
+                {fmtAmt(item.weeklyChangeAmount) && (
+                  <span className={`font-mono text-[10px] ${weeklyColor}`}>
+                    {fmtAmt(item.weeklyChangeAmount)}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] text-muted-foreground leading-none mb-0.5">전월</span>
+                <span className={`font-mono text-sm ${
+                  item.monthlySuspicious ? "text-muted-foreground" :
+                  (item.monthlyChange ?? 0) >= 20 ? "text-red-700 font-bold" :
+                  (item.monthlyChange ?? 0) > 0 ? "text-red-600" :
+                  (item.monthlyChange ?? 0) < 0 ? "text-green-600" :
+                  "text-muted-foreground"
+                }`}>
+                  {fmtRate(item.monthlyChange)}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">KAMIS 등록 품목 아님 — 대체 품목 등록 권장</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
