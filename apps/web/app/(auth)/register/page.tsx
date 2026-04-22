@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
@@ -10,6 +10,14 @@ import { Loader2, User, Building2, Gift } from "lucide-react";
 type Role = "INDIVIDUAL" | "FRANCHISE";
 
 export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>}>
+      <RegisterInner />
+    </Suspense>
+  );
+}
+
+function RegisterInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [role, setRole] = useState<Role>("INDIVIDUAL");
