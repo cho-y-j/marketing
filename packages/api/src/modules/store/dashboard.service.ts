@@ -52,7 +52,27 @@ export class DashboardService {
 
     // === 2~3. 마케팅 엔진으로 부족점 + 액션 자동 생성 (store 재사용) ===
     const diagnosis = await this.marketingEngine.diagnose(storeId, store);
-    const { problems, actions: topActions, keywordStrategy } = diagnosis;
+    const { problems, actions: rawActions, keywordStrategy } = diagnosis;
+
+    // href sanitize — AI 또는 캐시에 잘못된 경로(`/dashboard/xxx` 등) 들어있어도
+    // 프런트 가용 경로만 허용. type 기반 매핑 + 유효 화이트리스트.
+    const VALID_HREFS = new Set([
+      "/", "/keywords", "/reviews", "/content", "/competitors",
+      "/analysis", "/events", "/ingredients", "/foreign-market", "/reports",
+    ]);
+    const typeToHref = (t: string): string => {
+      const low = (t || "").toLowerCase();
+      if (low.includes("review")) return "/reviews";
+      if (low.includes("keyword")) return "/keywords";
+      if (low.includes("blog") || low.includes("content")) return "/content";
+      if (low.includes("compet")) return "/competitors";
+      if (low.includes("monit") || low.includes("rank")) return "/keywords";
+      return "/keywords";
+    };
+    const topActions = (rawActions ?? []).map((a: any) => ({
+      ...a,
+      href: VALID_HREFS.has(a.href) ? a.href : typeToHref(a.type),
+    }));
 
     // === 4. 키워드 순위 현황 (상위 5개) ===
     const keywordRanks = keywords.slice(0, 8).map((k) => ({

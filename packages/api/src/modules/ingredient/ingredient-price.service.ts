@@ -49,14 +49,22 @@ export class IngredientPriceService {
       return { collected: 0, alerts: 0 };
     }
 
-    // 2) KAMIS 전체 카테고리 조회 → 품목명별 가격 맵
-    const priceMap = new Map<string, { price: number; unit: string }>();
+    // 2) KAMIS 전체 카테고리 조회 → 품목명별 가격 맵 (오늘 + 1주전 + 1개월전)
+    type PriceEntry = { price: number; unit: string; week: number; month: number };
+    const priceMap = new Map<string, PriceEntry>();
+    const todayStr = new Date().toISOString().slice(0, 10);
     for (const cat of this.CATEGORY_CODES) {
       try {
-        const items = await this.kamis.getDailyPriceList({ itemCategoryCode: cat });
+        // getMultiPointPrices 가 dpr1/dpr3/dpr5 시계열 반환
+        const items = await this.kamis.getMultiPointPrices(cat, todayStr);
         for (const it of items) {
-          if (it.price > 0 && !priceMap.has(it.itemName)) {
-            priceMap.set(it.itemName, { price: it.price, unit: it.unit });
+          if (!priceMap.has(it.itemName)) {
+            priceMap.set(it.itemName, {
+              price: it.today,
+              unit: it.unit,
+              week: it.week,
+              month: it.month,
+            });
           }
         }
         await new Promise((r) => setTimeout(r, 300));
@@ -66,22 +74,30 @@ export class IngredientPriceService {
     }
 
     // 3) wanted 재료별 가격 저장 (매칭: 정확 일치 → 부분 일치)
+    //    priceWeekAgo/priceMonthAgo 함께 저장 → 1일치 수집만으로도 변동률 계산 가능.
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     let collected = 0;
     for (const wanted of wantedSet) {
-      const match = this.matchIngredient(wanted, priceMap);
+      const match = this.matchIngredientWithSeries(wanted, priceMap);
       if (!match) continue;
       try {
         await this.prisma.ingredientPrice.upsert({
           where: {
             itemName_priceType_date: { itemName: wanted, priceType: "retail", date: today },
           },
-          update: { price: match.price, unit: match.unit },
+          update: {
+            price: match.price,
+            unit: match.unit,
+            priceWeekAgo: match.week > 0 ? match.week : null,
+            priceMonthAgo: match.month > 0 ? match.month : null,
+          },
           create: {
             itemName: wanted,
             price: match.price,
             unit: match.unit,
+            priceWeekAgo: match.week > 0 ? match.week : null,
+            priceMonthAgo: match.month > 0 ? match.month : null,
             priceType: "retail",
             date: today,
           },
@@ -91,7 +107,7 @@ export class IngredientPriceService {
         this.logger.warn(`가격 저장 실패 [${wanted}]: ${e.message}`);
       }
     }
-    this.logger.log(`가격 수집 완료 — 요청 ${wantedSet.size}개 중 ${collected}개 저장`);
+    this.logger.log(`가격 수집 완료 — 요청 ${wantedSet.size}개 중 ${collected}개 저장 (시계열 포함)`);
 
     // 4) 알림 생성
     const alerts = await this.generateAlerts(stores, today);
@@ -118,174 +134,106 @@ export class IngredientPriceService {
 
     const today = new Date().toISOString().slice(0, 10);
 
-    // DB IngredientPrice 폴백 — 카탈로그/라이브 실패 시에도 어제 수집 가격 노출
-    // 매장 keyIngredients 각 이름에 대해 최근 60일 중 가장 최신 가격 맵
-    const sixtyDaysAgo = new Date();
-    sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-    const dbPrices = await this.prisma.ingredientPrice.findMany({
-      where: { priceType: "retail", date: { gte: sixtyDaysAgo } },
-      orderBy: { date: "desc" },
-      select: { itemName: true, unit: true, price: true, date: true },
-    });
-    const dbLatest = new Map<string, { unit: string; price: number; date: Date }>();
-    const dbHistory = new Map<string, Array<{ price: number; date: Date }>>();
-    for (const r of dbPrices) {
-      const norm = r.itemName.replace(/\s+/g, "").replace(/\(.*?\)/g, "");
-      if (!dbLatest.has(norm)) {
-        dbLatest.set(norm, { unit: r.unit, price: r.price, date: r.date });
-      }
-      const arr = dbHistory.get(norm) ?? [];
-      arr.push({ price: r.price, date: r.date });
-      dbHistory.set(norm, arr);
-    }
-    const lookupDb = (name: string) => {
-      const norm = name.replace(/\s+/g, "").replace(/\(.*?\)/g, "");
-      // 정확 일치 → 부분 일치
-      if (dbLatest.has(norm)) return { key: norm, ...dbLatest.get(norm)! };
-      for (const [key, val] of dbLatest) {
-        if (key.includes(norm) || norm.includes(key)) return { key, ...val };
-      }
-      return null;
-    };
-    const calcDbChange = (key: string, currentPrice: number, daysBack: number) => {
-      const hist = dbHistory.get(key) ?? [];
-      const target = new Date();
-      target.setDate(target.getDate() - daysBack);
-      // target 근처의 가격 (± 5일 tolerance)
-      const match = hist.find((h) => {
-        const diff = Math.abs(h.date.getTime() - target.getTime()) / (24 * 60 * 60 * 1000);
-        return diff <= 5;
-      });
-      if (!match || match.price <= 0) return null;
-      return { prev: match.price, amount: currentPrice - match.price, rate: ((currentPrice - match.price) / match.price) * 100 };
-    };
-
-    // 품목별로 KAMIS 카테고리 파악 → 카테고리별 1회만 API 호출 (캐시)
+    // KAMIS 라이브 호출 — 각 카테고리 1회씩 (12h Redis 캐시). today/week/month 시계열.
+    // today=0 이어도 week/month 가 있으면 반환됨 (KAMIS provider 에서 filter 완화).
     const categoryCache = new Map<
       string,
       Array<{ itemName: string; kindName: string; unit: string; today: number; week: number; month: number }>
     >();
+    const ensureCategory = async (code: string) => {
+      if (categoryCache.has(code)) return categoryCache.get(code)!;
+      try {
+        const list = await this.kamis.getMultiPointPrices(code, today);
+        categoryCache.set(code, list);
+        return list;
+      } catch (e: any) {
+        this.logger.warn(`KAMIS ${code} 조회 실패: ${e.message}`);
+        categoryCache.set(code, []);
+        return [];
+      }
+    };
+
+    // 재료 이름 → 카탈로그 카테고리 조회 (못 찾으면 전 카테고리 전수 매칭)
+    const findMatch = async (name: string) => {
+      const norm = name.replace(/\s+/g, "");
+      const check = (
+        list: Array<{ itemName: string; kindName: string; unit: string; today: number; week: number; month: number }>,
+      ) => {
+        let m = list.find((it) => it.itemName.replace(/\s+/g, "") === norm);
+        if (!m) {
+          m = list.find((it) => {
+            const itn = it.itemName.replace(/\s+/g, "");
+            return itn.includes(norm) || norm.includes(itn);
+          });
+        }
+        return m;
+      };
+
+      const code = findCategoryCode(name);
+      if (code) {
+        const list = await ensureCategory(code);
+        const m = check(list);
+        if (m) return m;
+      }
+      // 카탈로그 매칭 실패 시 전 카테고리 전수 조사 (캐시 활용)
+      for (const c of ["100", "200", "300", "400", "500", "600"]) {
+        if (c === code) continue;
+        const list = await ensureCategory(c);
+        const m = check(list);
+        if (m) return m;
+      }
+      return null;
+    };
 
     const items: Array<any> = [];
-
     for (const name of store.keyIngredients) {
-      const catCode = findCategoryCode(name);
-      if (!catCode) {
-        // KAMIS 미등록 — DB 폴백 시도
-        const db = lookupDb(name);
-        if (db) {
-          const weekChg = calcDbChange(db.key, db.price, 7);
-          const monthChg = calcDbChange(db.key, db.price, 30);
-          items.push({
-            itemName: name,
-            unit: db.unit,
-            current: db.price,
-            previousWeek: weekChg?.prev ?? null,
-            previousMonth: monthChg?.prev ?? null,
-            weeklyChange: weekChg ? +weekChg.rate.toFixed(1) : null,
-            weeklyChangeAmount: weekChg?.amount ?? null,
-            monthlyChange: monthChg ? +monthChg.rate.toFixed(1) : null,
-            monthlyChangeAmount: monthChg?.amount ?? null,
-            lastUpdated: db.date.toISOString().slice(0, 10),
-            source: "db",
-          });
-        } else {
-          items.push({
-            itemName: name,
-            unit: "",
-            current: null,
-            previousWeek: null,
-            previousMonth: null,
-            weeklyChange: null,
-            weeklyChangeAmount: null,
-            monthlyChange: null,
-            monthlyChangeAmount: null,
-            lastUpdated: null,
-          });
-        }
-        continue;
-      }
+      const matched = await findMatch(name);
 
-      // 카테고리 첫 조회 시 캐시
-      if (!categoryCache.has(catCode)) {
-        try {
-          const list = await this.kamis.getMultiPointPrices(catCode, today);
-          categoryCache.set(catCode, list);
-        } catch (e: any) {
-          this.logger.warn(`KAMIS ${catCode} 조회 실패: ${e.message}`);
-          categoryCache.set(catCode, []);
-        }
-      }
-
-      const list = categoryCache.get(catCode)!;
-      // 이름 매칭 (정확 → 부분)
-      const norm = name.replace(/\s+/g, "");
-      let matched = list.find((it) => it.itemName.replace(/\s+/g, "") === norm);
       if (!matched) {
-        matched = list.find((it) => {
-          const itn = it.itemName.replace(/\s+/g, "");
-          return itn.includes(norm) || norm.includes(itn);
+        items.push({
+          itemName: name,
+          unit: "",
+          current: null,
+          previousWeek: null,
+          previousMonth: null,
+          weeklyChange: null,
+          weeklyChangeAmount: null,
+          monthlyChange: null,
+          monthlyChangeAmount: null,
+          lastUpdated: null,
         });
-      }
-
-      if (!matched || matched.today <= 0) {
-        // KAMIS 라이브 실패 → DB 폴백
-        const db = lookupDb(name);
-        if (db) {
-          const weekChg = calcDbChange(db.key, db.price, 7);
-          const monthChg = calcDbChange(db.key, db.price, 30);
-          items.push({
-            itemName: name,
-            unit: db.unit,
-            current: db.price,
-            previousWeek: weekChg?.prev ?? null,
-            previousMonth: monthChg?.prev ?? null,
-            weeklyChange: weekChg ? +weekChg.rate.toFixed(1) : null,
-            weeklyChangeAmount: weekChg?.amount ?? null,
-            monthlyChange: monthChg ? +monthChg.rate.toFixed(1) : null,
-            monthlyChangeAmount: monthChg?.amount ?? null,
-            lastUpdated: db.date.toISOString().slice(0, 10),
-            source: "db",
-          });
-        } else {
-          items.push({
-            itemName: name,
-            unit: matched?.unit ?? "",
-            current: null,
-            previousWeek: null,
-            previousMonth: null,
-            weeklyChange: null,
-            weeklyChangeAmount: null,
-            monthlyChange: null,
-            monthlyChangeAmount: null,
-            lastUpdated: null,
-          });
-        }
         continue;
       }
 
-      // KAMIS 응답에서 직접 변동률 계산 (dpr1 vs dpr3 vs dpr5)
-      const weeklyChange =
-        matched.week > 0 ? ((matched.today - matched.week) / matched.week) * 100 : null;
-      const monthlyChange =
-        matched.month > 0 ? ((matched.today - matched.month) / matched.month) * 100 : null;
+      // KAMIS 제공 실가격: today/week/month — 추정/계산 없음, 그대로 사용.
+      // today 가 아직 업데이트 안 됐으면 week 를 "현재가"로 대체 (어제 값 표기).
+      const current = matched.today > 0 ? matched.today : matched.week > 0 ? matched.week : matched.month > 0 ? matched.month : null;
 
-      // 이상치 판정 — KAMIS 가 품종/단위 변경 시 비정상 변동률 나옴
-      //   전주 ±30% / 전월 ±50% 초과는 측정 변경 가능성 높음
+      // 변동률은 today > 0 일 때만 계산 (current 가 week 로 대체된 경우 전주 비교 무의미)
+      const baseForChange = matched.today > 0 ? matched.today : null;
+      const weeklyChange =
+        baseForChange != null && matched.week > 0
+          ? ((baseForChange - matched.week) / matched.week) * 100
+          : null;
+      const monthlyChange =
+        baseForChange != null && matched.month > 0
+          ? ((baseForChange - matched.month) / matched.month) * 100
+          : null;
+
       const weeklySuspicious = weeklyChange != null && Math.abs(weeklyChange) > 30;
       const monthlySuspicious = monthlyChange != null && Math.abs(monthlyChange) > 50;
 
       items.push({
         itemName: name,
         unit: matched.unit,
-        current: matched.today,
+        current,
         previousWeek: matched.week > 0 ? matched.week : null,
         previousMonth: matched.month > 0 ? matched.month : null,
         weeklyChange: weeklyChange != null ? +weeklyChange.toFixed(1) : null,
-        weeklyChangeAmount: matched.week > 0 ? matched.today - matched.week : null,
+        weeklyChangeAmount: weeklyChange != null ? baseForChange! - matched.week : null,
         weeklySuspicious,
         monthlyChange: monthlyChange != null ? +monthlyChange.toFixed(1) : null,
-        monthlyChangeAmount: matched.month > 0 ? matched.today - matched.month : null,
+        monthlyChangeAmount: monthlyChange != null ? baseForChange! - matched.month : null,
         monthlySuspicious,
         lastUpdated: today,
       });
@@ -313,6 +261,21 @@ export class IngredientPriceService {
     if (priceMap.has(wanted)) return priceMap.get(wanted)!;
     if (priceMap.has(norm)) return priceMap.get(norm)!;
     // 부분 포함 (KAMIS 품목명이 "아귀(활)" 처럼 상세일 때)
+    for (const [key, val] of priceMap) {
+      const keyNorm = key.replace(/\s+/g, "");
+      if (keyNorm.includes(norm) || norm.includes(keyNorm)) return val;
+    }
+    return null;
+  }
+
+  /** 시계열 포함 매칭 — 정확→부분 순 */
+  private matchIngredientWithSeries(
+    wanted: string,
+    priceMap: Map<string, { price: number; unit: string; week: number; month: number }>,
+  ): { price: number; unit: string; week: number; month: number } | null {
+    const norm = wanted.replace(/\s+/g, "");
+    if (priceMap.has(wanted)) return priceMap.get(wanted)!;
+    if (priceMap.has(norm)) return priceMap.get(norm)!;
     for (const [key, val] of priceMap) {
       const keyNorm = key.replace(/\s+/g, "");
       if (keyNorm.includes(norm) || norm.includes(keyNorm)) return val;

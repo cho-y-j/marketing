@@ -616,14 +616,17 @@ model ExcludedKeyword {
 
 // ===== 주재료 가격 히스토리 (KAMIS) =====
 // 매일 수집, 매장 keyIngredients 에 매칭되는 것만 저장
+// 참고: IngredientPrice — 아래 모델에 priceWeekAgo/priceMonthAgo 필드 추가됨 (20260422)
 model IngredientPrice {
-  id         String   @id @default(cuid())
-  itemName   String // "아귀", "흑마늘", "멥쌀" 등 KAMIS 품목명
-  unit       String // "kg", "500g" 등
-  price      Int // 원
-  priceType  String   @default("retail") // retail | wholesale
-  date       DateTime @db.Date // 기록 날짜
-  recordedAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  itemName       String // "아귀", "흑마늘", "멥쌀" 등 KAMIS 품목명
+  unit           String // "kg", "500g" 등
+  price          Int // 원 — 오늘 가격
+  priceWeekAgo   Int? // 7일 전 가격 (KAMIS dpr3) — 수집 시 함께 저장되어 첫날부터 주간 변동률 계산 가능
+  priceMonthAgo  Int? // 30일 전 가격 (KAMIS dpr5)
+  priceType      String   @default("retail") // retail | wholesale
+  date           DateTime @db.Date // 기록 날짜
+  recordedAt     DateTime @default(now())
 
   @@unique([itemName, priceType, date])
   @@index([itemName, date])

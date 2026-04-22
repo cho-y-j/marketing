@@ -165,35 +165,47 @@ export class KamisProvider {
     const day = regday ?? new Date().toISOString().slice(0, 10);
     const cacheKey = `kamis:multi:${categoryCode}:${day}`;
     const cached = await this.cache.get<any[]>(cacheKey);
-    if (cached) return cached;
+    if (cached && cached.length > 0) return cached;
 
-    const url = "https://www.kamis.or.kr/service/price/xml.do";
-    const params = {
-      action: "dailyPriceByCategoryList",
-      p_product_cls_code: "01",
-      p_country_code: "1101",
-      p_convert_kg_yn: "Y",
-      p_item_category_code: categoryCode,
-      p_regday: day,
-      p_cert_key: this.key,
-      p_cert_id: this.id,
-      p_returntype: "json",
+    const fetchDay = async (d: string) => {
+      const url = "https://www.kamis.or.kr/service/price/xml.do";
+      const params = {
+        action: "dailyPriceByCategoryList",
+        p_product_cls_code: "01",
+        p_country_code: "1101",
+        p_convert_kg_yn: "Y",
+        p_item_category_code: categoryCode,
+        p_regday: d,
+        p_cert_key: this.key,
+        p_cert_id: this.id,
+        p_returntype: "json",
+      };
+      const resp = await axios.get(url, { params, timeout: 15000 });
+      const data = resp.data?.data;
+      if (!data || Array.isArray(data)) return [];
+      const items = data.item ?? [];
+      return (Array.isArray(items) ? items : [items])
+        .filter((it: any) => it && it.item_name)
+        .map((it: any) => ({
+          itemName: it.item_name as string,
+          kindName: (it.kind_name as string) ?? "",
+          unit: (it.unit as string) || "kg",
+          today: this.parsePrice(it.dpr1),
+          week: this.parsePrice(it.dpr3),
+          month: this.parsePrice(it.dpr5),
+        }))
+        // 오늘 데이터 없어도 주/월 있으면 유지 (변동률 계산에 사용 가능)
+        .filter((it: any) => it.today > 0 || it.week > 0 || it.month > 0);
     };
-    const resp = await axios.get(url, { params, timeout: 15000 });
-    const data = resp.data?.data;
-    if (!data || Array.isArray(data)) return [];
-    const items = data.item ?? [];
-    const list = (Array.isArray(items) ? items : [items])
-      .filter((it: any) => it && it.item_name)
-      .map((it: any) => ({
-        itemName: it.item_name as string,
-        kindName: (it.kind_name as string) ?? "",
-        unit: (it.unit as string) || "kg",
-        today: this.parsePrice(it.dpr1),
-        week: this.parsePrice(it.dpr3),
-        month: this.parsePrice(it.dpr5),
-      }))
-      .filter((it: any) => it.today > 0);
+
+    let list = await fetchDay(day);
+    // 오늘 카테고리가 비었으면 어제로 재시도 (KAMIS 수산물 등은 종종 업데이트 시차 있음)
+    if (list.length === 0) {
+      const yesterday = new Date(day);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const y = yesterday.toISOString().slice(0, 10);
+      list = await fetchDay(y);
+    }
 
     await this.cache.set(cacheKey, list, 12 * 3600);
     return list;
