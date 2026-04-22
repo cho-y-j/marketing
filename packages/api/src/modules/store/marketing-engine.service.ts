@@ -564,15 +564,16 @@ JSON 배열만 반환. 다른 텍스트 X.`;
 
       this.logger.log(`AI 액션 보강 완료 [${response.provider}]: ${parsed.length}개`);
 
-      // baseActions의 type/href는 보존, AI 텍스트만 사용
+      // baseActions 의 type/href 는 **서버가 고정** — AI 가 /dashboard/xxx 같이
+      // 존재 안 하는 경로 뱉어도 무시. AI 는 텍스트(title/description/reason)만 생성.
       return parsed.map((a, i) => {
         const base = baseActions[i] || baseActions[0];
         return {
-          type: a.type || base.type,
+          type: base.type,            // 서버 고정
+          href: base.href,            // 서버 고정 (AI 경로 무시)
           title: a.title || base.title,
           description: a.description || base.description,
           reason: a.reason || base.reason,
-          href: a.href || base.href,
           priority: a.priority ?? base.priority,
           steps: Array.isArray(a.steps) ? a.steps.slice(0, 4) : undefined,
           expectedEffect: typeof a.expectedEffect === "string" ? a.expectedEffect : undefined,
