@@ -86,13 +86,12 @@ export class KeywordService {
       });
     }
 
-    // 각 키워드의 최신 RankHistory에서 topPlaces 가져오기 + 어제/가장 오래된 기록으로 변동 계산
-    const now = new Date();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
+    // 각 키워드의 최신 RankHistory + 직전 rich 기록으로 각 Top 3 행의 델타 계산
+    const LINEAR_DAILY_RATE = 0.003;
+    const linearPast = (current: number | null | undefined) => {
+      if (current == null || current === 0) return null;
+      return Math.round(current * Math.max(0, 1 - LINEAR_DAILY_RATE * 1)); // 1일 전 기준
+    };
 
     const enriched = await Promise.all(
       keywords.map(async (kw) => {
@@ -101,36 +100,108 @@ export class KeywordService {
           orderBy: { checkedAt: "desc" },
           select: { topPlaces: true, totalResults: true, checkedAt: true, rank: true },
         });
-        // "어제 대비" 순위 변동 — 어제 날짜의 가장 마지막 기록, 없으면 오늘 이전의 가장 최근 기록
-        const prevHistory =
-          (await this.prisma.keywordRankHistory.findFirst({
-            where: {
-              storeId, keyword: kw.keyword,
-              checkedAt: { gte: yesterday, lt: todayStart },
-            },
-            orderBy: { checkedAt: "desc" },
-            select: { rank: true },
-          })) ||
-          (await this.prisma.keywordRankHistory.findFirst({
-            where: {
-              storeId, keyword: kw.keyword,
-              checkedAt: { lt: todayStart },
-            },
-            orderBy: { checkedAt: "desc" },
-            select: { rank: true },
-          }));
+        // 어제/가장 오래된 리뷰 포함 기록 — 순위 + 리뷰수 델타 모두 여기서 계산
+        const prevRich = latest
+          ? await this.prisma.keywordRankHistory.findFirst({
+              where: {
+                storeId, keyword: kw.keyword,
+                checkedAt: { lt: latest.checkedAt },
+              },
+              orderBy: { checkedAt: "desc" },
+              select: { rank: true, topPlaces: true },
+            })
+          : null;
+        const prevRichMap = new Map<string, { visitor?: number | null; blog?: number | null }>();
+        for (const p of (prevRich?.topPlaces as any[]) || []) {
+          const entry = { visitor: p.visitorReviewCount ?? null, blog: p.blogReviewCount ?? null };
+          if (p.placeId) prevRichMap.set(p.placeId, entry);
+          prevRichMap.set(p.name, entry);
+        }
 
         const allPlaces: any[] = (latest?.topPlaces as any[]) || [];
 
-        // Top 3
-        const top3 = allPlaces.slice(0, 3).map((p) => ({
-          rank: p.rank,
-          name: p.name,
-          placeId: p.placeId,
-          visitorReviewCount: p.visitorReviewCount,
-          blogReviewCount: p.blogReviewCount,
-          isMine: p.isMine,
-        }));
+        // Top 3 — 각 place 에 증감 계산 (3단 폴백: prev history → CompetitorDailySnapshot → 선형 추정)
+        const placeIds3 = allPlaces.slice(0, 3).map((p) => p.placeId).filter(Boolean);
+        const compSnaps = placeIds3.length
+          ? await this.prisma.competitorDailySnapshot.findMany({
+              where: {
+                storeId,
+                competitorPlaceId: { in: placeIds3 },
+                date: { lt: new Date(new Date().setHours(0, 0, 0, 0)) },
+              },
+              orderBy: { date: "desc" },
+              select: {
+                competitorPlaceId: true,
+                visitorReviewCount: true,
+                blogReviewCount: true,
+                isEstimated: true,
+              },
+            })
+          : [];
+        const compMap = new Map<string, { visitor: number | null; blog: number | null; isEst: boolean }>();
+        for (const s of compSnaps) {
+          if (!compMap.has(s.competitorPlaceId)) {
+            compMap.set(s.competitorPlaceId, {
+              visitor: s.visitorReviewCount,
+              blog: s.blogReviewCount,
+              isEst: s.isEstimated,
+            });
+          }
+        }
+
+        const top3 = allPlaces.slice(0, 3).map((p) => {
+          const histPrev = (p.placeId && prevRichMap.get(p.placeId)) || prevRichMap.get(p.name);
+          let visitorDelta: number | null = null;
+          let blogDelta: number | null = null;
+          let deltaSource: "real" | "backfill" | "estimate" | null = null;
+          if (p.visitorReviewCount != null && histPrev?.visitor != null) {
+            visitorDelta = p.visitorReviewCount - histPrev.visitor;
+            deltaSource = "real";
+          }
+          if (p.blogReviewCount != null && histPrev?.blog != null) {
+            blogDelta = p.blogReviewCount - histPrev.blog;
+            if (!deltaSource) deltaSource = "real";
+          }
+          if (visitorDelta == null && p.placeId) {
+            const s = compMap.get(p.placeId);
+            if (s?.visitor != null && p.visitorReviewCount != null) {
+              visitorDelta = p.visitorReviewCount - s.visitor;
+              deltaSource = s.isEst ? "backfill" : "real";
+            }
+          }
+          if (blogDelta == null && p.placeId) {
+            const s = compMap.get(p.placeId);
+            if (s?.blog != null && p.blogReviewCount != null) {
+              blogDelta = p.blogReviewCount - s.blog;
+              if (!deltaSource) deltaSource = s.isEst ? "backfill" : "real";
+            }
+          }
+          if (visitorDelta == null) {
+            const est = linearPast(p.visitorReviewCount);
+            if (est != null && p.visitorReviewCount != null) {
+              visitorDelta = p.visitorReviewCount - est;
+              deltaSource = "estimate";
+            }
+          }
+          if (blogDelta == null) {
+            const est = linearPast(p.blogReviewCount);
+            if (est != null && p.blogReviewCount != null) {
+              blogDelta = p.blogReviewCount - est;
+              if (!deltaSource) deltaSource = "estimate";
+            }
+          }
+          return {
+            rank: p.rank,
+            name: p.name,
+            placeId: p.placeId,
+            visitorReviewCount: p.visitorReviewCount,
+            blogReviewCount: p.blogReviewCount,
+            visitorDelta,
+            blogDelta,
+            deltaSource,
+            isMine: p.isMine,
+          };
+        });
 
         // 내 매장 정보 (Top 3 안에 있을 수도, 밖에 있을 수도)
         const myPlace = allPlaces.find((p: any) => p.isMine);
@@ -143,9 +214,9 @@ export class KeywordService {
         const dailyVolume = monthly > 0 ? Math.round(monthly / 30) : 0;
         const volumeEstimated = monthly > 0;
 
-        // 순위 변동 (어제 대비) — RankHistory 기반이라 첫 체크 매장도 다음 날부터 표시됨
+        // 순위 변동 (가장 최근 과거 기록 대비) — RankHistory 기반
         const currRank = kw.currentRank ?? latest?.rank ?? null;
-        const prevRank = prevHistory?.rank ?? null;
+        const prevRank = prevRich?.rank ?? null;
         const rankChange =
           currRank != null && prevRank != null ? prevRank - currRank : null;
         return {

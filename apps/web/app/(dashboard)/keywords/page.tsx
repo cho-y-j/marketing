@@ -402,6 +402,14 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
 }
 
 function PlaceRow({ place }: { place: any }) {
+  const isEst = place.deltaSource === "estimate" || place.deltaSource === "backfill";
+  const fmtDelta = (d: number | null | undefined) => {
+    if (d == null) return null;
+    const prefix = isEst ? "~" : "";
+    if (d === 0) return <span className="text-[10px] text-muted-foreground">{prefix}±0</span>;
+    if (d > 0) return <span className="text-[10px] text-green-600 font-semibold">{prefix}+{d}</span>;
+    return <span className="text-[10px] text-red-600 font-semibold">{prefix}{d}</span>;
+  };
   return (
     <div className={`flex items-center gap-2 px-2 py-1.5 rounded ${place.isMine ? "bg-primary/15 ring-1 ring-primary/30" : ""}`}>
       {/* 순위 */}
@@ -422,15 +430,21 @@ function PlaceRow({ place }: { place: any }) {
         </span>
         {place.isMine && <Badge className="ml-1 text-[9px] py-0 px-1.5">나</Badge>}
       </div>
-      {/* 지표 */}
+      {/* 지표 + 증감 */}
       <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
-        <span className="inline-flex items-center gap-0.5">
-          <MessageSquare size={10} />
-          {place.visitorReviewCount?.toLocaleString() ?? "-"}
+        <span className="inline-flex flex-col items-end gap-0">
+          <span className="inline-flex items-center gap-0.5">
+            <MessageSquare size={10} />
+            {place.visitorReviewCount?.toLocaleString() ?? "-"}
+          </span>
+          {fmtDelta(place.visitorDelta)}
         </span>
-        <span className="inline-flex items-center gap-0.5">
-          <FileText size={10} />
-          {place.blogReviewCount?.toLocaleString() ?? "-"}
+        <span className="inline-flex flex-col items-end gap-0">
+          <span className="inline-flex items-center gap-0.5">
+            <FileText size={10} />
+            {place.blogReviewCount?.toLocaleString() ?? "-"}
+          </span>
+          {fmtDelta(place.blogDelta)}
         </span>
       </div>
     </div>
