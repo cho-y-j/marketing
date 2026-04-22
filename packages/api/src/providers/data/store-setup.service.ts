@@ -77,24 +77,8 @@ export class StoreSetupService {
       this.logger.log(`[재탐색] 기존 AUTO 경쟁사 ${compIds.length}개 삭제`);
     }
 
-    // 현재 StoreKeyword 기준 top 쿼리로 재탐색
-    const topKeywords = await this.prisma.storeKeyword.findMany({
-      where: {
-        storeId,
-        type: { in: ["AI_RECOMMENDED", "MAIN"] },
-        monthlySearchVolume: { gt: 0 },
-      },
-      orderBy: { monthlySearchVolume: "desc" },
-      take: 6,
-      select: { keyword: true },
-    });
-    const queries: string[] = [];
-    const withRegion = topKeywords.filter((k) => k.keyword.includes(" "));
-    const withoutRegion = topKeywords.filter((k) => !k.keyword.includes(" "));
-    for (const k of [...withRegion, ...withoutRegion]) {
-      if (queries.length >= 3) break;
-      queries.push(k.keyword.replace(/,/g, ""));
-    }
+    // 쿼리 선정 — 업종 특정되는 것 우선 (메뉴 토큰 포함 > 그 외)
+    const queries = await this.pickCompetitorQueries(storeId, store.category || "");
     if (queries.length === 0) throw new Error("키워드 없음 — 재탐색 불가");
     this.logger.log(`[재탐색] 쿼리: ${queries.join(" / ")}`);
 
@@ -124,6 +108,57 @@ export class StoreSetupService {
 
     const newCount = await this.prisma.competitor.count({ where: { storeId } });
     return { ok: true, queries, count: newCount };
+  }
+
+  /**
+   * 경쟁사 탐색용 쿼리 top 3 선정.
+   * 원칙: "업종이 특정되는 키워드" 우선. 지역+업종 > 지역단독 > 단독.
+   * 예: 아귀찜집이면 "공덕 아구찜" 이 "공덕 맛집" 보다 경쟁사 품질 훨씬 좋음.
+   */
+  private async pickCompetitorQueries(storeId: string, category: string): Promise<string[]> {
+    const topKeywords = await this.prisma.storeKeyword.findMany({
+      where: {
+        storeId,
+        type: { in: ["AI_RECOMMENDED", "MAIN"] },
+        monthlySearchVolume: { gt: 0 },
+      },
+      orderBy: { monthlySearchVolume: "desc" },
+      take: 10,
+      select: { keyword: true, monthlySearchVolume: true },
+    });
+    if (topKeywords.length === 0) return [];
+
+    // 내 세부 메뉴 토큰 추출 (예: "한식>아귀찜,해물찜" → ["아귀찜","아구찜","해물찜"])
+    // "아귀찜" ↔ "아구찜" 표기 변환도 반영
+    const rawTokens = category
+      .split(/[>,]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2 && !["음식점", "한식", "양식", "일식", "중식"].includes(s));
+    const menuTokens = new Set<string>();
+    for (const t of rawTokens) {
+      menuTokens.add(t);
+      if (t.includes("아귀")) menuTokens.add(t.replace("아귀", "아구"));
+      if (t.includes("아구")) menuTokens.add(t.replace("아구", "아귀"));
+    }
+
+    const hasMenuToken = (kw: string) =>
+      [...menuTokens].some((t) => kw.includes(t));
+
+    // 우선순위:
+    //  A. 메뉴 토큰 포함 + 지역 포함 (예: "공덕 아구찜") — 최상
+    //  B. 메뉴 토큰 단독 (예: "아구찜") — 전국 같은 업종
+    //  C. 지역+일반 (예: "공덕 맛집") — 같은 상권 다양한 업종
+    const tierA = topKeywords.filter((k) => hasMenuToken(k.keyword) && k.keyword.includes(" "));
+    const tierB = topKeywords.filter((k) => hasMenuToken(k.keyword) && !k.keyword.includes(" "));
+    const tierC = topKeywords.filter((k) => !hasMenuToken(k.keyword) && k.keyword.includes(" "));
+
+    const queries: string[] = [];
+    for (const k of [...tierA, ...tierB, ...tierC]) {
+      if (queries.length >= 3) break;
+      const q = k.keyword.replace(/,/g, "");
+      if (!queries.includes(q)) queries.push(q);
+    }
+    return queries;
   }
 
   async autoSetup(storeId: string) {
@@ -254,27 +289,9 @@ export class StoreSetupService {
       const finalDistrict = updatedStore?.district || district;
       const finalCategory = updatedStore?.category || category;
 
-      // 등록된 키워드 중 검색량 top 3을 쿼리로 사용 (검색량 채워진 것만, 지역성 있는 것 우선)
-      const topKeywords = await this.prisma.storeKeyword.findMany({
-        where: {
-          storeId,
-          type: { in: ["AI_RECOMMENDED", "MAIN"] },
-          monthlySearchVolume: { gt: 0 },
-        },
-        orderBy: { monthlySearchVolume: "desc" },
-        take: 6,
-        select: { keyword: true },
-      });
-      const competitorSearchQueries: string[] = [];
-      // 메뉴 단독(예: "아구찜") 보다 지역+메뉴(예: "공덕 아구찜") 우선 — 같은 상권 노출 확보
-      const withRegion = topKeywords.filter((k) => k.keyword.includes(" "));
-      const withoutRegion = topKeywords.filter((k) => !k.keyword.includes(" "));
-      for (const k of [...withRegion, ...withoutRegion]) {
-        if (competitorSearchQueries.length >= 3) break;
-        competitorSearchQueries.push(k.keyword.replace(/,/g, ""));
-      }
+      const competitorSearchQueries = await this.pickCompetitorQueries(storeId, finalCategory || "");
 
-      // 키워드가 부족하면 기존 로직으로 보강 (초기 가입 실패 방지)
+      // 키워드가 부족하면 기존 지역+메뉴 로직으로 보강 (초기 가입 실패 방지)
       if (competitorSearchQueries.length < 2) {
         const fallbackRegion =
           finalDistrict?.split(/\s+/).pop() ||
