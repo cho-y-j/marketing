@@ -18,6 +18,7 @@ import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
 import {
   Plus, Loader2, RefreshCw, Crown, Trash2, AlertTriangle,
+  MessageSquare, FileText,
 } from "lucide-react";
 import { ConsultationCTA } from "@/components/common/consultation-cta";
 
@@ -340,28 +341,25 @@ export default function CompetitorsPage() {
               />
             )}
           </div>
-          {/* 정렬 드롭다운 — 6 옵션 통합 (방문자×누적/증감/증감률, 블로그×누적/증감/증감률) */}
+          {/* 정렬 — 콤보 2개 분리: 기준 + 정렬방식 */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1 w-10">정렬</span>
             <select
-              value={`${sortMetric}:${sortKey}`}
-              onChange={(e) => {
-                const [m, k] = e.target.value.split(":") as [Metric, SortKey];
-                setSortMetric(m);
-                setSortKey(k);
-              }}
-              className="flex-1 min-w-[180px] min-h-[36px] px-3 text-sm rounded-md border border-border bg-white font-medium"
+              value={sortMetric}
+              onChange={(e) => setSortMetric(e.target.value as Metric)}
+              className="flex-1 min-w-[120px] min-h-[36px] px-3 text-sm rounded-md border border-border bg-white font-medium"
             >
-              <optgroup label="방문자 리뷰 기준">
-                <option value="visitor:cumulative">방문자 · 누적 많은 순</option>
-                <option value="visitor:delta">방문자 · 증가 많은 순</option>
-                <option value="visitor:rate">방문자 · 증가율 높은 순</option>
-              </optgroup>
-              <optgroup label="블로그 리뷰 기준">
-                <option value="blog:cumulative">블로그 · 누적 많은 순</option>
-                <option value="blog:delta">블로그 · 증가 많은 순</option>
-                <option value="blog:rate">블로그 · 증가율 높은 순</option>
-              </optgroup>
+              <option value="visitor">방문자 리뷰</option>
+              <option value="blog">블로그 리뷰</option>
+            </select>
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              className="flex-1 min-w-[140px] min-h-[36px] px-3 text-sm rounded-md border border-border bg-white font-medium"
+            >
+              <option value="cumulative">누적 많은 순</option>
+              <option value="delta">증가 많은 순</option>
+              <option value="rate">증가율 높은 순</option>
             </select>
           </div>
         </CardContent>
@@ -486,7 +484,7 @@ export default function CompetitorsPage() {
   );
 }
 
-// 모바일 카드 리스트용 — 선택된 지표(방문자 or 블로그)만 크게, 반대 지표는 작게 부가 표시
+// 모바일 카드 — 방문자/블로그 한 줄 압축 (키워드 상세 페이지 톤 통일)
 function MobileRankCard({
   rank, row, periodLabel, sortMetric, onDelete,
 }: {
@@ -503,18 +501,17 @@ function MobileRankCard({
   const clr = (v: number | null) =>
     v == null ? "text-muted-foreground" : v > 0 ? "text-red-600" : v < 0 ? "text-green-600" : "text-muted-foreground";
 
-  const primary = sortMetric === "visitor" ? row.visitor : row.blog;
-  const secondary = sortMetric === "visitor" ? row.blog : row.visitor;
-  const primaryLabel = sortMetric === "visitor" ? "방문자 리뷰" : "블로그 리뷰";
-  const secondaryLabel = sortMetric === "visitor" ? "블로그" : "방문자";
-  const primaryStatus = getStatus(primary.rate, primary.delta);
+  const primaryStatus = getStatus(
+    sortMetric === "visitor" ? row.visitor.rate : row.blog.rate,
+    sortMetric === "visitor" ? row.visitor.delta : row.blog.delta,
+  );
 
   return (
     <Card className={row.isMine ? "bg-primary/10 border-l-2 border-l-primary" : ""}>
-      <CardContent className="p-4">
-        {/* 헤더 — 순위 + 이름 + 삭제 */}
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <div className="flex items-center gap-2 min-w-0">
+      <CardContent className="p-3">
+        {/* 헤더 — 순위 + 이름 + 급증/삭제 */}
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
             {rank === 1 && <Crown size={14} className="text-amber-500 shrink-0" />}
             <span className={`text-sm font-bold shrink-0 ${row.isMine ? "text-primary" : "text-muted-foreground"}`}>
               {rank}
@@ -527,6 +524,11 @@ function MobileRankCard({
                 나
               </span>
             )}
+            {primaryStatus.label === "급증" && (
+              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 shrink-0 ${primaryStatus.color}`}>
+                급증
+              </Badge>
+            )}
           </div>
           {onDelete && (
             <button
@@ -538,44 +540,54 @@ function MobileRankCard({
           )}
         </div>
 
-        {/* 메인 지표 — 사용자가 선택한 정렬 기준 */}
-        <div className="rounded-lg bg-muted/40 p-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs text-muted-foreground font-semibold">{primaryLabel}</span>
-            <Badge variant="outline" className={`text-[11px] px-1.5 py-0 ${primaryStatus.color}`}>
-              {primaryStatus.label}
-            </Badge>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="font-mono font-black text-xl">
-              {primary.cumulative != null ? primary.cumulative.toLocaleString() : "-"}
-            </span>
-            <span className={`font-mono font-bold text-sm ${clr(primary.delta)}`}>
-              {fmtDelta(primary.delta)}
-            </span>
-            <span className={`font-mono text-xs ${clr(primary.rate)}`}>
-              ({fmtRate(primary.rate)})
-            </span>
-          </div>
-        </div>
-
-        {/* 보조 지표 — 반대 쪽 한 줄 미니 */}
-        <div className="mt-2 px-1 flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">{secondaryLabel}</span>
-          <span className="flex items-baseline gap-1.5 font-mono">
-            <span className="font-semibold">
-              {secondary.cumulative != null ? secondary.cumulative.toLocaleString() : "-"}
-            </span>
-            <span className={`${clr(secondary.delta)}`}>
-              {fmtDelta(secondary.delta)}
-            </span>
-            <span className={`text-[11px] ${clr(secondary.rate)}`}>
-              ({fmtRate(secondary.rate)})
-            </span>
-          </span>
+        {/* 한 줄 지표 — 방문자/블로그 아이콘 + 값 + 증감 + 증감률 */}
+        <div className="flex items-center gap-4 pl-6 text-sm">
+          <MetricInline
+            icon={MessageSquare}
+            data={row.visitor}
+            highlight={sortMetric === "visitor"}
+            fmtDelta={fmtDelta}
+            fmtRate={fmtRate}
+            clr={clr}
+          />
+          <MetricInline
+            icon={FileText}
+            data={row.blog}
+            highlight={sortMetric === "blog"}
+            fmtDelta={fmtDelta}
+            fmtRate={fmtRate}
+            clr={clr}
+          />
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// 방문자/블로그 한 줄 미니 — 아이콘 + 값 + 증감 + 증감률
+function MetricInline({
+  icon: Icon, data, highlight, fmtDelta, fmtRate, clr,
+}: {
+  icon: any;
+  data: Row["visitor"];
+  highlight: boolean;
+  fmtDelta: (v: number | null) => string;
+  fmtRate: (v: number | null) => string;
+  clr: (v: number | null) => string;
+}) {
+  return (
+    <span className={`inline-flex items-baseline gap-1 min-w-0 ${highlight ? "font-bold" : ""}`}>
+      <Icon size={12} className={`shrink-0 self-center ${highlight ? "text-foreground" : "text-muted-foreground"}`} />
+      <span className="font-mono tabular-nums">
+        {data.cumulative != null ? data.cumulative.toLocaleString() : "-"}
+      </span>
+      <span className={`font-mono tabular-nums text-[12px] ${clr(data.delta)}`}>
+        {fmtDelta(data.delta)}
+      </span>
+      <span className={`font-mono tabular-nums text-[11px] ${clr(data.rate)}`}>
+        ({fmtRate(data.rate)})
+      </span>
+    </span>
   );
 }
 
