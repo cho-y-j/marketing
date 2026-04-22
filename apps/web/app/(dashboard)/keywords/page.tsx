@@ -227,7 +227,7 @@ export default function KeywordsPage() {
             <button
               key={opt.key}
               onClick={() => setSortBy(opt.key as any)}
-              className={`px-2.5 py-1 rounded-md border transition-colors ${
+              className={`px-3 min-h-[36px] rounded-md border transition-colors ${
                 sortBy === opt.key
                   ? "bg-primary text-primary-foreground border-primary"
                   : "bg-white hover:bg-muted/50 border-border"
