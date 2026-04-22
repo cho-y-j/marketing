@@ -335,14 +335,17 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {kw.monthlyVolume > 0 ? (
+                {kw.monthlyVolume > 0 || kw.dailyVolume > 0 || kw.weeklyVolume > 0 ? (
                   <>
                     월 <strong className="text-foreground">{kw.monthlyVolume.toLocaleString()}</strong> ·
                     주 {kw.weeklyVolume.toLocaleString()} ·
                     일 {kw.dailyVolume.toLocaleString()}
+                    {kw.volumeEstimated && (
+                      <span className="ml-1 text-[10px] text-muted-foreground/70">· 추정</span>
+                    )}
                   </>
                 ) : (
-                  "검색량 0"
+                  <span className="text-muted-foreground/70">검색량 집계 중…</span>
                 )}
                 {kw.totalResults != null && ` · ${kw.totalResults}개 매장 노출`}
               </p>

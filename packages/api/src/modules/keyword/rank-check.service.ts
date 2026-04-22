@@ -279,17 +279,38 @@ export class RankCheckService {
       rank: h.rank,
     }));
 
-    // 3. N일전 비교 — compareDays 일 전의 RankHistory 조회하여 변동량 계산
+    // 3. N일전 비교 — 정확히 N일 전 기록이 없으면 그 근처(±compareDays) 가장 가까운 것으로 근사
     const compareDate = new Date();
     compareDate.setDate(compareDate.getDate() - compareDays);
     compareDate.setHours(0, 0, 0, 0);
-    const comparePrev = await this.prisma.keywordRankHistory.findFirst({
+    const compareNextDay = new Date(compareDate.getTime() + 24 * 60 * 60 * 1000);
+    let comparePrev = await this.prisma.keywordRankHistory.findFirst({
       where: {
         storeId, keyword,
-        checkedAt: { gte: compareDate, lt: new Date(compareDate.getTime() + 24 * 60 * 60 * 1000) },
+        checkedAt: { gte: compareDate, lt: compareNextDay },
       },
       orderBy: { checkedAt: "desc" },
     });
+    let compareApproximate = false;
+    if (!comparePrev) {
+      // 해당 날짜 ±compareDays 윈도우에서 가장 가까운 과거 기록 사용
+      const windowStart = new Date(compareDate);
+      windowStart.setDate(windowStart.getDate() - Math.max(1, compareDays));
+      comparePrev = await this.prisma.keywordRankHistory.findFirst({
+        where: {
+          storeId, keyword,
+          checkedAt: { gte: windowStart, lt: compareNextDay },
+        },
+        orderBy: { checkedAt: "desc" },
+      });
+      if (comparePrev) compareApproximate = true;
+    }
+    const actualCompareDays = comparePrev
+      ? Math.max(
+          1,
+          Math.round((Date.now() - comparePrev.checkedAt.getTime()) / (24 * 60 * 60 * 1000)),
+        )
+      : null;
     const prevTopPlaces = (comparePrev?.topPlaces as any[]) || [];
     // 각 매장의 N일전 순위 매핑 (placeId 우선, 이름 폴백)
     const prevRankMap = new Map<string, number>();
@@ -355,37 +376,101 @@ export class RankCheckService {
     });
 
     // 3-c. 내 매장 7일/30일 누적 리뷰 증가 (상단 스탯용)
+    // 정확히 N일 전 스냅샷이 없으면 가장 오래된 스냅샷을 기준선으로 사용 (부분 집계).
+    // 그래도 없으면 현재 누적을 "매장 가입일~오늘" 일수로 나눈 추정 일평균 × 기간으로 fallback.
     const weekAgo = new Date(snapDate);
     weekAgo.setDate(weekAgo.getDate() - 7);
     const monthAgo = new Date(snapDate);
     monthAgo.setDate(monthAgo.getDate() - 30);
-    const weekSnap = await this.prisma.storeDailySnapshot.findFirst({
-      where: { storeId, date: { lte: weekAgo } },
-      orderBy: { date: "desc" },
-      select: { visitorReviewCount: true, blogReviewCount: true },
-    });
-    const monthSnap = await this.prisma.storeDailySnapshot.findFirst({
-      where: { storeId, date: { lte: monthAgo } },
-      orderBy: { date: "desc" },
-      select: { visitorReviewCount: true, blogReviewCount: true },
-    });
+
     const latestSnap = await this.prisma.storeDailySnapshot.findFirst({
       where: { storeId },
       orderBy: { date: "desc" },
-      select: { visitorReviewCount: true, blogReviewCount: true },
+      select: { visitorReviewCount: true, blogReviewCount: true, date: true },
     });
+    const oldestSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId },
+      orderBy: { date: "asc" },
+      select: { visitorReviewCount: true, blogReviewCount: true, date: true },
+    });
+    const weekSnap =
+      (await this.prisma.storeDailySnapshot.findFirst({
+        where: { storeId, date: { lte: weekAgo } },
+        orderBy: { date: "desc" },
+        select: { visitorReviewCount: true, blogReviewCount: true, date: true },
+      })) || oldestSnap;
+    const monthSnap =
+      (await this.prisma.storeDailySnapshot.findFirst({
+        where: { storeId, date: { lte: monthAgo } },
+        orderBy: { date: "desc" },
+        select: { visitorReviewCount: true, blogReviewCount: true, date: true },
+      })) || oldestSnap;
+
+    // 스냅샷이 완전히 없을 때 선형 추정용 일평균 — Place 현재 누적 / 매장 등록 후 일수
+    const linearDailyEstimate = async (field: "visitorReviewCount" | "blogReviewCount") => {
+      const storeRow = await this.prisma.store.findUnique({
+        where: { id: storeId },
+        select: { createdAt: true, naverPlaceId: true },
+      });
+      if (!storeRow) return null;
+      const ageDays = Math.max(
+        30,
+        Math.round((Date.now() - storeRow.createdAt.getTime()) / (24 * 60 * 60 * 1000)),
+      );
+      const snapTotal = latestSnap?.[field];
+      if (snapTotal == null) return null;
+      return snapTotal / ageDays;
+    };
+
+    const diffSpan = (from: { date: Date } | null | undefined, to: { date: Date } | null | undefined) => {
+      if (!from || !to) return null;
+      return Math.max(
+        1,
+        Math.round((to.date.getTime() - from.date.getTime()) / (24 * 60 * 60 * 1000)),
+      );
+    };
+
+    const computeDelta = async (
+      from: { visitorReviewCount: number | null; blogReviewCount: number | null; date: Date } | null,
+      field: "visitorReviewCount" | "blogReviewCount",
+      targetDays: number,
+    ): Promise<{ value: number | null; isEstimated: boolean }> => {
+      if (latestSnap && from && latestSnap[field] != null && from[field] != null) {
+        const span = diffSpan(from, latestSnap) ?? targetDays;
+        const raw = (latestSnap[field] ?? 0) - (from[field] ?? 0);
+        if (span === targetDays) return { value: raw, isEstimated: false };
+        // 부분 집계 → 일평균 비례
+        return {
+          value: Math.round((raw / span) * targetDays),
+          isEstimated: true,
+        };
+      }
+      const rate = await linearDailyEstimate(field);
+      if (rate == null) return { value: null, isEstimated: false };
+      return { value: Math.round(rate * targetDays), isEstimated: true };
+    };
+
+    const [wv, wb, mv, mb] = await Promise.all([
+      computeDelta(weekSnap, "visitorReviewCount", 7),
+      computeDelta(weekSnap, "blogReviewCount", 7),
+      computeDelta(monthSnap, "visitorReviewCount", 30),
+      computeDelta(monthSnap, "blogReviewCount", 30),
+    ]);
+
     const myDeltas = {
       daily: {
         visitor: storeSnap?.visitorDelta ?? null,
         blog: storeSnap?.blogDelta ?? null,
       },
       weekly: {
-        visitor: latestSnap && weekSnap ? (latestSnap.visitorReviewCount ?? 0) - (weekSnap.visitorReviewCount ?? 0) : null,
-        blog: latestSnap && weekSnap ? (latestSnap.blogReviewCount ?? 0) - (weekSnap.blogReviewCount ?? 0) : null,
+        visitor: wv.value,
+        blog: wb.value,
+        isEstimated: wv.isEstimated || wb.isEstimated,
       },
       monthly: {
-        visitor: latestSnap && monthSnap ? (latestSnap.visitorReviewCount ?? 0) - (monthSnap.visitorReviewCount ?? 0) : null,
-        blog: latestSnap && monthSnap ? (latestSnap.blogReviewCount ?? 0) - (monthSnap.blogReviewCount ?? 0) : null,
+        visitor: mv.value,
+        blog: mb.value,
+        isEstimated: mv.isEstimated || mb.isEstimated,
       },
     };
 
@@ -431,6 +516,8 @@ export class RankCheckService {
       insights,
       compareDays,
       compareDate: comparePrev?.checkedAt || null,
+      actualCompareDays,
+      compareApproximate,
     };
   }
 }

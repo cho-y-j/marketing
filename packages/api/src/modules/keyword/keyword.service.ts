@@ -63,13 +63,28 @@ export class KeywordService {
     });
     if (!store) return [];
 
-    const keywords = await this.prisma.storeKeyword.findMany({
+    let keywords = await this.prisma.storeKeyword.findMany({
       where: { storeId },
       orderBy: [
         { currentRank: "asc" }, // null이 뒤로
         { monthlySearchVolume: "desc" },
       ],
     });
+
+    // 검색량 누락된 키워드 lazy fill — 일/주/월 표기가 항상 의미 있는 숫자를 갖도록
+    const missing = keywords.filter(
+      (k) => k.monthlySearchVolume == null || k.monthlySearchVolume === 0,
+    );
+    if (missing.length > 0) {
+      await this.backfillMonthlyVolumes(missing.map((k) => ({ id: k.id, keyword: k.keyword })));
+      keywords = await this.prisma.storeKeyword.findMany({
+        where: { storeId },
+        orderBy: [
+          { currentRank: "asc" },
+          { monthlySearchVolume: "desc" },
+        ],
+      });
+    }
 
     // 각 키워드의 최신 RankHistory에서 topPlaces 가져오기
     const enriched = await Promise.all(
@@ -95,8 +110,38 @@ export class KeywordService {
         // 내 매장 정보 (Top 3 안에 있을 수도, 밖에 있을 수도)
         const myPlace = allPlaces.find((p: any) => p.isMine);
 
-        // 일/주/월 검색량 계산
+        // 일/주/월 검색량 — KeywordDailyVolume 실관측값 우선, 없으면 월 기반 선형 추정
+        const daily = await this.prisma.keywordDailyVolume.findFirst({
+          where: { keyword: kw.keyword },
+          orderBy: { date: "desc" },
+          select: { totalVolume: true, date: true },
+        });
+        const week = await this.prisma.keywordDailyVolume.findMany({
+          where: { keyword: kw.keyword },
+          orderBy: { date: "desc" },
+          take: 7,
+          select: { totalVolume: true },
+        });
         const monthly = kw.monthlySearchVolume ?? 0;
+        const dailyObserved = daily?.totalVolume ?? null;
+        const weeklyObserved = week.length >= 2
+          ? week.reduce((s, r) => s + (r.totalVolume ?? 0), 0)
+          : null;
+
+        const weeklyVolume =
+          weeklyObserved != null
+            ? weeklyObserved
+            : monthly > 0
+              ? Math.round(monthly / 4.3)
+              : 0;
+        const dailyVolume =
+          dailyObserved != null
+            ? dailyObserved
+            : monthly > 0
+              ? Math.round(monthly / 30)
+              : 0;
+        const volumeEstimated = weeklyObserved == null || dailyObserved == null;
+
         // 순위 변동 (어제 대비) — previousRank와 currentRank 차이
         const rankChange =
           kw.previousRank != null && kw.currentRank != null
@@ -105,8 +150,9 @@ export class KeywordService {
         return {
           ...kw,
           monthlyVolume: monthly,
-          weeklyVolume: monthly > 0 ? Math.round(monthly / 4.3) : 0,
-          dailyVolume: monthly > 0 ? Math.round(monthly / 30) : 0,
+          weeklyVolume,
+          dailyVolume,
+          volumeEstimated,
           totalResults: latest?.totalResults ?? null,
           checkedAt: latest?.checkedAt ?? null,
           rankChange,
@@ -146,6 +192,33 @@ export class KeywordService {
     this.fetchSearchVolume(keyword.id, dto.keyword);
 
     return keyword;
+  }
+
+  // 누락된 월간 검색량 배치 채우기 (5개씩, 최대 20개까지만 — 응답 지연 방지)
+  private async backfillMonthlyVolumes(items: Array<{ id: string; keyword: string }>) {
+    const LIMIT = 20;
+    const BATCH = 5;
+    const targets = items.slice(0, LIMIT);
+    for (let i = 0; i < targets.length; i += BATCH) {
+      const batch = targets.slice(i, i + BATCH);
+      const cleaned = batch.map((b) => b.keyword.replace(/\s+/g, "").replace(/,/g, ""));
+      try {
+        const stats = await this.searchad.getKeywordStats(cleaned);
+        await Promise.all(
+          batch.map((b) => {
+            const clean = b.keyword.replace(/\s+/g, "").replace(/,/g, "");
+            const match = stats.find((s) => s.relKeyword === clean);
+            const volume = match ? this.searchad.getTotalMonthlySearch(match) : 0;
+            return this.prisma.storeKeyword.update({
+              where: { id: b.id },
+              data: { monthlySearchVolume: volume, lastCheckedAt: new Date() },
+            });
+          }),
+        );
+      } catch (e: any) {
+        this.logger.warn(`검색량 배치 채우기 실패: ${e.message}`);
+      }
+    }
   }
 
   // 키워드 검색량 자동 조회

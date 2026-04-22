@@ -62,7 +62,10 @@ export default function KeywordDetailPage({
     );
   }
 
-  const { topPlaces = [], myMetrics, myDeltas, myRank, monthlyVolume, totalResults, trend = [], insights = [] } = data;
+  const {
+    topPlaces = [], myMetrics, myDeltas, myRank, monthlyVolume, totalResults,
+    trend = [], insights = [], actualCompareDays, compareApproximate,
+  } = data;
 
   return (
     <div className="space-y-5 max-w-4xl mx-auto">
@@ -104,6 +107,10 @@ export default function KeywordDetailPage({
             weekly: myDeltas.weekly?.visitor,
             monthly: myDeltas.monthly?.visitor,
           } : undefined}
+          estimated={{
+            weekly: !!myDeltas?.weekly?.isEstimated,
+            monthly: !!myDeltas?.monthly?.isEstimated,
+          }}
         />
         <KeyMetric
           label="블로그 리뷰"
@@ -113,6 +120,10 @@ export default function KeywordDetailPage({
             weekly: myDeltas.weekly?.blog,
             monthly: myDeltas.monthly?.blog,
           } : undefined}
+          estimated={{
+            weekly: !!myDeltas?.weekly?.isEstimated,
+            monthly: !!myDeltas?.monthly?.isEstimated,
+          }}
         />
       </div>
 
@@ -138,6 +149,11 @@ export default function KeywordDetailPage({
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
           <h3 className="text-sm font-bold text-muted-foreground">
             {keyword} 검색 결과 Top {topPlaces.length}
+            {compareApproximate && actualCompareDays && (
+              <span className="ml-2 text-[11px] font-normal text-muted-foreground/70">
+                · 실제 비교: {actualCompareDays}일 전 기록 (데이터 누적 전)
+              </span>
+            )}
           </h3>
           {/* N일전 비교 탭 */}
           <div className="flex gap-1 flex-wrap">
@@ -257,19 +273,21 @@ export default function KeywordDetailPage({
 }
 
 function KeyMetric({
-  label, value, color = "default", deltas,
+  label, value, color = "default", deltas, estimated,
 }: {
   label: string;
   value: string;
   color?: "default" | "blue" | "red";
   deltas?: { daily?: number | null; weekly?: number | null; monthly?: number | null };
+  estimated?: { weekly?: boolean; monthly?: boolean };
 }) {
   const colorClass = color === "blue" ? "text-brand" : color === "red" ? "text-red-600" : "text-foreground";
-  const fmt = (n: number | null | undefined) => {
+  const fmt = (n: number | null | undefined, isEstimated?: boolean) => {
     if (n == null) return null;
-    if (n === 0) return <span className="text-muted-foreground">0</span>;
-    if (n > 0) return <span className="text-green-600 font-semibold">+{n}</span>;
-    return <span className="text-red-600 font-semibold">{n}</span>;
+    const prefix = isEstimated ? "~" : "";
+    if (n === 0) return <span className="text-muted-foreground">{prefix}0</span>;
+    if (n > 0) return <span className="text-green-600 font-semibold">{prefix}+{n}</span>;
+    return <span className="text-red-600 font-semibold">{prefix}{n}</span>;
   };
   return (
     <Card>
@@ -279,9 +297,12 @@ function KeyMetric({
         {deltas && (
           <div className="flex justify-center gap-2 mt-1.5 text-[10px]">
             <span className="text-muted-foreground">일 {fmt(deltas.daily) ?? "-"}</span>
-            <span className="text-muted-foreground">주 {fmt(deltas.weekly) ?? "-"}</span>
-            <span className="text-muted-foreground">월 {fmt(deltas.monthly) ?? "-"}</span>
+            <span className="text-muted-foreground">주 {fmt(deltas.weekly, estimated?.weekly) ?? "-"}</span>
+            <span className="text-muted-foreground">월 {fmt(deltas.monthly, estimated?.monthly) ?? "-"}</span>
           </div>
+        )}
+        {(estimated?.weekly || estimated?.monthly) && (
+          <p className="text-[9px] text-muted-foreground/70 mt-0.5">~ = 데이터 누적 전 추정</p>
         )}
       </CardContent>
     </Card>
