@@ -163,41 +163,45 @@ export class StoreSetupService {
       if (clean && !queries.includes(clean)) queries.push(clean);
     };
 
-    // 1) 내 키워드 중 메뉴 토큰 + 지역 (narrow)
+    // 1) narrow — 내 키워드 중 "메뉴 토큰 + 지역" (예: 공덕 아구찜) max 3개
+    let narrowCount = 0;
     for (const k of topKeywords) {
-      if (hasMenuToken(k.keyword) && k.keyword.includes(" ")) add(k.keyword);
-      if (queries.length >= 3) break;
-    }
-
-    // 2) 부족하면 district 단위 합성 (medium)
-    //    "마포구 도화동" 에서 "마포" 추출 → 각 메뉴 토큰과 조합
-    if (queries.length < 3 && menuArr.length > 0) {
-      const districtToken =
-        (storeMeta?.district || "")
-          .split(/\s+/)
-          .map((p) => p.replace(/(구|시|군)$/, ""))
-          .find((t) => t.length >= 2) ||
-        (storeMeta?.address || "")
-          .split(/\s+/)
-          .map((p) => p.replace(/(구|시|군|도|동|읍|면)$/, ""))
-          .find((t) => t.length >= 2);
-      if (districtToken) {
-        for (const menu of menuArr) {
-          if (queries.length >= 4) break;
-          add(`${districtToken} ${menu}`);
-        }
+      if (narrowCount >= 3) break;
+      if (hasMenuToken(k.keyword) && k.keyword.includes(" ")) {
+        add(k.keyword);
+        narrowCount++;
       }
     }
 
-    // 3) 내 키워드 중 메뉴 단독 (national, 같은 업종 벤치마크)
-    if (queries.length < 4) {
-      for (const k of topKeywords) {
-        if (hasMenuToken(k.keyword) && !k.keyword.includes(" ")) add(k.keyword);
-        if (queries.length >= 4) break;
+    // 2) medium — district + 메뉴 합성 (예: 마포 아구찜) max 2개
+    //    narrow 로 상권 내 경쟁사 확보 + medium 으로 같은 업종 인근 확보
+    const districtToken =
+      (storeMeta?.district || "")
+        .split(/\s+/)
+        .map((p) => p.replace(/(구|시|군)$/, ""))
+        .find((t) => t.length >= 2) ||
+      (storeMeta?.address || "")
+        .split(/\s+/)
+        .map((p) => p.replace(/(구|시|군|도|동|읍|면)$/, ""))
+        .find((t) => t.length >= 2);
+    if (districtToken && menuArr.length > 0) {
+      let mediumCount = 0;
+      for (const menu of menuArr) {
+        if (mediumCount >= 2) break;
+        add(`${districtToken} ${menu}`);
+        mediumCount++;
       }
     }
 
-    // 4) 여전히 부족하면 city + menu (예: "서울 아구찜") — 같은 업종 전국 경쟁
+    // 3) 메뉴 단독 (같은 업종 전국 노출 매장 — 벤치마크) max 1개
+    for (const k of topKeywords) {
+      if (hasMenuToken(k.keyword) && !k.keyword.includes(" ")) {
+        add(k.keyword);
+        break;
+      }
+    }
+
+    // 4) 여전히 부족하면 city + 메뉴 (예: 서울 아구찜)
     if (queries.length < 3 && menuArr.length > 0) {
       const cityToken = (storeMeta?.address || "")
         .split(/\s+/)
