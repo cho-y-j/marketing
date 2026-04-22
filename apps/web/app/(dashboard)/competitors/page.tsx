@@ -322,7 +322,7 @@ export default function CompetitorsPage() {
               <button
                 key={p}
                 onClick={() => setPeriod(p)}
-                className={`px-3 py-1.5 text-xs rounded-md border transition-colors font-medium ${
+                className={`px-3 min-h-[36px] text-xs rounded-md border transition-colors font-medium ${
                   period === p ? "bg-primary text-primary-foreground border-primary" : "bg-white hover:bg-muted/50 border-border"
                 }`}
               >
@@ -347,7 +347,7 @@ export default function CompetitorsPage() {
               <button
                 key={m}
                 onClick={() => setSortMetric(m)}
-                className={`px-3 py-1.5 text-xs rounded-md border transition-colors font-medium ${
+                className={`px-3 min-h-[36px] text-xs rounded-md border transition-colors font-medium ${
                   sortMetric === m ? "bg-foreground text-background border-foreground" : "bg-white hover:bg-muted/50 border-border"
                 }`}
               >
@@ -363,7 +363,7 @@ export default function CompetitorsPage() {
               <button
                 key={k}
                 onClick={() => setSortKey(k)}
-                className={`px-2.5 py-1 text-[11px] rounded-md border transition-colors ${
+                className={`px-3 min-h-[36px] text-[11px] rounded-md border transition-colors ${
                   sortKey === k ? "bg-foreground text-background border-foreground" : "bg-white hover:bg-muted/50 border-border"
                 }`}
               >
@@ -532,9 +532,9 @@ function MobileRankCard({
           {onDelete && (
             <button
               onClick={onDelete}
-              className="text-muted-foreground/40 hover:text-red-500 transition-colors shrink-0"
+              className="text-muted-foreground/40 hover:text-red-500 transition-colors shrink-0 p-2 -m-2 inline-flex items-center justify-center min-w-[36px] min-h-[36px]"
             >
-              <Trash2 size={12} />
+              <Trash2 size={14} />
             </button>
           )}
         </div>
@@ -661,10 +661,10 @@ function RankRow({
         {onDelete && (
           <button
             onClick={onDelete}
-            className="text-muted-foreground/40 hover:text-red-500 transition-colors"
+            className="text-muted-foreground/40 hover:text-red-500 transition-colors inline-flex items-center justify-center p-2 -m-2 min-w-[36px] min-h-[36px]"
             title="삭제"
           >
-            <Trash2 size={12} />
+            <Trash2 size={14} />
           </button>
         )}
       </div>

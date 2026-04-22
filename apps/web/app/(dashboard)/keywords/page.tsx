@@ -328,10 +328,10 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
                   type="button"
                   onClick={handleExclude}
                   disabled={excluding}
-                  className="ml-1 p-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
+                  className="ml-1 p-2 -m-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50 inline-flex items-center justify-center min-w-[36px] min-h-[36px]"
                   title="이 키워드 제외"
                 >
-                  {excluding ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                  {excluding ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">

@@ -86,7 +86,7 @@ function UserMenu() {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="size-8 rounded-full bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center hover:brightness-110 transition-all"
+        className="size-10 rounded-full bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center hover:brightness-110 transition-all"
         aria-label="사용자 메뉴"
       >
         <User size={14} className="text-white" />

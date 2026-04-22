@@ -33,7 +33,7 @@ export function NotificationBell() {
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="relative p-2 rounded-lg hover:bg-surface-tertiary transition-colors"
+        className="relative p-2.5 rounded-lg hover:bg-surface-tertiary transition-colors inline-flex items-center justify-center min-w-[44px] min-h-[44px]"
       >
         {count > 0 ? (
           <BellDot size={18} className="text-brand" />

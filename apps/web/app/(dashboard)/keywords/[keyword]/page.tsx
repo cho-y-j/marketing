@@ -142,7 +142,7 @@ export default function KeywordDetailPage({
                   key={opt.days}
                   size="sm"
                   variant={compareDays === opt.days ? "default" : "outline"}
-                  className="text-[11px] h-6 px-2"
+                  className="text-[11px] min-h-[36px] px-3"
                   onClick={() => setCompareDays(opt.days)}
                 >
                   {opt.label}
