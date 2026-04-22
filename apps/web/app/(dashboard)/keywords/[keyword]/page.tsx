@@ -158,7 +158,8 @@ export default function KeywordDetailPage({
             )}
           </div>
         </div>
-        <Card>
+        {/* 데스크탑 — 테이블 */}
+        <Card className="hidden md:block">
           <CardContent className="p-0 overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
@@ -260,6 +261,78 @@ export default function KeywordDetailPage({
             </table>
           </CardContent>
         </Card>
+
+        {/* 모바일 — 카드 리스트 (가로 스크롤 없이 한눈에) */}
+        <div className="md:hidden space-y-2">
+          {topPlaces.length === 0 && (
+            <Card>
+              <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                이 키워드로 노출되는 매장이 없습니다
+              </CardContent>
+            </Card>
+          )}
+          {topPlaces.map((p: any, i: number) => {
+            const isEst = p.deltaSource === "backfill" || p.deltaSource === "estimate";
+            return (
+              <Card
+                key={i}
+                className={p.isMine ? "bg-primary/10 ring-1 ring-primary/30" : ""}
+              >
+                <CardContent className="p-3">
+                  {/* 1행: 순위 + 변동 + 매장명 + 나 */}
+                  <div className="flex items-start gap-2 mb-1.5">
+                    <div className="shrink-0 flex flex-col items-center w-9">
+                      {p.rank === 1 ? (
+                        <Crown size={18} className="text-yellow-500" />
+                      ) : (
+                        <span className={`text-base font-black leading-none ${
+                          p.rank <= 3 ? "text-brand" :
+                          p.rank <= 10 ? "text-foreground" : "text-muted-foreground"
+                        }`}>{p.rank}</span>
+                      )}
+                      <div className="mt-0.5">
+                        <RankChange change={p.rankChange} />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-sm truncate ${p.isMine ? "font-bold" : "font-semibold"}`}>
+                          {p.name}
+                        </span>
+                        {p.isMine && <Badge className="text-[10px] py-0 px-1.5">나</Badge>}
+                        {p.isHot && (
+                          <Badge variant="destructive" className="text-[9px] py-0 px-1">
+                            <Flame size={8} className="mr-0.5" />Hot
+                          </Badge>
+                        )}
+                      </div>
+                      {p.category && (
+                        <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{p.category}</p>
+                      )}
+                    </div>
+                  </div>
+                  {/* 2행: 방문자 / 블로그 2열 */}
+                  <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-border/50">
+                    <MobileMetric
+                      label="방문자 리뷰"
+                      icon={MessageSquare}
+                      value={p.visitorReviewCount}
+                      delta={p.visitorDelta}
+                      isEstimated={isEst}
+                    />
+                    <MobileMetric
+                      label="블로그 리뷰"
+                      icon={FileText}
+                      value={p.blogReviewCount}
+                      delta={p.blogDelta}
+                      isEstimated={isEst}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
       </div>
 
       {/* 순위 추이 (간단 텍스트) */}
@@ -308,6 +381,37 @@ function KeyMetric({
         {suffix && <p className="text-[10px] text-muted-foreground/80 mt-0.5">{suffix}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+function MobileMetric({
+  label, icon: Icon, value, delta, isEstimated,
+}: {
+  label: string;
+  icon: any;
+  value?: number | null;
+  delta?: number | null;
+  isEstimated?: boolean;
+}) {
+  const prefix = isEstimated ? "~" : "";
+  const deltaNode =
+    delta == null ? null :
+    delta === 0 ? <span className="text-muted-foreground">{prefix}±0</span> :
+    delta > 0 ? <span className="text-green-600 font-bold">{prefix}+{delta}</span> :
+    <span className="text-red-600 font-bold">{prefix}{delta}</span>;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+        <Icon size={10} />
+        <span>{label}</span>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-base font-bold">
+          {value != null ? value.toLocaleString() : "-"}
+        </span>
+        <span className="text-[11px]">{deltaNode}</span>
+      </div>
+    </div>
   );
 }
 
