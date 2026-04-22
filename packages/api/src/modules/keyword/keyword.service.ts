@@ -86,14 +86,39 @@ export class KeywordService {
       });
     }
 
-    // 각 키워드의 최신 RankHistory에서 topPlaces 가져오기
+    // 각 키워드의 최신 RankHistory에서 topPlaces 가져오기 + 어제/가장 오래된 기록으로 변동 계산
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
     const enriched = await Promise.all(
       keywords.map(async (kw) => {
         const latest = await this.prisma.keywordRankHistory.findFirst({
           where: { storeId, keyword: kw.keyword },
           orderBy: { checkedAt: "desc" },
-          select: { topPlaces: true, totalResults: true, checkedAt: true },
+          select: { topPlaces: true, totalResults: true, checkedAt: true, rank: true },
         });
+        // "어제 대비" 순위 변동 — 어제 날짜의 가장 마지막 기록, 없으면 오늘 이전의 가장 최근 기록
+        const prevHistory =
+          (await this.prisma.keywordRankHistory.findFirst({
+            where: {
+              storeId, keyword: kw.keyword,
+              checkedAt: { gte: yesterday, lt: todayStart },
+            },
+            orderBy: { checkedAt: "desc" },
+            select: { rank: true },
+          })) ||
+          (await this.prisma.keywordRankHistory.findFirst({
+            where: {
+              storeId, keyword: kw.keyword,
+              checkedAt: { lt: todayStart },
+            },
+            orderBy: { checkedAt: "desc" },
+            select: { rank: true },
+          }));
 
         const allPlaces: any[] = (latest?.topPlaces as any[]) || [];
 
@@ -110,43 +135,19 @@ export class KeywordService {
         // 내 매장 정보 (Top 3 안에 있을 수도, 밖에 있을 수도)
         const myPlace = allPlaces.find((p: any) => p.isMine);
 
-        // 일/주/월 검색량 — KeywordDailyVolume 실관측값 우선, 없으면 월 기반 선형 추정
-        const daily = await this.prisma.keywordDailyVolume.findFirst({
-          where: { keyword: kw.keyword },
-          orderBy: { date: "desc" },
-          select: { totalVolume: true, date: true },
-        });
-        const week = await this.prisma.keywordDailyVolume.findMany({
-          where: { keyword: kw.keyword },
-          orderBy: { date: "desc" },
-          take: 7,
-          select: { totalVolume: true },
-        });
+        // 일/주/월 검색량 — 네이버 검색광고 API는 월간만 제공하므로 주/일은 선형 환산(추정).
+        // 실제 수집되는 KeywordDailyVolume.totalVolume 도 "그 날 기록한 월간 검색량"이라
+        // 주/일 단위 분해에 쓸 수 없음. 따라서 항상 volumeEstimated=true.
         const monthly = kw.monthlySearchVolume ?? 0;
-        const dailyObserved = daily?.totalVolume ?? null;
-        const weeklyObserved = week.length >= 2
-          ? week.reduce((s, r) => s + (r.totalVolume ?? 0), 0)
-          : null;
+        const weeklyVolume = monthly > 0 ? Math.round(monthly / 4.3) : 0;
+        const dailyVolume = monthly > 0 ? Math.round(monthly / 30) : 0;
+        const volumeEstimated = monthly > 0;
 
-        const weeklyVolume =
-          weeklyObserved != null
-            ? weeklyObserved
-            : monthly > 0
-              ? Math.round(monthly / 4.3)
-              : 0;
-        const dailyVolume =
-          dailyObserved != null
-            ? dailyObserved
-            : monthly > 0
-              ? Math.round(monthly / 30)
-              : 0;
-        const volumeEstimated = weeklyObserved == null || dailyObserved == null;
-
-        // 순위 변동 (어제 대비) — previousRank와 currentRank 차이
+        // 순위 변동 (어제 대비) — RankHistory 기반이라 첫 체크 매장도 다음 날부터 표시됨
+        const currRank = kw.currentRank ?? latest?.rank ?? null;
+        const prevRank = prevHistory?.rank ?? null;
         const rankChange =
-          kw.previousRank != null && kw.currentRank != null
-            ? kw.previousRank - kw.currentRank // 양수 = 상승
-            : null;
+          currRank != null && prevRank != null ? prevRank - currRank : null;
         return {
           ...kw,
           monthlyVolume: monthly,
