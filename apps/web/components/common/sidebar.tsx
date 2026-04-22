@@ -88,7 +88,7 @@ export function Sidebar() {
       <nav className="flex-1 px-3 pt-3 overflow-y-auto">
         {navGroups.map((group) => (
           <div key={group.label} className="mb-3">
-            <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-widest px-3 mb-1.5">
+            <p className="text-[11px] font-semibold text-text-tertiary uppercase tracking-widest px-3 mb-1.5">
               {group.label}
             </p>
             <div className="space-y-0.5">

@@ -312,17 +312,17 @@ export default function CompetitorsPage() {
         </Card>
       )}
 
-      {/* ===== 컨트롤 ===== */}
+      {/* ===== 컨트롤 — 기간 버튼 + 정렬 드롭다운 1개 ===== */}
       <Card>
         <CardContent className="p-3 space-y-2.5">
           {/* 기간 */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] text-muted-foreground mr-1 w-10">기간</span>
+            <span className="text-xs text-muted-foreground mr-1 w-10">기간</span>
             {(["day", "week", "month", "date"] as Period[]).map((p) => (
               <button
                 key={p}
                 onClick={() => setPeriod(p)}
-                className={`px-3 min-h-[36px] text-xs rounded-md border transition-colors font-medium ${
+                className={`px-3 min-h-[36px] text-sm rounded-md border transition-colors font-medium ${
                   period === p ? "bg-primary text-primary-foreground border-primary" : "bg-white hover:bg-muted/50 border-border"
                 }`}
               >
@@ -336,40 +336,33 @@ export default function CompetitorsPage() {
                 onChange={(e) => setCustomDate(e.target.value)}
                 min={availableDates[availableDates.length - 1]}
                 max={availableDates[0]}
-                className="ml-2 px-2 py-1.5 text-xs border border-border rounded-md bg-white"
+                className="ml-2 px-2 min-h-[36px] text-sm border border-border rounded-md bg-white"
               />
             )}
           </div>
-          {/* 순위 기준 + 정렬 */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] text-muted-foreground mr-1 w-10">순위</span>
-            {(["visitor", "blog"] as Metric[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => setSortMetric(m)}
-                className={`px-3 min-h-[36px] text-xs rounded-md border transition-colors font-medium ${
-                  sortMetric === m ? "bg-foreground text-background border-foreground" : "bg-white hover:bg-muted/50 border-border"
-                }`}
-              >
-                {m === "visitor" ? "방문자 기준" : "블로그 기준"}
-              </button>
-            ))}
-            <span className="text-[11px] text-muted-foreground ml-3">정렬</span>
-            {([
-              ["cumulative", "누적순"],
-              ["delta", "증감순"],
-              ["rate", "증감률순"],
-            ] as [SortKey, string][]).map(([k, l]) => (
-              <button
-                key={k}
-                onClick={() => setSortKey(k)}
-                className={`px-3 min-h-[36px] text-[11px] rounded-md border transition-colors ${
-                  sortKey === k ? "bg-foreground text-background border-foreground" : "bg-white hover:bg-muted/50 border-border"
-                }`}
-              >
-                {l}
-              </button>
-            ))}
+          {/* 정렬 드롭다운 — 6 옵션 통합 (방문자×누적/증감/증감률, 블로그×누적/증감/증감률) */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1 w-10">정렬</span>
+            <select
+              value={`${sortMetric}:${sortKey}`}
+              onChange={(e) => {
+                const [m, k] = e.target.value.split(":") as [Metric, SortKey];
+                setSortMetric(m);
+                setSortKey(k);
+              }}
+              className="flex-1 min-w-[180px] min-h-[36px] px-3 text-sm rounded-md border border-border bg-white font-medium"
+            >
+              <optgroup label="방문자 리뷰 기준">
+                <option value="visitor:cumulative">방문자 · 누적 많은 순</option>
+                <option value="visitor:delta">방문자 · 증가 많은 순</option>
+                <option value="visitor:rate">방문자 · 증가율 높은 순</option>
+              </optgroup>
+              <optgroup label="블로그 리뷰 기준">
+                <option value="blog:cumulative">블로그 · 누적 많은 순</option>
+                <option value="blog:delta">블로그 · 증가 많은 순</option>
+                <option value="blog:rate">블로그 · 증가율 높은 순</option>
+              </optgroup>
+            </select>
           </div>
         </CardContent>
       </Card>
@@ -382,6 +375,7 @@ export default function CompetitorsPage() {
             rank={idx + 1}
             row={r}
             periodLabel={periodLabel}
+            sortMetric={sortMetric}
             onDelete={r.isMine || !r.competitorId ? undefined : () => {
               if (!confirm(`"${r.name}" 삭제?`)) return;
               deleteComp.mutate(r.competitorId!, { onSuccess: () => toast.success("삭제됨") });
@@ -492,39 +486,44 @@ export default function CompetitorsPage() {
   );
 }
 
-// 모바일 카드 리스트용
+// 모바일 카드 리스트용 — 선택된 지표(방문자 or 블로그)만 크게, 반대 지표는 작게 부가 표시
 function MobileRankCard({
-  rank, row, periodLabel, onDelete,
+  rank, row, periodLabel, sortMetric, onDelete,
 }: {
   rank: number;
   row: Row;
   periodLabel: string;
+  sortMetric: Metric;
   onDelete?: () => void;
 }) {
   const fmtDelta = (v: number | null) =>
-    v == null ? "-" : v === 0 ? "0" : v > 0 ? `+${v.toLocaleString()}` : `${v.toLocaleString()}`;
+    v == null ? "-" : v === 0 ? "±0" : v > 0 ? `+${v.toLocaleString()}` : `${v.toLocaleString()}`;
   const fmtRate = (v: number | null) =>
-    v == null ? "-" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+    v == null ? "-" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
   const clr = (v: number | null) =>
     v == null ? "text-muted-foreground" : v > 0 ? "text-red-600" : v < 0 ? "text-green-600" : "text-muted-foreground";
 
-  const vStatus = getStatus(row.visitor.rate, row.visitor.delta);
-  const bStatus = getStatus(row.blog.rate, row.blog.delta);
+  const primary = sortMetric === "visitor" ? row.visitor : row.blog;
+  const secondary = sortMetric === "visitor" ? row.blog : row.visitor;
+  const primaryLabel = sortMetric === "visitor" ? "방문자 리뷰" : "블로그 리뷰";
+  const secondaryLabel = sortMetric === "visitor" ? "블로그" : "방문자";
+  const primaryStatus = getStatus(primary.rate, primary.delta);
 
   return (
     <Card className={row.isMine ? "bg-primary/10 border-l-2 border-l-primary" : ""}>
-      <CardContent className="p-3">
-        <div className="flex items-center justify-between gap-2 mb-2.5">
+      <CardContent className="p-4">
+        {/* 헤더 — 순위 + 이름 + 삭제 */}
+        <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 min-w-0">
-            {rank === 1 && <Crown size={12} className="text-amber-500 shrink-0" />}
-            <span className={`text-xs font-bold shrink-0 ${row.isMine ? "text-primary" : "text-muted-foreground"}`}>
+            {rank === 1 && <Crown size={14} className="text-amber-500 shrink-0" />}
+            <span className={`text-sm font-bold shrink-0 ${row.isMine ? "text-primary" : "text-muted-foreground"}`}>
               {rank}
             </span>
             <span className={`text-sm font-semibold truncate ${row.isMine ? "text-primary" : ""}`}>
               {row.name}
             </span>
             {row.isMine && (
-              <span className="text-[9px] px-1 py-0 rounded bg-primary text-primary-foreground font-bold shrink-0">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground font-bold shrink-0">
                 나
               </span>
             )}
@@ -539,48 +538,41 @@ function MobileRankCard({
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          {/* 방문자 */}
-          <div className="rounded-md bg-muted/40 p-2.5">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-muted-foreground font-semibold">방문자 리뷰</span>
-              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${vStatus.color}`}>
-                {vStatus.label}
-              </Badge>
-            </div>
-            <div className="font-mono font-bold text-sm">
-              {row.visitor.cumulative != null ? row.visitor.cumulative.toLocaleString() : "-"}
-            </div>
-            <div className="flex items-baseline justify-between text-[10px] mt-0.5">
-              <span className={`font-mono font-semibold ${clr(row.visitor.delta)}`}>
-                {fmtDelta(row.visitor.delta)}
-              </span>
-              <span className={`font-mono ${clr(row.visitor.rate)}`}>
-                {fmtRate(row.visitor.rate)}
-              </span>
-            </div>
+        {/* 메인 지표 — 사용자가 선택한 정렬 기준 */}
+        <div className="rounded-lg bg-muted/40 p-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-muted-foreground font-semibold">{primaryLabel}</span>
+            <Badge variant="outline" className={`text-[11px] px-1.5 py-0 ${primaryStatus.color}`}>
+              {primaryStatus.label}
+            </Badge>
           </div>
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono font-black text-xl">
+              {primary.cumulative != null ? primary.cumulative.toLocaleString() : "-"}
+            </span>
+            <span className={`font-mono font-bold text-sm ${clr(primary.delta)}`}>
+              {fmtDelta(primary.delta)}
+            </span>
+            <span className={`font-mono text-xs ${clr(primary.rate)}`}>
+              ({fmtRate(primary.rate)})
+            </span>
+          </div>
+        </div>
 
-          {/* 블로그 */}
-          <div className="rounded-md bg-muted/40 p-2.5">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-muted-foreground font-semibold">블로그 리뷰</span>
-              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${bStatus.color}`}>
-                {bStatus.label}
-              </Badge>
-            </div>
-            <div className="font-mono font-bold text-sm">
-              {row.blog.cumulative != null ? row.blog.cumulative.toLocaleString() : "-"}
-            </div>
-            <div className="flex items-baseline justify-between text-[10px] mt-0.5">
-              <span className={`font-mono font-semibold ${clr(row.blog.delta)}`}>
-                {fmtDelta(row.blog.delta)}
-              </span>
-              <span className={`font-mono ${clr(row.blog.rate)}`}>
-                {fmtRate(row.blog.rate)}
-              </span>
-            </div>
-          </div>
+        {/* 보조 지표 — 반대 쪽 한 줄 미니 */}
+        <div className="mt-2 px-1 flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">{secondaryLabel}</span>
+          <span className="flex items-baseline gap-1.5 font-mono">
+            <span className="font-semibold">
+              {secondary.cumulative != null ? secondary.cumulative.toLocaleString() : "-"}
+            </span>
+            <span className={`${clr(secondary.delta)}`}>
+              {fmtDelta(secondary.delta)}
+            </span>
+            <span className={`text-[11px] ${clr(secondary.rate)}`}>
+              ({fmtRate(secondary.rate)})
+            </span>
+          </span>
         </div>
       </CardContent>
     </Card>
