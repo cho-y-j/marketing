@@ -180,10 +180,31 @@ export default function KeywordDetailPage({
               <thead className="bg-muted/50">
                 <tr>
                   <th className="text-center px-3 py-2.5 font-medium w-16">순위</th>
-                  <th className="text-center px-2 py-2.5 font-medium w-14">변동</th>
+                  <th className="text-center px-2 py-2.5 font-medium w-14">
+                    변동
+                    {actualCompareDays != null && (
+                      <div className="text-[9px] font-normal text-muted-foreground">
+                        {actualCompareDays}일 기준
+                      </div>
+                    )}
+                  </th>
                   <th className="text-left px-3 py-2.5 font-medium">매장</th>
-                  <th className="text-center px-3 py-2.5 font-medium">방문자리뷰</th>
-                  <th className="text-center px-3 py-2.5 font-medium">블로그리뷰</th>
+                  <th className="text-center px-3 py-2.5 font-medium">
+                    방문자리뷰
+                    {actualCompareDays != null && (
+                      <div className="text-[9px] font-normal text-muted-foreground">
+                        누적 · +{actualCompareDays}일
+                      </div>
+                    )}
+                  </th>
+                  <th className="text-center px-3 py-2.5 font-medium">
+                    블로그리뷰
+                    {actualCompareDays != null && (
+                      <div className="text-[9px] font-normal text-muted-foreground">
+                        누적 · +{actualCompareDays}일
+                      </div>
+                    )}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -227,10 +248,10 @@ export default function KeywordDetailPage({
                       )}
                     </td>
                     <td className="text-center px-3 py-2.5">
-                      <MetricCell value={p.visitorReviewCount} icon={MessageSquare} delta={p.visitorDelta1d} />
+                      <MetricCell value={p.visitorReviewCount} icon={MessageSquare} delta={p.visitorDelta} />
                     </td>
                     <td className="text-center px-3 py-2.5">
-                      <MetricCell value={p.blogReviewCount} icon={FileText} delta={p.blogDelta1d} />
+                      <MetricCell value={p.blogReviewCount} icon={FileText} delta={p.blogDelta} />
                     </td>
                   </tr>
                 ))}

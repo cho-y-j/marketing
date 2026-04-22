@@ -322,13 +322,22 @@ export class RankCheckService {
         )
       : null;
     const prevTopPlaces = (comparePrev?.topPlaces as any[]) || [];
-    // 각 매장의 N일전 순위 매핑 (placeId 우선, 이름 폴백)
-    const prevRankMap = new Map<string, number>();
+    // placeId/이름 키로 N일전 시점 데이터 매핑 (rank + 리뷰수 전체)
+    const prevPlaceMap = new Map<
+      string,
+      { rank: number; visitorReviewCount?: number | null; blogReviewCount?: number | null }
+    >();
     for (const p of prevTopPlaces) {
-      if (p.placeId) prevRankMap.set(p.placeId, p.rank);
-      prevRankMap.set(p.name, p.rank);
+      const entry = {
+        rank: p.rank,
+        visitorReviewCount: p.visitorReviewCount ?? null,
+        blogReviewCount: p.blogReviewCount ?? null,
+      };
+      if (p.placeId) prevPlaceMap.set(p.placeId, entry);
+      prevPlaceMap.set(p.name, entry);
     }
-    // 3-b. 리뷰 증감 — 내 매장 + 추적 경쟁사의 일별 스냅샷에서 델타 조회
+
+    // 3-b. 내 매장 스냅샷 fallback (비교 날짜에 KeywordRankHistory 없을 때 써짐 드물게)
     const snapDate = new Date();
     snapDate.setUTCHours(0, 0, 0, 0);
     const storeSnap = await this.prisma.storeDailySnapshot.findFirst({
@@ -336,52 +345,37 @@ export class RankCheckService {
       orderBy: { date: "desc" },
       select: { visitorDelta: true, blogDelta: true, date: true },
     });
-    const placeIds = topPlaces.map((p: any) => p.placeId).filter(Boolean);
-    const compSnaps = placeIds.length
-      ? await this.prisma.competitorDailySnapshot.findMany({
-          where: {
-            storeId,
-            competitorPlaceId: { in: placeIds },
-            date: { lte: snapDate },
-          },
-          orderBy: { date: "desc" },
-          select: {
-            competitorPlaceId: true,
-            visitorDelta: true,
-            blogDelta: true,
-            date: true,
-          },
-        })
-      : [];
-    // placeId별 최신 델타 1건만
-    const compDeltaMap = new Map<string, { visitorDelta: number | null; blogDelta: number | null }>();
-    for (const s of compSnaps) {
-      if (!compDeltaMap.has(s.competitorPlaceId)) {
-        compDeltaMap.set(s.competitorPlaceId, { visitorDelta: s.visitorDelta, blogDelta: s.blogDelta });
-      }
-    }
 
-    // topPlaces에 변동량 추가
+    // topPlaces에 변동량 추가 — N일전 topPlaces 의 시점 리뷰수와 비교해 기간 증감 계산
+    // placeId 가 있으면 추적 여부 무관하게 모든 경쟁사 증감이 나옴.
     topPlaces = topPlaces.map((p: any) => {
-      const prevRank = (p.placeId && prevRankMap.get(p.placeId)) || prevRankMap.get(p.name);
-      const rankChange = prevRank ? prevRank - p.rank : null; // 양수=상승, 음수=하락
-      let visitorDelta1d: number | null = null;
-      let blogDelta1d: number | null = null;
-      if (p.isMine) {
-        visitorDelta1d = storeSnap?.visitorDelta ?? null;
-        blogDelta1d = storeSnap?.blogDelta ?? null;
-      } else if (p.placeId && compDeltaMap.has(p.placeId)) {
-        const d = compDeltaMap.get(p.placeId)!;
-        visitorDelta1d = d.visitorDelta;
-        blogDelta1d = d.blogDelta;
+      const prev =
+        (p.placeId && prevPlaceMap.get(p.placeId)) || prevPlaceMap.get(p.name) || null;
+      const rankChange = prev?.rank != null ? prev.rank - p.rank : null;
+
+      let visitorDelta: number | null = null;
+      let blogDelta: number | null = null;
+      if (prev && p.visitorReviewCount != null && prev.visitorReviewCount != null) {
+        visitorDelta = p.visitorReviewCount - prev.visitorReviewCount;
       }
+      if (prev && p.blogReviewCount != null && prev.blogReviewCount != null) {
+        blogDelta = p.blogReviewCount - prev.blogReviewCount;
+      }
+      // 내 매장은 historical 매칭 실패 시 StoreDailySnapshot delta 폴백 (compareDays=1 일 때만 유효)
+      if (p.isMine && visitorDelta == null && compareDays === 1) {
+        visitorDelta = storeSnap?.visitorDelta ?? null;
+      }
+      if (p.isMine && blogDelta == null && compareDays === 1) {
+        blogDelta = storeSnap?.blogDelta ?? null;
+      }
+
       return {
         ...p,
-        prevRank: prevRank || null,
+        prevRank: prev?.rank ?? null,
         rankChange,
         isHot: rankChange != null && rankChange >= 10,
-        visitorDelta1d,
-        blogDelta1d,
+        visitorDelta,
+        blogDelta,
       };
     });
 
