@@ -35,7 +35,52 @@
 - **AI**: Claude CLI (host mount), Claude API SDK, OpenAI (fallback)
 - **External APIs**: Naver SearchAD, Naver Place (private), Naver SmartPlace
 - **Auth**: JWT + Passport.js + NextAuth.js + Naver OAuth
-- **Scraping**: Playwright (선택적, 없으면 검색 API 폴백)
+- **Scraping**: axios + 네이버 Place API 병렬 호출 (Chrome/playwright 불필요 — 2026-04-22 제거)
+- **Font**: Paperlogy (로컬, 한글 geometric sans, weight 400/500/600/700)
+
+## 운영 환경 (중요 — 서버 = 이 개발자 머신)
+- **URL**: `http://1.221.158.115:3200` (외부), `http://localhost:3200` (로컬 동일)
+- **컨테이너/포트** (docker compose):
+  - `mk_web` (Next.js) — 호스트 3200 → 내부 3000
+  - `mk_api` (NestJS) — 호스트 4000 → 내부 4000
+  - `mk_postgres` — 호스트 **5433** → 내부 5432 (로컬 psql 접속 시 5433)
+  - `mk_redis`, `mk_mongodb`
+  - `watchtower` — GHCR `:latest` 폴링 → 자동 pull/재시작
+- **배포 플로우**: `git push origin main` → GitHub Actions `build-api`/`build-web` → GHCR `:latest` 푸시 → Watchtower 감지 → 컨테이너 교체. `deploy` step (SCP)는 SSH 시크릿 미설정으로 항상 실패하나 Watchtower 가 대체하므로 무관.
+- **즉시 배포 확인**: `docker exec watchtower /watchtower --run-once --cleanup mk_api mk_web`
+- **배포 검증 3단** (롤백/반영 확인):
+  ```bash
+  git log --oneline -3
+  docker inspect mk_api --format='{{.Image}}'
+  docker manifest inspect ghcr.io/cho-y-j/marketing-api:latest | grep digest | head -1
+  ```
+  커밋/digest 3개가 같은 흐름이면 반영 완료.
+- **Next.js 청크 캐시**: `next.config.js` 의 `headers()` 로 `/_next/static/*` 에 `Cache-Control: public, max-age=0, must-revalidate` 강제 (Turbopack 청크 파일명 재사용 이슈 회피).
+
+## 디자인 시스템 (Apple 70% + 한글 30% 타협)
+상세 사양: `DESIGN-apple.md §10 Adaptation`
+
+- **단일 액센트**: `#0071e3` (Apple Blue) — 링크/버튼/포커스 링만
+- **배경**: 대시보드 `#f5f5f7` 고정. 검정 섹션은 랜딩/가입 히어로에만.
+- **폰트**: `var(--font-sans)` = Paperlogy. `letter-spacing: -0.018em` / `line-height: 1.55` / `word-break: keep-all`. 헤드라인은 `-0.022em` / `1.25`.
+- **CTA radius**: 기본 8px. `980px` pill 은 "더보기"류 보조 링크 한정.
+- **터치 타겟**: 모바일 44px 최소, 아이콘 버튼 36px 최소 (padding + `-margin` 기법).
+- **정보 밀도**: Apple 여백의 ~50% (카드 패딩 16~20px, 섹션 32~48px). 대시보드는 숫자 밀도 유지.
+- **증감 표시**: `+12`(녹) `-3`(빨) `±0`(회). 추정치는 `~` 접두사 + (필요 시) 노란 배지.
+
+## 반응형 규칙
+- **390px (iPhone 13 mini)** 필수 통과 — 가로 스크롤 0, 모든 터치 타겟 36px+
+- **768px (iPad mini)** 중간 확인 — 사이드바 전환점
+- **1280px (MacBook 13)** 데스크탑 기준
+- 헤드리스 검증: `playwright` 로 `document.documentElement.scrollWidth - window.innerWidth === 0` 확인
+- 테이블은 `md:block hidden`, 모바일은 카드 리스트 (`md:hidden`)
+
+## 네비게이션 구조 (2026-04-22 확정)
+- **사이드바(데스크탑)**: 홈 / 내 매장 상태(매장 분석·경쟁매장) / 마케팅 실행(키워드·콘텐츠·리뷰·시즌 이벤트) / 성과 확인(리포트·원가·외국인) / 설정 / 관리자
+- **MobileNav(모바일 하단)**: 홈 · 키워드 · 경쟁 · 리뷰 · **더보기**
+  - "더보기" = 하단 시트 — 사이드바 전체 메뉴(매장 등록/관리자 포함) 2열 그리드
+- **TopBar**: 로고 아이콘만(모바일) + StoreSwitcher(flex-1) + 알림벨(44px) + UserMenu 드롭다운(로그아웃 포함)
+- **레이아웃 규칙**: dashboard layout `flex-1 flex flex-col min-w-0` 필수 (내용이 viewport 넘치는 것 방지)
 
 ## 프로젝트 구조
 ```

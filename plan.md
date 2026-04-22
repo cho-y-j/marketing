@@ -420,3 +420,75 @@ Phase 9: 키워드 품질 검증 & 매장명 변형 집계 ███████
 - 레퍼런스: **애드로그**(데이터/순위) + **장사닥터**(사장님 친화 솔루션)
 - 목표: **"애드로그 + 장사닥터 = 한눈에 솔루션"** 업그레이드 버전
 - 핵심 메시지: "지금 이 속도로 상위권 유지/진입 가능한가"
+
+---
+
+## 2026-04-22 대규모 디자인/UX 재편 세션
+
+### 확정 전략 (의뢰자 결정)
+- **포지션**: 장사탁터 종합 플랫폼과 **정면 대결 금지**. **"네이버 플레이스 마케팅 전문"** 단일 영역 독보적 깊이 — "마케팅은 우리, 매출은 장사탁터" 구도.
+- **디자인 시스템**: Apple 가이드 **70% 채택** + 한글/B2B SaaS 특성 **30% 현지화**. 상세는 `DESIGN-apple.md §10 Adaptation`.
+- **폰트**: Paperlogy(한글 geometric sans). weight 4종(400/500/600/700). 자간 `-0.018em`(본문) / `-0.022em`(헤드), line-height `1.55`/`1.25`, `word-break: keep-all`.
+- **모바일 퍼스트**: 390px(iPhone 13 mini) 기준. 가로 스크롤 0 강제.
+- **앱 전략**: 웹 완성 후 React Native + Expo (API/타입 공유). 현재는 웹만.
+
+### 오늘 완료 작업 (13개 커밋)
+1. ✅ `01b9ec6` 키워드 상세 Top N — 모바일 카드 레이아웃 (가로 스크롤 제거)
+2. ✅ `e7cb340` 홈 대시보드 전면 재설계 — C+A 하이브리드
+   - 🌅 내 매장 지표 / ⚡ 지금 경쟁 구도(격차) / 🎯 AI 1순위 히어로 / 🔑 키워드 TOP3 / 더 둘러보기
+3. ✅ `3cdca8c` + `b2823b0` 초대하기 시스템
+   - `User.referralCode/referredByUserId/points` 필드 추가 + 마이그레이션
+   - `/invite` 페이지, 홈 배너, `/register?ref=CODE` 자동 수용
+4. ✅ `a31c358` 문구 교체 (경쟁 비교 → 경쟁매장/경쟁 한눈에)
+5. ✅ `b38dec6` + `11c38ac` /competitors 재설계
+   - 기준(방문자/블로그) × 정렬(누적/증감/증감률) **콤보 2개 분리**
+   - 카드 아이콘 + 한 줄 압축 (💬/📝 + 숫자 + 증감 + 증감률)
+6. ✅ `19bf593` /ingredients 모바일 카드 뷰 (현재가 + 전주/전월 한 줄)
+7. ✅ `3a7a350` + `ba53663` 홈 액션 href 에러 수정
+   - AI 가 `/dashboard/xxx` 같이 존재 안 하는 경로 뱉던 문제
+   - dashboard.service 에 화이트리스트 sanitize (이중 안전망)
+8. ✅ `ba53663` KAMIS 시계열 실가격 그대로 사용
+   - `today=0` 이어도 `week/month` 유지 (filter 완화)
+   - 카테고리 빈 응답이면 **어제로 재시도**
+   - `IngredientPrice.priceWeekAgo/priceMonthAgo` 필드 (수집 시 함께 저장)
+9. ✅ `721349d` / `23a00f7` / `cc8fd82` 모바일 터치 타겟 44/36 + Button 밀도 복원
+10. ✅ `89ed3d4` Paperlogy 로컬 폰트 적용
+11. ✅ `959fa72` / `2a7d561` / `9976494` / `6700168` 경쟁사 선별 고도화
+    - narrow(공덕 아구찜) + medium(마포 아구찜) 혼합 5~6개 쿼리
+    - 메뉴 토큰 매칭 필수 (한식/곱창/냉면 같은 다른 업종 금지)
+    - `POST /stores/:id/competitors/rediscover` 수동 재탐색 endpoint
+12. ✅ `54c2f80` 신규 가입자 Top N 증감 3단 폴백 (real → backfill → estimate, `~` 접두사)
+13. ✅ 키워드 상세 N일전 선형 외삽 — 2일치 데이터로 7/30일 탭 값 `~+N` 추정 표시
+
+### 운영 환경 (이 머신 자체가 서버)
+- **서버 = 개발자 머신** (Linux, Docker). `1.221.158.115:3200` 접속.
+- **컨테이너**: mk_api(4000), mk_web(3200→내부3000), mk_postgres(5433→내부5432), mk_redis, mk_mongodb, watchtower
+- **Watchtower**: GHCR `:latest` 자동 pull 후 재시작 (업타임 4+일, 건강)
+- **GHA `Build & Deploy`**: `build-api`/`build-web` 는 항상 ✓ (GHCR 푸시 성공). `deploy` 단계는 SSH secret 미설정으로 항상 ✗ (무관 — Watchtower 대체).
+- **Next.js 캐시**: Turbopack 청크 파일명 안정 재사용 문제로 `Cache-Control: must-revalidate` 적용(`next.config.js`). 기존 `immutable` 캐시 있던 사용자는 한 번은 하드 리로드 필요.
+- **배포 검증 3단** (롤백 확인):
+  ```
+  git log --oneline -3
+  docker inspect mk_api --format='{{.Image}}'
+  docker manifest inspect ghcr.io/cho-y-j/marketing-api:latest | grep digest | head -1
+  ```
+  세 digest/커밋이 같은 흐름이면 정상. 방금 푸시 후 Watchtower 즉시 실행 원하면:
+  ```
+  docker exec watchtower /watchtower --run-once --cleanup mk_api mk_web
+  ```
+
+### 알려진 제약 (오늘까지 해결 못 한 것)
+- **키워드 순위 자동 cron 불안정**: `batch-analysis.job.ts` 에 `@Cron("0 5 * * *")` 있으나 4-16~19 기간 안 돔(FREE 필터 버그 주석 있음). 현재 복구됨이나 수동 트리거 필요할 수 있음.
+- **KAMIS 수산물 카테고리(600) 간헐적 빈 응답**: 어제 재시도 로직으로 회피.
+- **매출 데이터 없음**: 플랫폼 연동(배민/요기요/홈택스) 미구현 — 경쟁사 장사탁터와의 결정적 차이. 현재 전략은 이 영역 회피하고 마케팅 전문으로 포지션.
+
+### 내일 이후 (우선순위)
+1. **admin 계정 (슈퍼관리자)** 로그인 시 `/admin/users` 자동 리다이렉트 — 매장 없는 관리자에게 "매장 등록" 화면 뜨는 UX 교정
+2. **상품화 전 최종 점검** — 의뢰자 7만원/월 받으려면 다음 필요 (2026-04-22 피드백):
+   - 홈 히어로 인사이트 ("대왕아구찜 +58 vs 우리 +2" 같은 감정적 신호)
+   - 액션 퍼스트 UI (데이터 → 해석 → 처방 의료 비유)
+   - 주간 AI 브리핑 푸시/메일 발송 (백엔드 `briefing` 이미 있음)
+   - 차트/스파크라인 (숫자 나열 → 시각화)
+   - 카피 톤: "기록없음" → "내일부터 쌓여요", "100위 밖" → "가능성 키워드" 등
+3. **초대하기 포인트 지급 로직** — 규칙(초대 1명당 2,000P?) + 전환 조건(매장 등록 완료 시 지급?) 확정
+4. **모바일 앱** — 웹 안정화 후 React Native + Expo
