@@ -400,9 +400,20 @@ export class RankCheckService {
       return past;
     };
 
+    // 근사 매칭 시 기간 스케일 (예: 2일치 데이터로 7일전 탭 눌렀으면 × 3.5)
+    // 관측된 변화가 그대로 이어진다고 가정하는 선형 외삽 — 신규 가입자 시각 체감용.
+    const scaleToRequested = (rawDelta: number | null): number | null => {
+      if (rawDelta == null) return null;
+      if (!compareApproximate || !actualCompareDays || actualCompareDays === compareDays) {
+        return rawDelta;
+      }
+      const factor = compareDays / actualCompareDays;
+      return Math.round(rawDelta * factor);
+    };
+
     // topPlaces에 변동량 추가 — 3단 폴백:
-    //  1. prevTopPlaces(실제 기록)    ← source: 'real'
-    //  2. CompetitorDailySnapshot     ← source: 'backfill' (추정치 가능)
+    //  1. prevTopPlaces(실제 기록)    ← source: 'real' (정확 매칭 시) 또는 'estimate' (근사→선형 외삽)
+    //  2. CompetitorDailySnapshot     ← source: 'backfill'
     //  3. 현재 × (1 − 0.003 × N일)     ← source: 'estimate'
     topPlaces = topPlaces.map((p: any) => {
       const fromHistory =
@@ -413,37 +424,42 @@ export class RankCheckService {
       let blogDelta: number | null = null;
       let deltaSource: "real" | "backfill" | "estimate" | null = null;
 
-      // 1) 실제 기록 매칭
+      // 1) 실제 기록 매칭 (근사일 경우 선형 외삽)
       if (
         fromHistory &&
         p.visitorReviewCount != null &&
         fromHistory.visitorReviewCount != null
       ) {
-        visitorDelta = p.visitorReviewCount - fromHistory.visitorReviewCount;
-        deltaSource = "real";
+        const raw = p.visitorReviewCount - fromHistory.visitorReviewCount;
+        visitorDelta = scaleToRequested(raw);
+        deltaSource = compareApproximate ? "estimate" : "real";
       }
       if (fromHistory && p.blogReviewCount != null && fromHistory.blogReviewCount != null) {
-        blogDelta = p.blogReviewCount - fromHistory.blogReviewCount;
-        if (!deltaSource) deltaSource = "real";
+        const raw = p.blogReviewCount - fromHistory.blogReviewCount;
+        blogDelta = scaleToRequested(raw);
+        if (!deltaSource) deltaSource = compareApproximate ? "estimate" : "real";
       }
 
-      // 2) CompetitorDailySnapshot 폴백
+      // 2) CompetitorDailySnapshot 폴백 (마찬가지로 근사 대응)
       if (visitorDelta == null && p.placeId) {
         const snap = compSnapMap.get(p.placeId);
         if (snap?.visitorReviewCount != null && p.visitorReviewCount != null) {
-          visitorDelta = p.visitorReviewCount - snap.visitorReviewCount;
-          deltaSource = snap.isEstimated ? "backfill" : "real";
+          const raw = p.visitorReviewCount - snap.visitorReviewCount;
+          visitorDelta = scaleToRequested(raw);
+          deltaSource = snap.isEstimated || compareApproximate ? "backfill" : "real";
         }
       }
       if (blogDelta == null && p.placeId) {
         const snap = compSnapMap.get(p.placeId);
         if (snap?.blogReviewCount != null && p.blogReviewCount != null) {
-          blogDelta = p.blogReviewCount - snap.blogReviewCount;
-          if (!deltaSource) deltaSource = snap.isEstimated ? "backfill" : "real";
+          const raw = p.blogReviewCount - snap.blogReviewCount;
+          blogDelta = scaleToRequested(raw);
+          if (!deltaSource)
+            deltaSource = snap.isEstimated || compareApproximate ? "backfill" : "real";
         }
       }
 
-      // 3) 선형 추정 폴백
+      // 3) 선형 추정 폴백 (이미 compareDays 반영된 값)
       if (visitorDelta == null) {
         const est = linearPast(p.visitorReviewCount, compareDays);
         if (est != null && p.visitorReviewCount != null) {
