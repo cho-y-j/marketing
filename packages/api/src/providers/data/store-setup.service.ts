@@ -77,8 +77,12 @@ export class StoreSetupService {
       this.logger.log(`[재탐색] 기존 AUTO 경쟁사 ${compIds.length}개 삭제`);
     }
 
-    // 쿼리 선정 — 업종 특정되는 것 우선 (메뉴 토큰 포함 > 그 외)
-    const queries = await this.pickCompetitorQueries(storeId, store.category || "");
+    // 쿼리 선정 — 업종 특정되는 것 우선, 부족하면 지역 확장
+    const queries = await this.pickCompetitorQueries(storeId, store.category || "", {
+      district: store.district,
+      address: store.address,
+      name: store.name,
+    });
     if (queries.length === 0) throw new Error("키워드 없음 — 재탐색 불가");
     this.logger.log(`[재탐색] 쿼리: ${queries.join(" / ")}`);
 
@@ -111,11 +115,23 @@ export class StoreSetupService {
   }
 
   /**
-   * 경쟁사 탐색용 쿼리 top 3 선정.
-   * 원칙: "업종이 특정되는 키워드" 우선. 지역+업종 > 지역단독 > 단독.
-   * 예: 아귀찜집이면 "공덕 아구찜" 이 "공덕 맛집" 보다 경쟁사 품질 훨씬 좋음.
+   * 경쟁사 탐색용 쿼리 선정 — 3~6개.
+   *
+   * 지역 계층으로 확장:
+   *  1) 내 등록 키워드 중 "메뉴 토큰 + 지역" (예: 공덕 아구찜) — narrow
+   *  2) 내 키워드 중 "메뉴 단독" (예: 아구찜) — national, 같은 업종
+   *  3) district 기반 합성 "마포 아구찜" — medium, 같은 상권 확장
+   *
+   * 원칙:
+   *  - 메뉴 토큰 매칭 필수 (아구찜집이면 "한식", "맛집" 이런 제네릭 금지)
+   *  - 아귀찜 ↔ 아구찜 표기 자동 매칭
+   *  - 내 상권(공덕)에 매장 부족하면 district(마포)로 확장, 추가 부족하면 city(서울)까지
    */
-  private async pickCompetitorQueries(storeId: string, category: string): Promise<string[]> {
+  private async pickCompetitorQueries(
+    storeId: string,
+    category: string,
+    storeMeta?: { district?: string | null; address?: string | null; name?: string | null },
+  ): Promise<string[]> {
     const topKeywords = await this.prisma.storeKeyword.findMany({
       where: {
         storeId,
@@ -124,12 +140,10 @@ export class StoreSetupService {
       },
       orderBy: { monthlySearchVolume: "desc" },
       take: 10,
-      select: { keyword: true, monthlySearchVolume: true },
+      select: { keyword: true },
     });
-    if (topKeywords.length === 0) return [];
 
-    // 내 세부 메뉴 토큰 추출 (예: "한식>아귀찜,해물찜" → ["아귀찜","아구찜","해물찜"])
-    // "아귀찜" ↔ "아구찜" 표기 변환도 반영
+    // 메뉴 토큰 (예: "한식>아귀찜,해물찜" → ["아귀찜","아구찜","해물찜"])
     const rawTokens = category
       .split(/[>,]/)
       .map((s) => s.trim())
@@ -140,25 +154,64 @@ export class StoreSetupService {
       if (t.includes("아귀")) menuTokens.add(t.replace("아귀", "아구"));
       if (t.includes("아구")) menuTokens.add(t.replace("아구", "아귀"));
     }
-
-    const hasMenuToken = (kw: string) =>
-      [...menuTokens].some((t) => kw.includes(t));
-
-    // 우선순위:
-    //  A. 메뉴 토큰 포함 + 지역 포함 (예: "공덕 아구찜") — 최상
-    //  B. 메뉴 토큰 단독 (예: "아구찜") — 전국 같은 업종
-    //  C. 지역+일반 (예: "공덕 맛집") — 같은 상권 다양한 업종
-    const tierA = topKeywords.filter((k) => hasMenuToken(k.keyword) && k.keyword.includes(" "));
-    const tierB = topKeywords.filter((k) => hasMenuToken(k.keyword) && !k.keyword.includes(" "));
-    const tierC = topKeywords.filter((k) => !hasMenuToken(k.keyword) && k.keyword.includes(" "));
+    const menuArr = [...menuTokens];
+    const hasMenuToken = (kw: string) => menuArr.some((t) => kw.includes(t));
 
     const queries: string[] = [];
-    for (const k of [...tierA, ...tierB, ...tierC]) {
+    const add = (q: string) => {
+      const clean = q.replace(/,/g, "").replace(/\s+/g, " ").trim();
+      if (clean && !queries.includes(clean)) queries.push(clean);
+    };
+
+    // 1) 내 키워드 중 메뉴 토큰 + 지역 (narrow)
+    for (const k of topKeywords) {
+      if (hasMenuToken(k.keyword) && k.keyword.includes(" ")) add(k.keyword);
       if (queries.length >= 3) break;
-      const q = k.keyword.replace(/,/g, "");
-      if (!queries.includes(q)) queries.push(q);
     }
-    return queries;
+
+    // 2) 부족하면 district 단위 합성 (medium)
+    //    "마포구 도화동" 에서 "마포" 추출 → 각 메뉴 토큰과 조합
+    if (queries.length < 3 && menuArr.length > 0) {
+      const districtToken =
+        (storeMeta?.district || "")
+          .split(/\s+/)
+          .map((p) => p.replace(/(구|시|군)$/, ""))
+          .find((t) => t.length >= 2) ||
+        (storeMeta?.address || "")
+          .split(/\s+/)
+          .map((p) => p.replace(/(구|시|군|도|동|읍|면)$/, ""))
+          .find((t) => t.length >= 2);
+      if (districtToken) {
+        for (const menu of menuArr) {
+          if (queries.length >= 4) break;
+          add(`${districtToken} ${menu}`);
+        }
+      }
+    }
+
+    // 3) 내 키워드 중 메뉴 단독 (national, 같은 업종 벤치마크)
+    if (queries.length < 4) {
+      for (const k of topKeywords) {
+        if (hasMenuToken(k.keyword) && !k.keyword.includes(" ")) add(k.keyword);
+        if (queries.length >= 4) break;
+      }
+    }
+
+    // 4) 여전히 부족하면 city + menu (예: "서울 아구찜") — 같은 업종 전국 경쟁
+    if (queries.length < 3 && menuArr.length > 0) {
+      const cityToken = (storeMeta?.address || "")
+        .split(/\s+/)
+        .map((p) => p.replace(/(특별시|광역시|시|도)$/, ""))
+        .find((t) => /^(서울|부산|대구|인천|광주|대전|울산|경기|충북|충남|전북|전남|경북|경남|제주|강원)$/.test(t));
+      if (cityToken) {
+        for (const menu of menuArr) {
+          if (queries.length >= 4) break;
+          add(`${cityToken} ${menu}`);
+        }
+      }
+    }
+
+    return queries.slice(0, 6);
   }
 
   async autoSetup(storeId: string) {
@@ -289,7 +342,11 @@ export class StoreSetupService {
       const finalDistrict = updatedStore?.district || district;
       const finalCategory = updatedStore?.category || category;
 
-      const competitorSearchQueries = await this.pickCompetitorQueries(storeId, finalCategory || "");
+      const competitorSearchQueries = await this.pickCompetitorQueries(storeId, finalCategory || "", {
+        district: finalDistrict,
+        address: placeInfo?.address || store.address,
+        name: store.name,
+      });
 
       // 키워드가 부족하면 기존 지역+메뉴 로직으로 보강 (초기 가입 실패 방지)
       if (competitorSearchQueries.length < 2) {
