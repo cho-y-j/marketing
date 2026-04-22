@@ -293,7 +293,7 @@ export class RankCheckService {
     });
     let compareApproximate = false;
     if (!comparePrev) {
-      // 해당 날짜 ±compareDays 윈도우에서 가장 가까운 과거 기록 사용
+      // 1단계: compareDate ±compareDays 윈도우에서 가장 가까운 과거 기록
       const windowStart = new Date(compareDate);
       windowStart.setDate(windowStart.getDate() - Math.max(1, compareDays));
       comparePrev = await this.prisma.keywordRankHistory.findFirst({
@@ -303,6 +303,16 @@ export class RankCheckService {
         },
         orderBy: { checkedAt: "desc" },
       });
+      // 2단계: 그래도 없으면 오늘 이전의 가장 오래된 기록 아무거나 사용
+      // (신규 매장이라 과거 데이터가 얼마 안 되는 경우)
+      if (!comparePrev) {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        comparePrev = await this.prisma.keywordRankHistory.findFirst({
+          where: { storeId, keyword, checkedAt: { lt: todayStart } },
+          orderBy: { checkedAt: "asc" },
+        });
+      }
       if (comparePrev) compareApproximate = true;
     }
     const actualCompareDays = comparePrev

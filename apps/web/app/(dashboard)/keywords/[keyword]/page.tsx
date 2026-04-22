@@ -149,25 +149,29 @@ export default function KeywordDetailPage({
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
           <h3 className="text-sm font-bold text-muted-foreground">
             {keyword} 검색 결과 Top {topPlaces.length}
-            {compareApproximate && actualCompareDays && (
-              <span className="ml-2 text-[11px] font-normal text-muted-foreground/70">
-                · 실제 비교: {actualCompareDays}일 전 기록 (데이터 누적 전)
-              </span>
-            )}
           </h3>
           {/* N일전 비교 탭 */}
-          <div className="flex gap-1 flex-wrap">
-            {COMPARE_OPTIONS.map((opt) => (
-              <Button
-                key={opt.days}
-                size="sm"
-                variant={compareDays === opt.days ? "default" : "outline"}
-                className="text-[11px] h-6 px-2"
-                onClick={() => setCompareDays(opt.days)}
-              >
-                {opt.label}
-              </Button>
-            ))}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex gap-1 flex-wrap">
+              {COMPARE_OPTIONS.map((opt) => (
+                <Button
+                  key={opt.days}
+                  size="sm"
+                  variant={compareDays === opt.days ? "default" : "outline"}
+                  className="text-[11px] h-6 px-2"
+                  onClick={() => setCompareDays(opt.days)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </div>
+            {actualCompareDays != null && (
+              <span className={`text-[11px] ${compareApproximate ? "text-amber-600" : "text-muted-foreground"}`}>
+                {compareApproximate
+                  ? `실제 비교: ${actualCompareDays}일 전 (데이터 없어 근사)`
+                  : `실제 비교: ${actualCompareDays}일 전`}
+              </span>
+            )}
           </div>
         </div>
         <Card>
@@ -328,11 +332,12 @@ function MetricCell({ value, icon: Icon, delta }: { value?: number; icon: any; d
 }
 
 function RankChange({ change }: { change: number | null }) {
-  if (change == null) return <span className="text-xs text-muted-foreground">-</span>;
+  if (change == null)
+    return <span className="text-[10px] text-muted-foreground/60">기록없음</span>;
   if (change === 0) {
     return (
-      <span className="inline-flex items-center text-xs text-muted-foreground">
-        <Minus size={11} />
+      <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
+        <Minus size={10} /> 동일
       </span>
     );
   }
