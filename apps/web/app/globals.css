@@ -61,15 +61,29 @@
 }
 
 body {
+  /* --font-sans 는 layout.tsx 의 localFont(Paperlogy) 변수. fallback 은 한글 우선. */
   font-family:
-    "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
-    system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo",
+    var(--font-sans), -apple-system, BlinkMacSystemFont,
+    "Pretendard Variable", Pretendard, "Apple SD Gothic Neo",
+    system-ui, Roboto, "Helvetica Neue", "Segoe UI",
     "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji",
     "Segoe UI Symbol", sans-serif;
   background-color: var(--color-surface-secondary);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 한글 최적 자간 — Apple SF Pro 의 -0.374px 대신 em 비율 */
+  letter-spacing: -0.018em;
+  /* 한글 가독성 우선 — Apple 1.47 대신 1.55 */
+  line-height: 1.55;
+  /* 한글/영문 혼용 시 단어 줄바꿈 방지 */
+  word-break: keep-all;
+}
+
+/* 헤드라인은 더 tight 하게 — Apple 1.07 ~ 1.14 대비 한글은 1.2 ~ 1.3 */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.022em;
+  line-height: 1.25;
 }
 
 @theme inline {
