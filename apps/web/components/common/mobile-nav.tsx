@@ -36,7 +36,7 @@ const fullMenu = [
     label: "내 매장 상태",
     items: [
       { href: "/analysis", label: "매장 분석", icon: BarChart3 },
-      { href: "/competitors", label: "경쟁 비교", icon: Swords },
+      { href: "/competitors", label: "경쟁매장", icon: Swords },
     ],
   },
   {

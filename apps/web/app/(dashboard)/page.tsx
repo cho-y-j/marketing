@@ -301,7 +301,7 @@ function CompetitionGapSection({
             href="/competitors"
             className="text-xs font-semibold text-foreground hover:text-brand inline-flex items-center gap-1"
           >
-            옆가게 엿보기
+            경쟁 한눈에
             <ArrowRight size={12} />
           </Link>
         </div>
@@ -474,7 +474,7 @@ function InviteBanner() {
 
 function ExploreSection() {
   const links = [
-    { href: "/competitors", icon: Swords, label: "옆가게 엿보기", hint: "경쟁 비교" },
+    { href: "/competitors", icon: Swords, label: "경쟁 한눈에", hint: "지금 상황 비교" },
     { href: "/analysis", icon: BarChart3, label: "매장 분석", hint: "상세 진단" },
     { href: "/reviews", icon: MessageSquareText, label: "리뷰 관리", hint: "AI 답글" },
     { href: "/content", icon: FileEdit, label: "콘텐츠", hint: "AI 블로그" },

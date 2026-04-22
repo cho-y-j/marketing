@@ -254,7 +254,7 @@ export default function CompetitorsPage() {
       {/* ===== 헤더 ===== */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-xl md:text-2xl font-bold">경쟁 비교</h2>
+          <h2 className="text-xl md:text-2xl font-bold">경쟁매장</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             누적량과 증감률을 한눈에 · 경쟁사 {competitors?.length ?? 0}곳
           </p>

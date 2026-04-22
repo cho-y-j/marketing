@@ -118,6 +118,48 @@ export class IngredientPriceService {
 
     const today = new Date().toISOString().slice(0, 10);
 
+    // DB IngredientPrice 폴백 — 카탈로그/라이브 실패 시에도 어제 수집 가격 노출
+    // 매장 keyIngredients 각 이름에 대해 최근 60일 중 가장 최신 가격 맵
+    const sixtyDaysAgo = new Date();
+    sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+    const dbPrices = await this.prisma.ingredientPrice.findMany({
+      where: { priceType: "retail", date: { gte: sixtyDaysAgo } },
+      orderBy: { date: "desc" },
+      select: { itemName: true, unit: true, price: true, date: true },
+    });
+    const dbLatest = new Map<string, { unit: string; price: number; date: Date }>();
+    const dbHistory = new Map<string, Array<{ price: number; date: Date }>>();
+    for (const r of dbPrices) {
+      const norm = r.itemName.replace(/\s+/g, "").replace(/\(.*?\)/g, "");
+      if (!dbLatest.has(norm)) {
+        dbLatest.set(norm, { unit: r.unit, price: r.price, date: r.date });
+      }
+      const arr = dbHistory.get(norm) ?? [];
+      arr.push({ price: r.price, date: r.date });
+      dbHistory.set(norm, arr);
+    }
+    const lookupDb = (name: string) => {
+      const norm = name.replace(/\s+/g, "").replace(/\(.*?\)/g, "");
+      // 정확 일치 → 부분 일치
+      if (dbLatest.has(norm)) return { key: norm, ...dbLatest.get(norm)! };
+      for (const [key, val] of dbLatest) {
+        if (key.includes(norm) || norm.includes(key)) return { key, ...val };
+      }
+      return null;
+    };
+    const calcDbChange = (key: string, currentPrice: number, daysBack: number) => {
+      const hist = dbHistory.get(key) ?? [];
+      const target = new Date();
+      target.setDate(target.getDate() - daysBack);
+      // target 근처의 가격 (± 5일 tolerance)
+      const match = hist.find((h) => {
+        const diff = Math.abs(h.date.getTime() - target.getTime()) / (24 * 60 * 60 * 1000);
+        return diff <= 5;
+      });
+      if (!match || match.price <= 0) return null;
+      return { prev: match.price, amount: currentPrice - match.price, rate: ((currentPrice - match.price) / match.price) * 100 };
+    };
+
     // 품목별로 KAMIS 카테고리 파악 → 카테고리별 1회만 API 호출 (캐시)
     const categoryCache = new Map<
       string,
@@ -129,19 +171,38 @@ export class IngredientPriceService {
     for (const name of store.keyIngredients) {
       const catCode = findCategoryCode(name);
       if (!catCode) {
-        // KAMIS 미등록
-        items.push({
-          itemName: name,
-          unit: "",
-          current: null,
-          previousWeek: null,
-          previousMonth: null,
-          weeklyChange: null,
-          weeklyChangeAmount: null,
-          monthlyChange: null,
-          monthlyChangeAmount: null,
-          lastUpdated: null,
-        });
+        // KAMIS 미등록 — DB 폴백 시도
+        const db = lookupDb(name);
+        if (db) {
+          const weekChg = calcDbChange(db.key, db.price, 7);
+          const monthChg = calcDbChange(db.key, db.price, 30);
+          items.push({
+            itemName: name,
+            unit: db.unit,
+            current: db.price,
+            previousWeek: weekChg?.prev ?? null,
+            previousMonth: monthChg?.prev ?? null,
+            weeklyChange: weekChg ? +weekChg.rate.toFixed(1) : null,
+            weeklyChangeAmount: weekChg?.amount ?? null,
+            monthlyChange: monthChg ? +monthChg.rate.toFixed(1) : null,
+            monthlyChangeAmount: monthChg?.amount ?? null,
+            lastUpdated: db.date.toISOString().slice(0, 10),
+            source: "db",
+          });
+        } else {
+          items.push({
+            itemName: name,
+            unit: "",
+            current: null,
+            previousWeek: null,
+            previousMonth: null,
+            weeklyChange: null,
+            weeklyChangeAmount: null,
+            monthlyChange: null,
+            monthlyChangeAmount: null,
+            lastUpdated: null,
+          });
+        }
         continue;
       }
 
@@ -168,18 +229,38 @@ export class IngredientPriceService {
       }
 
       if (!matched || matched.today <= 0) {
-        items.push({
-          itemName: name,
-          unit: matched?.unit ?? "",
-          current: null,
-          previousWeek: null,
-          previousMonth: null,
-          weeklyChange: null,
-          weeklyChangeAmount: null,
-          monthlyChange: null,
-          monthlyChangeAmount: null,
-          lastUpdated: null,
-        });
+        // KAMIS 라이브 실패 → DB 폴백
+        const db = lookupDb(name);
+        if (db) {
+          const weekChg = calcDbChange(db.key, db.price, 7);
+          const monthChg = calcDbChange(db.key, db.price, 30);
+          items.push({
+            itemName: name,
+            unit: db.unit,
+            current: db.price,
+            previousWeek: weekChg?.prev ?? null,
+            previousMonth: monthChg?.prev ?? null,
+            weeklyChange: weekChg ? +weekChg.rate.toFixed(1) : null,
+            weeklyChangeAmount: weekChg?.amount ?? null,
+            monthlyChange: monthChg ? +monthChg.rate.toFixed(1) : null,
+            monthlyChangeAmount: monthChg?.amount ?? null,
+            lastUpdated: db.date.toISOString().slice(0, 10),
+            source: "db",
+          });
+        } else {
+          items.push({
+            itemName: name,
+            unit: matched?.unit ?? "",
+            current: null,
+            previousWeek: null,
+            previousMonth: null,
+            weeklyChange: null,
+            weeklyChangeAmount: null,
+            monthlyChange: null,
+            monthlyChangeAmount: null,
+            lastUpdated: null,
+          });
+        }
         continue;
       }
 
