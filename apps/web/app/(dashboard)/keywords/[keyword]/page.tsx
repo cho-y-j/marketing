@@ -232,10 +232,20 @@ export default function KeywordDetailPage({
                       )}
                     </td>
                     <td className="text-center px-3 py-2.5">
-                      <MetricCell value={p.visitorReviewCount} icon={MessageSquare} delta={p.visitorDelta} />
+                      <MetricCell
+                        value={p.visitorReviewCount}
+                        icon={MessageSquare}
+                        delta={p.visitorDelta}
+                        isEstimated={p.deltaSource === "backfill" || p.deltaSource === "estimate"}
+                      />
                     </td>
                     <td className="text-center px-3 py-2.5">
-                      <MetricCell value={p.blogReviewCount} icon={FileText} delta={p.blogDelta} />
+                      <MetricCell
+                        value={p.blogReviewCount}
+                        icon={FileText}
+                        delta={p.blogDelta}
+                        isEstimated={p.deltaSource === "backfill" || p.deltaSource === "estimate"}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -301,13 +311,16 @@ function KeyMetric({
   );
 }
 
-function MetricCell({ value, icon: Icon, delta }: { value?: number; icon: any; delta?: number | null }) {
+function MetricCell({
+  value, icon: Icon, delta, isEstimated,
+}: { value?: number; icon: any; delta?: number | null; isEstimated?: boolean }) {
   if (value == null || value === 0) return <span className="text-muted-foreground">-</span>;
+  const prefix = isEstimated ? "~" : "";
   const deltaNode =
     delta == null ? null :
-    delta === 0 ? <span className="text-[10px] text-muted-foreground">±0</span> :
-    delta > 0 ? <span className="text-[10px] text-green-600 font-semibold">+{delta}</span> :
-    <span className="text-[10px] text-red-600 font-semibold">{delta}</span>;
+    delta === 0 ? <span className="text-[10px] text-muted-foreground">{prefix}±0</span> :
+    delta > 0 ? <span className="text-[10px] text-green-600 font-semibold">{prefix}+{delta}</span> :
+    <span className="text-[10px] text-red-600 font-semibold">{prefix}{delta}</span>;
   return (
     <span className="inline-flex flex-col items-center gap-0">
       <span className="inline-flex items-center gap-1 text-sm">

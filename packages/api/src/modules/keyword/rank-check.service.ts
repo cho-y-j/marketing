@@ -357,36 +357,125 @@ export class RankCheckService {
       select: { visitorDelta: true, blogDelta: true, date: true },
     });
 
-    // topPlaces에 변동량 추가 — N일전 topPlaces 의 시점 리뷰수와 비교해 기간 증감 계산
-    // placeId 가 있으면 추적 여부 무관하게 모든 경쟁사 증감이 나옴.
+    // 3-b-i. 경쟁사 과거 스냅샷 병렬 조회 — 신규 가입자는 KeywordRankHistory 가 없어도
+    // CompetitorDailySnapshot 의 백필된 추정치로 "N일전 리뷰수"를 구할 수 있음.
+    const pastDate = new Date(latestTs - compareDays * 24 * 60 * 60 * 1000);
+    pastDate.setUTCHours(23, 59, 59, 999);
+    const placeIds = topPlaces.map((p: any) => p.placeId).filter(Boolean);
+    const compSnaps = placeIds.length
+      ? await this.prisma.competitorDailySnapshot.findMany({
+          where: {
+            storeId,
+            competitorPlaceId: { in: placeIds },
+            date: { lte: pastDate },
+          },
+          orderBy: { date: "desc" },
+          select: {
+            competitorPlaceId: true,
+            visitorReviewCount: true,
+            blogReviewCount: true,
+            isEstimated: true,
+          },
+        })
+      : [];
+    const compSnapMap = new Map<
+      string,
+      { visitorReviewCount: number | null; blogReviewCount: number | null; isEstimated: boolean }
+    >();
+    for (const s of compSnaps) {
+      if (!compSnapMap.has(s.competitorPlaceId)) {
+        compSnapMap.set(s.competitorPlaceId, {
+          visitorReviewCount: s.visitorReviewCount,
+          blogReviewCount: s.blogReviewCount,
+          isEstimated: s.isEstimated,
+        });
+      }
+    }
+
+    // 3-b-ii. 선형 추정 상수 — 외식업 월 성장률 ~10~15% 기준 일간 0.3~0.5%. 보수적으로 0.3%.
+    const LINEAR_DAILY_RATE = 0.003;
+    const linearPast = (current: number | null | undefined, days: number) => {
+      if (current == null || current === 0) return null;
+      const past = Math.round(current * Math.max(0, 1 - LINEAR_DAILY_RATE * days));
+      return past;
+    };
+
+    // topPlaces에 변동량 추가 — 3단 폴백:
+    //  1. prevTopPlaces(실제 기록)    ← source: 'real'
+    //  2. CompetitorDailySnapshot     ← source: 'backfill' (추정치 가능)
+    //  3. 현재 × (1 − 0.003 × N일)     ← source: 'estimate'
     topPlaces = topPlaces.map((p: any) => {
-      const prev =
+      const fromHistory =
         (p.placeId && prevPlaceMap.get(p.placeId)) || prevPlaceMap.get(p.name) || null;
-      const rankChange = prev?.rank != null ? prev.rank - p.rank : null;
+      const rankChange = fromHistory?.rank != null ? fromHistory.rank - p.rank : null;
 
       let visitorDelta: number | null = null;
       let blogDelta: number | null = null;
-      if (prev && p.visitorReviewCount != null && prev.visitorReviewCount != null) {
-        visitorDelta = p.visitorReviewCount - prev.visitorReviewCount;
+      let deltaSource: "real" | "backfill" | "estimate" | null = null;
+
+      // 1) 실제 기록 매칭
+      if (
+        fromHistory &&
+        p.visitorReviewCount != null &&
+        fromHistory.visitorReviewCount != null
+      ) {
+        visitorDelta = p.visitorReviewCount - fromHistory.visitorReviewCount;
+        deltaSource = "real";
       }
-      if (prev && p.blogReviewCount != null && prev.blogReviewCount != null) {
-        blogDelta = p.blogReviewCount - prev.blogReviewCount;
+      if (fromHistory && p.blogReviewCount != null && fromHistory.blogReviewCount != null) {
+        blogDelta = p.blogReviewCount - fromHistory.blogReviewCount;
+        if (!deltaSource) deltaSource = "real";
       }
-      // 내 매장은 historical 매칭 실패 시 StoreDailySnapshot delta 폴백 (compareDays=1 일 때만 유효)
-      if (p.isMine && visitorDelta == null && compareDays === 1) {
-        visitorDelta = storeSnap?.visitorDelta ?? null;
+
+      // 2) CompetitorDailySnapshot 폴백
+      if (visitorDelta == null && p.placeId) {
+        const snap = compSnapMap.get(p.placeId);
+        if (snap?.visitorReviewCount != null && p.visitorReviewCount != null) {
+          visitorDelta = p.visitorReviewCount - snap.visitorReviewCount;
+          deltaSource = snap.isEstimated ? "backfill" : "real";
+        }
       }
-      if (p.isMine && blogDelta == null && compareDays === 1) {
-        blogDelta = storeSnap?.blogDelta ?? null;
+      if (blogDelta == null && p.placeId) {
+        const snap = compSnapMap.get(p.placeId);
+        if (snap?.blogReviewCount != null && p.blogReviewCount != null) {
+          blogDelta = p.blogReviewCount - snap.blogReviewCount;
+          if (!deltaSource) deltaSource = snap.isEstimated ? "backfill" : "real";
+        }
+      }
+
+      // 3) 선형 추정 폴백
+      if (visitorDelta == null) {
+        const est = linearPast(p.visitorReviewCount, compareDays);
+        if (est != null && p.visitorReviewCount != null) {
+          visitorDelta = p.visitorReviewCount - est;
+          deltaSource = "estimate";
+        }
+      }
+      if (blogDelta == null) {
+        const est = linearPast(p.blogReviewCount, compareDays);
+        if (est != null && p.blogReviewCount != null) {
+          blogDelta = p.blogReviewCount - est;
+          if (!deltaSource) deltaSource = "estimate";
+        }
+      }
+
+      // 내 매장은 StoreDailySnapshot delta 가 더 정확 (compareDays=1)
+      if (p.isMine && compareDays === 1 && storeSnap?.visitorDelta != null) {
+        visitorDelta = storeSnap.visitorDelta;
+        deltaSource = "real";
+      }
+      if (p.isMine && compareDays === 1 && storeSnap?.blogDelta != null) {
+        blogDelta = storeSnap.blogDelta;
       }
 
       return {
         ...p,
-        prevRank: prev?.rank ?? null,
+        prevRank: fromHistory?.rank ?? null,
         rankChange,
         isHot: rankChange != null && rankChange >= 10,
         visitorDelta,
         blogDelta,
+        deltaSource, // 프런트가 '~' 접두사/배지 표시에 활용
       };
     });
 
