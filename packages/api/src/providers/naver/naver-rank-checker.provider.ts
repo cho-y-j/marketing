@@ -1,7 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { chromium, Browser } from "playwright-core";
-import { execFileSync } from "child_process";
 import { NaverSearchProvider } from "./naver-search.provider";
 import { NaverPlaceProvider } from "./naver-place.provider";
 
@@ -25,125 +23,27 @@ export interface RankCheckResult {
 @Injectable()
 export class NaverRankCheckerProvider {
   private readonly logger = new Logger(NaverRankCheckerProvider.name);
-  private readonly chromePath: string;
 
   constructor(
     private config: ConfigService,
     private naverSearch: NaverSearchProvider,
     private naverPlace: NaverPlaceProvider,
-  ) {
-    // Chrome 경로 탐지
-    const paths = [
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/usr/bin/google-chrome",
-      "/usr/bin/chromium-browser",
-    ];
-    let found = "";
-    for (const p of paths) {
-      try {
-        execFileSync("test", ["-f", p]);
-        found = p;
-        break;
-      } catch {}
-    }
-    this.chromePath = found;
-    if (found) {
-      this.logger.log(`Chrome 경로: ${found}`);
-    } else {
-      this.logger.warn("Chrome을 찾을 수 없습니다. 순위 체크가 제한됩니다.");
-    }
-  }
+  ) {}
 
   /**
-   * 네이버 통합검색 HTML에서 플레이스 JSON 데이터를 파싱하여 순위 체크
+   * 순위 체크 — search.naver.com HTML 스크래핑(axios) + Place API 병렬 보강.
+   * Chrome/브라우저 불필요. 네이버는 매장 검색결과를 SSR 로 내려줘서 axios 로
+   * 충분하며, 각 매장의 방문자/블로그 리뷰는 Place API 로 채워 풍부하게 반환.
+   * Top 100 까지 확장 (이전 Chrome 경로의 top 10 + name-only 대비 훨씬 상세).
    */
   async checkPlaceRank(
     keyword: string,
     storeName: string,
     naverPlaceId?: string,
   ): Promise<RankCheckResult> {
-    let browser: Browser | null = null;
-
-    try {
-      if (!this.chromePath) {
-        // Chrome 없으면 네이버 공식 검색 API로 폴백
-        return this.checkRankViaSearchAPI(keyword, storeName, naverPlaceId);
-      }
-
-      browser = await chromium.launch({
-        headless: true,
-        executablePath: this.chromePath,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-      const page = await browser.newPage();
-
-      const url = `https://search.naver.com/search.naver?query=${encodeURIComponent(keyword)}&where=nexearch`;
-      await page.goto(url, { waitUntil: "networkidle", timeout: 15000 });
-      await page.waitForTimeout(1000);
-
-      const html = await page.content();
-      await browser.close();
-      browser = null;
-
-      this.logger.debug(`HTML 길이: ${html.length}`);
-
-      // HTML 내 JSON에서 매장 (id + 이름) 추출
-      const places = this.extractPlacesFromHtml(html);
-      this.logger.debug(`추출된 매장: ${places.length}개 - ${places.slice(0, 3).map((p) => p.name).join(", ")}`);
-
-      // 순위 찾기 — placeId 우선, 이름 토큰 매칭 폴백
-      let rank: number | null = null;
-      const topPlaces: Array<{ name: string; rank: number }> = [];
-      const targetTokens = this.tokenize(storeName);
-
-      for (let i = 0; i < places.length; i++) {
-        const p = places[i];
-        topPlaces.push({ name: p.name, rank: i + 1 });
-
-        if (rank !== null) continue;
-
-        // 1순위: placeId 정확 일치 (가장 신뢰성 높음)
-        if (naverPlaceId && p.id && p.id === naverPlaceId) {
-          rank = i + 1;
-          continue;
-        }
-
-        // 2순위: 매장명 토큰 매칭 (양방향 부분 일치 또는 토큰 50% 이상 겹침)
-        const candidateTokens = this.tokenize(p.name);
-        const intersection = [...targetTokens].filter((t) => candidateTokens.has(t));
-        const minSize = Math.min(targetTokens.size, candidateTokens.size);
-        if (
-          minSize > 0 &&
-          intersection.length / minSize >= 0.5 &&
-          intersection.length >= 1
-        ) {
-          rank = i + 1;
-        }
-      }
-
-      this.logger.log(
-        `순위 체크: "${keyword}" → ${storeName}: ${rank ? `${rank}위` : `${places.length > 0 ? places.length : 100}위 밖`} (${places.length}개 결과)`,
-      );
-
-      return {
-        keyword,
-        rank,
-        totalResults: places.length,
-        topPlaces: topPlaces.slice(0, 10),
-        checkedAt: new Date(),
-      };
-    } catch (e: any) {
-      this.logger.warn(`순위 체크 실패 [${keyword}]: ${e.message}`);
-      return { keyword, rank: null, totalResults: 0, topPlaces: [], checkedAt: new Date() };
-    } finally {
-      if (browser) await browser.close();
-    }
+    return this.checkRankViaSearchAPI(keyword, storeName, naverPlaceId);
   }
 
-  /**
-   * Chrome 없을 때 폴백 — 네이버 공식 검색 API로 순위 확인
-   * 상위 5개 제한이지만 Chrome 없이 동작
-   */
   private async checkRankViaSearchAPI(
     keyword: string,
     storeName: string,
@@ -335,24 +235,6 @@ export class NaverRankCheckerProvider {
     }
 
     return places;
-  }
-
-  /** 매장명 토큰화 — 2-gram + 단어 단위. rank-check 매칭용 */
-  private tokenize(text: string): Set<string> {
-    if (!text) return new Set();
-    const cleaned = text
-      .toLowerCase()
-      .replace(/[^\w가-힣\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const tokens = new Set<string>();
-    for (const w of cleaned.split(" ").filter((t) => t.length >= 2)) {
-      tokens.add(w);
-      if (w.length >= 4) {
-        for (let i = 0; i <= w.length - 2; i++) tokens.add(w.slice(i, i + 2));
-      }
-    }
-    return tokens;
   }
 
   async checkMultipleRanks(
