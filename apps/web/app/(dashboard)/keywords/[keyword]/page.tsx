@@ -63,7 +63,7 @@ export default function KeywordDetailPage({
   }
 
   const {
-    topPlaces = [], myMetrics, myDeltas, myRank, monthlyVolume, totalResults,
+    topPlaces = [], myRank, monthlyVolume, totalResults,
     trend = [], insights = [], actualCompareDays, compareApproximate,
   } = data;
 
@@ -92,7 +92,7 @@ export default function KeywordDetailPage({
         </Button>
       </div>
 
-      {/* 핵심 3지표 */}
+      {/* 핵심 지표 — 이 키워드 하나에 특정된 것만 */}
       <div className="grid grid-cols-3 gap-3">
         <KeyMetric
           label="내 순위"
@@ -100,30 +100,14 @@ export default function KeywordDetailPage({
           color={myRank && myRank <= 3 ? "blue" : myRank && myRank <= 10 ? "default" : "red"}
         />
         <KeyMetric
-          label="방문자 리뷰"
-          value={(myMetrics?.visitorReviewCount ?? 0).toLocaleString()}
-          deltas={myDeltas ? {
-            daily: myDeltas.daily?.visitor,
-            weekly: myDeltas.weekly?.visitor,
-            monthly: myDeltas.monthly?.visitor,
-          } : undefined}
-          estimated={{
-            weekly: !!myDeltas?.weekly?.isEstimated,
-            monthly: !!myDeltas?.monthly?.isEstimated,
-          }}
+          label="월 검색량"
+          value={monthlyVolume ? `${monthlyVolume.toLocaleString()}` : "-"}
+          suffix="회/월"
         />
         <KeyMetric
-          label="블로그 리뷰"
-          value={(myMetrics?.blogReviewCount ?? 0).toLocaleString()}
-          deltas={myDeltas ? {
-            daily: myDeltas.daily?.blog,
-            weekly: myDeltas.weekly?.blog,
-            monthly: myDeltas.monthly?.blog,
-          } : undefined}
-          estimated={{
-            weekly: !!myDeltas?.weekly?.isEstimated,
-            monthly: !!myDeltas?.monthly?.isEstimated,
-          }}
+          label="노출 매장"
+          value={totalResults ? `${totalResults}` : "-"}
+          suffix="개 (Top)"
         />
       </div>
 
@@ -298,37 +282,20 @@ export default function KeywordDetailPage({
 }
 
 function KeyMetric({
-  label, value, color = "default", deltas, estimated,
+  label, value, color = "default", suffix,
 }: {
   label: string;
   value: string;
   color?: "default" | "blue" | "red";
-  deltas?: { daily?: number | null; weekly?: number | null; monthly?: number | null };
-  estimated?: { weekly?: boolean; monthly?: boolean };
+  suffix?: string;
 }) {
   const colorClass = color === "blue" ? "text-brand" : color === "red" ? "text-red-600" : "text-foreground";
-  const fmt = (n: number | null | undefined, isEstimated?: boolean) => {
-    if (n == null) return null;
-    const prefix = isEstimated ? "~" : "";
-    if (n === 0) return <span className="text-muted-foreground">{prefix}0</span>;
-    if (n > 0) return <span className="text-green-600 font-semibold">{prefix}+{n}</span>;
-    return <span className="text-red-600 font-semibold">{prefix}{n}</span>;
-  };
   return (
     <Card>
       <CardContent className="p-4 text-center">
         <p className="text-xs text-muted-foreground mb-1">{label}</p>
         <p className={`text-2xl font-black ${colorClass}`}>{value}</p>
-        {deltas && (
-          <div className="flex justify-center gap-2 mt-1.5 text-[10px]">
-            <span className="text-muted-foreground">일 {fmt(deltas.daily) ?? "-"}</span>
-            <span className="text-muted-foreground">주 {fmt(deltas.weekly, estimated?.weekly) ?? "-"}</span>
-            <span className="text-muted-foreground">월 {fmt(deltas.monthly, estimated?.monthly) ?? "-"}</span>
-          </div>
-        )}
-        {(estimated?.weekly || estimated?.monthly) && (
-          <p className="text-[9px] text-muted-foreground/70 mt-0.5">~ = 데이터 누적 전 추정</p>
-        )}
+        {suffix && <p className="text-[10px] text-muted-foreground/80 mt-0.5">{suffix}</p>}
       </CardContent>
     </Card>
   );

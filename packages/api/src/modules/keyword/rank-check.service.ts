@@ -279,48 +279,59 @@ export class RankCheckService {
       rank: h.rank,
     }));
 
-    // 3. N일전 비교 — 정확히 N일 전 기록이 없으면 그 근처(±compareDays) 가장 가까운 것으로 근사
-    const compareDate = new Date();
-    compareDate.setDate(compareDate.getDate() - compareDays);
-    compareDate.setHours(0, 0, 0, 0);
-    const compareNextDay = new Date(compareDate.getTime() + 24 * 60 * 60 * 1000);
-    let comparePrev = await this.prisma.keywordRankHistory.findFirst({
+    // 3. N일전 비교 — latest.checkedAt 기준으로 N일 이전 기록 중
+    // "리뷰수가 들어있는" 가장 가까운 것을 선택.
+    //
+    // 주의점:
+    // - compareDate 기준이 "지금 시각"이 아니라 latest.checkedAt — 오늘 재체크 안 했어도
+    //   최신 기록 시점부터 역산해야 의미 있음.
+    // - 초기 체크 기록은 topPlaces 에 리뷰수가 없어서 delta 계산 불가 → 필터링 필수.
+    const latestTs = latest!.checkedAt.getTime();
+    const targetTs = latestTs - compareDays * 24 * 60 * 60 * 1000;
+
+    // latest 보다 과거인 모든 기록 (최근 90일치) 가져와서 JS 에서 선택
+    const windowStart = new Date(latestTs - 90 * 24 * 60 * 60 * 1000);
+    const pastRecords = await this.prisma.keywordRankHistory.findMany({
       where: {
         storeId, keyword,
-        checkedAt: { gte: compareDate, lt: compareNextDay },
+        checkedAt: { gte: windowStart, lt: latest!.checkedAt },
       },
       orderBy: { checkedAt: "desc" },
+      select: { checkedAt: true, rank: true, topPlaces: true },
     });
-    let compareApproximate = false;
-    if (!comparePrev) {
-      // 1단계: compareDate ±compareDays 윈도우에서 가장 가까운 과거 기록
-      const windowStart = new Date(compareDate);
-      windowStart.setDate(windowStart.getDate() - Math.max(1, compareDays));
-      comparePrev = await this.prisma.keywordRankHistory.findFirst({
-        where: {
-          storeId, keyword,
-          checkedAt: { gte: windowStart, lt: compareNextDay },
-        },
-        orderBy: { checkedAt: "desc" },
-      });
-      // 2단계: 그래도 없으면 오늘 이전의 가장 오래된 기록 아무거나 사용
-      // (신규 매장이라 과거 데이터가 얼마 안 되는 경우)
-      if (!comparePrev) {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        comparePrev = await this.prisma.keywordRankHistory.findFirst({
-          where: { storeId, keyword, checkedAt: { lt: todayStart } },
-          orderBy: { checkedAt: "asc" },
-        });
+
+    // 리뷰수가 담긴 기록만 — delta 계산에 쓸 수 있는 것
+    const richPast = pastRecords.filter((r) => {
+      const tp = r.topPlaces as any[];
+      return Array.isArray(tp) && tp.some((p) => p.visitorReviewCount != null || p.blogReviewCount != null);
+    });
+
+    // targetTs 에 가장 가까운 풍부기록 선택 → 없으면 풍부기록 중 가장 오래된 것 →
+    // 그래도 없으면 past 기록 중 가장 오래된 것 (리뷰수 없어도 rank 변동은 표기 가능)
+    let comparePrev: { checkedAt: Date; rank: number | null; topPlaces: any } | null = null;
+    if (richPast.length > 0) {
+      let best = richPast[0];
+      let bestDelta = Math.abs(best.checkedAt.getTime() - targetTs);
+      for (const r of richPast) {
+        const d = Math.abs(r.checkedAt.getTime() - targetTs);
+        if (d < bestDelta) {
+          best = r;
+          bestDelta = d;
+        }
       }
-      if (comparePrev) compareApproximate = true;
+      comparePrev = best;
+    } else if (pastRecords.length > 0) {
+      comparePrev = pastRecords[pastRecords.length - 1]; // 가장 오래된 것
     }
+
     const actualCompareDays = comparePrev
       ? Math.max(
           1,
-          Math.round((Date.now() - comparePrev.checkedAt.getTime()) / (24 * 60 * 60 * 1000)),
+          Math.round((latestTs - comparePrev.checkedAt.getTime()) / (24 * 60 * 60 * 1000)),
         )
       : null;
+    const compareApproximate =
+      comparePrev != null && actualCompareDays != null && actualCompareDays !== compareDays;
     const prevTopPlaces = (comparePrev?.topPlaces as any[]) || [];
     // placeId/이름 키로 N일전 시점 데이터 매핑 (rank + 리뷰수 전체)
     const prevPlaceMap = new Map<
