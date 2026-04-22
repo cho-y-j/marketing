@@ -39,6 +39,13 @@ model User {
   naverTokenExpiresAt DateTime?
   naverConnectedAt    DateTime?
 
+  // 추천/초대 시스템
+  referralCode     String?  @unique // 본인의 추천 코드 (가입 시 자동 생성)
+  referredByUserId String? // 가입 시 나를 초대한 사람의 userId
+  referredBy       User?    @relation("UserReferrals", fields: [referredByUserId], references: [id])
+  referredUsers    User[]   @relation("UserReferrals")
+  points           Int      @default(0) // 적립 포인트 — 추후 지급 로직 연결
+
   // 관계
   stores         Store[]
   notifications  Notification[]
@@ -47,6 +54,8 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([referredByUserId])
 }
 
 enum UserRole {

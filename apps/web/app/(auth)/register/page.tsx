@@ -1,16 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
-import { Loader2, User, Building2 } from "lucide-react";
+import { Loader2, User, Building2, Gift } from "lucide-react";
 
 type Role = "INDIVIDUAL" | "FRANCHISE";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [role, setRole] = useState<Role>("INDIVIDUAL");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -18,8 +19,26 @@ export default function RegisterPage() {
   const [phone, setPhone] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [businessNumber, setBusinessNumber] = useState("");
+  const [referralCode, setReferralCode] = useState("");
   const [agree, setAgree] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // URL ?ref=CODE 자동 입력 + sessionStorage 백업 (추천 링크 → 나중 가입도 커버)
+  useEffect(() => {
+    const urlRef = searchParams.get("ref");
+    if (urlRef) {
+      const normalized = urlRef.trim().toUpperCase();
+      setReferralCode(normalized);
+      try {
+        sessionStorage.setItem("referralCode", normalized);
+      } catch {}
+    } else {
+      try {
+        const saved = sessionStorage.getItem("referralCode");
+        if (saved) setReferralCode(saved);
+      } catch {}
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,9 +57,17 @@ export default function RegisterPage() {
         phone: phone.trim() || undefined,
         companyName: companyName.trim() || undefined,
         businessNumber: businessNumber.trim() || undefined,
+        referralCode: referralCode.trim().toUpperCase() || undefined,
       });
       if (data?.token) localStorage.setItem("token", data.token);
-      toast.success("가입 완료 — 매장을 등록해주세요");
+      try {
+        sessionStorage.removeItem("referralCode");
+      } catch {}
+      toast.success(
+        referralCode
+          ? `가입 완료 — 추천 코드 ${referralCode} 적용됐어요`
+          : "가입 완료 — 매장을 등록해주세요",
+      );
       router.push("/");
     } catch (err: any) {
       toast.error(err.response?.data?.message || "가입 실패");
@@ -138,6 +165,23 @@ export default function RegisterPage() {
               onChange={(e) => setBusinessNumber(e.target.value)}
               className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
+            {/* 추천 코드 — ?ref= 로 자동 채워지기도 함 */}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="추천 코드 (선택)"
+                value={referralCode}
+                onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                maxLength={8}
+                className="w-full pl-9 pr-3 py-2.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 tracking-[0.15em] uppercase"
+              />
+              <Gift size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand" />
+            </div>
+            {referralCode && (
+              <p className="text-[11px] text-brand pl-1">
+                ✓ 추천 코드 적용 예정 — 가입 시 자동 연결됩니다
+              </p>
+            )}
             <label className="flex items-start gap-2 text-xs text-text-secondary">
               <input
                 type="checkbox"

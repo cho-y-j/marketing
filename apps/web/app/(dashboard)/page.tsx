@@ -18,6 +18,7 @@ import {
   TrendingUp, Sparkles, Flame, Target,
   Search, Swords, MessageSquareText, FileEdit,
   BarChart3, CalendarDays, DollarSign, Globe, FileBarChart,
+  Gift,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -138,6 +139,9 @@ export default function DashboardPage() {
       {/* 섹션 4 ─ 🔑 내 키워드 현황 TOP 3           */}
       {/* ═══════════════════════════════════════ */}
       {keywordRanks?.length > 0 && <KeywordsPreview keywords={keywordRanks.slice(0, 3)} />}
+
+      {/* 친구 초대 배너 — 눈에 띄게 */}
+      <InviteBanner />
 
       {/* ═══════════════════════════════════════ */}
       {/* 섹션 5 ─ 더 둘러보기 (그리드)               */}
@@ -447,6 +451,27 @@ function KeywordsPreview({ keywords }: { keywords: any[] }) {
 /* ===================================================================== */
 /*  섹션 5 — 더 둘러보기                                                   */
 /* ===================================================================== */
+function InviteBanner() {
+  return (
+    <Link href="/invite" className="block">
+      <Card className="border-brand/30 bg-gradient-to-r from-brand-subtle/60 via-amber-50/50 to-transparent hover:border-brand/50 transition-colors">
+        <CardContent className="p-4 flex items-center gap-3">
+          <div className="shrink-0 w-10 h-10 rounded-full bg-brand text-white flex items-center justify-center">
+            <Gift size={18} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold">친구 초대하고 포인트 받기</p>
+            <p className="text-[11px] text-muted-foreground truncate">
+              사장님 친구에게 추천 코드를 공유하세요 · 초대 1명당 2,000P
+            </p>
+          </div>
+          <ArrowRight size={16} className="text-muted-foreground shrink-0" />
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
 function ExploreSection() {
   const links = [
     { href: "/competitors", icon: Swords, label: "옆가게 엿보기", hint: "경쟁 비교" },
@@ -457,6 +482,7 @@ function ExploreSection() {
     { href: "/reports", icon: FileBarChart, label: "리포트", hint: "주간 성과" },
     { href: "/ingredients", icon: DollarSign, label: "원가 관리", hint: "가격 추적" },
     { href: "/foreign-market", icon: Globe, label: "외국인 상권", hint: "해외 고객" },
+    { href: "/invite", icon: Gift, label: "친구 초대", hint: "포인트 적립" },
   ];
   return (
     <section>

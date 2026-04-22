@@ -35,6 +35,11 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   businessNumber?: string;
+
+  @ApiProperty({ example: "ABC123", required: false, description: "나를 초대한 사람의 추천 코드" })
+  @IsOptional()
+  @IsString()
+  referralCode?: string;
 }
 
 export class LoginDto {

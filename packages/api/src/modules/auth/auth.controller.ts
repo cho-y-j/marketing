@@ -29,6 +29,14 @@ export class AuthController {
     return this.authService.getMe(req.user.id);
   }
 
+  @Get("referral")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "내 추천 코드 + 초대한 친구 목록 + 포인트" })
+  getMyReferral(@Req() req: any) {
+    return this.authService.getMyReferral(req.user.id);
+  }
+
   // === 네이버 스마트플레이스 연동 ===
 
   @Get("naver/status")

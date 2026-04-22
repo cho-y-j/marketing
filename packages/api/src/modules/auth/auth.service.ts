@@ -29,6 +29,33 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
+
+    // 추천 코드로 초대자 찾기 (옵션)
+    let referredByUserId: string | undefined;
+    if (dto.referralCode) {
+      const normalized = dto.referralCode.trim().toUpperCase();
+      const referrer = await this.prisma.user.findUnique({
+        where: { referralCode: normalized },
+        select: { id: true },
+      });
+      if (referrer) referredByUserId = referrer.id;
+      // 코드 존재 안 하면 조용히 무시 — 가입 자체는 막지 않음
+    }
+
+    // 본인 추천 코드 생성 — 중복 시 재시도 (최대 5회)
+    let myCode = "";
+    for (let i = 0; i < 5; i++) {
+      const candidate = generateReferralCode();
+      const exists = await this.prisma.user.findUnique({
+        where: { referralCode: candidate },
+        select: { id: true },
+      });
+      if (!exists) {
+        myCode = candidate;
+        break;
+      }
+    }
+
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
@@ -39,11 +66,60 @@ export class AuthService {
         phone: dto.phone,
         companyName: dto.companyName,
         businessNumber: dto.businessNumber,
+        referralCode: myCode || null,
+        referredByUserId,
       },
     });
 
     const token = this.generateToken(user.id);
     return { user: { id: user.id, email: user.email, name: user.name }, token };
+  }
+
+  async getMyReferral(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        referralCode: true,
+        points: true,
+        referredUsers: {
+          select: { id: true, email: true, name: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        },
+      },
+    });
+    if (!user) throw new UnauthorizedException("사용자를 찾을 수 없습니다");
+
+    // 추천 코드 없으면 즉시 생성 (기존 가입자 백필)
+    if (!user.referralCode) {
+      for (let i = 0; i < 5; i++) {
+        const candidate = generateReferralCode();
+        const exists = await this.prisma.user.findUnique({
+          where: { referralCode: candidate },
+          select: { id: true },
+        });
+        if (!exists) {
+          await this.prisma.user.update({
+            where: { id: userId },
+            data: { referralCode: candidate },
+          });
+          user.referralCode = candidate;
+          break;
+        }
+      }
+    }
+
+    return {
+      referralCode: user.referralCode,
+      points: user.points,
+      invitedCount: user.referredUsers.length,
+      invitedUsers: user.referredUsers.map((u) => ({
+        id: u.id,
+        name: u.name || u.email.split("@")[0],
+        joinedAt: u.createdAt,
+      })),
+    };
   }
 
   async login(dto: LoginDto) {
@@ -255,4 +331,14 @@ export class AuthService {
       return null;
     }
   }
+}
+
+/** 추천 코드 — 대문자+숫자 6자리. 0/O/I/1 같이 헷갈리는 문자 제외 */
+function generateReferralCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 6; i++) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
 }
