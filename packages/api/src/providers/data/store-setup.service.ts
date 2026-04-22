@@ -49,6 +49,83 @@ export class StoreSetupService {
    * 각 단계마다 setupStep 을 DB에 기록 → 프론트에서 진행률 표시 가능.
    * 실패 시 setupStatus=FAILED + setupError 기록 → 재시도 버튼 지원.
    */
+  /**
+   * 기존 경쟁사 전부 삭제하고 현재 키워드 기준으로 재선별.
+   * 셋업 로직이 개선됐거나 매장 정보가 업데이트됐을 때 수동 재실행용.
+   */
+  async rediscoverCompetitors(storeId: string) {
+    const store = await this.prisma.store.findUnique({ where: { id: storeId } });
+    if (!store) throw new Error("매장 없음");
+
+    // 기존 AUTO 경쟁사 삭제 (참조 테이블 순차 정리)
+    const existing = await this.prisma.competitor.findMany({
+      where: { storeId, type: "AUTO" },
+      select: { id: true, competitorPlaceId: true },
+    });
+    const compIds = existing.map((c) => c.id);
+    const compPlaceIds = existing.map((c) => c.competitorPlaceId).filter((x): x is string => !!x);
+    if (compIds.length > 0) {
+      await this.prisma.competitorHistory.deleteMany({ where: { competitorId: { in: compIds } } });
+      // CompetitorAlert 는 storeId 기준 전체 삭제 (재탐색 시 구 알림 그대로 두면 혼란)
+      await this.prisma.competitorAlert.deleteMany({ where: { storeId } });
+      if (compPlaceIds.length > 0) {
+        await this.prisma.competitorDailySnapshot.deleteMany({
+          where: { storeId, competitorPlaceId: { in: compPlaceIds } },
+        });
+      }
+      await this.prisma.competitor.deleteMany({ where: { id: { in: compIds } } });
+      this.logger.log(`[재탐색] 기존 AUTO 경쟁사 ${compIds.length}개 삭제`);
+    }
+
+    // 현재 StoreKeyword 기준 top 쿼리로 재탐색
+    const topKeywords = await this.prisma.storeKeyword.findMany({
+      where: {
+        storeId,
+        type: { in: ["AI_RECOMMENDED", "MAIN"] },
+        monthlySearchVolume: { gt: 0 },
+      },
+      orderBy: { monthlySearchVolume: "desc" },
+      take: 6,
+      select: { keyword: true },
+    });
+    const queries: string[] = [];
+    const withRegion = topKeywords.filter((k) => k.keyword.includes(" "));
+    const withoutRegion = topKeywords.filter((k) => !k.keyword.includes(" "));
+    for (const k of [...withRegion, ...withoutRegion]) {
+      if (queries.length >= 3) break;
+      queries.push(k.keyword.replace(/,/g, ""));
+    }
+    if (queries.length === 0) throw new Error("키워드 없음 — 재탐색 불가");
+    this.logger.log(`[재탐색] 쿼리: ${queries.join(" / ")}`);
+
+    // Place API 부가 정보
+    const placeInfo = store.naverPlaceId
+      ? await this.naverPlace.getPlaceDetail(store.naverPlaceId).catch(() => null)
+      : null;
+
+    await this.findCompetitorsByQueries(
+      storeId,
+      store.name,
+      queries,
+      store.category || "",
+      {
+        visitorReviewCount: placeInfo?.visitorReviewCount,
+        blogReviewCount: placeInfo?.blogReviewCount,
+        address: placeInfo?.address || store.address,
+      },
+    );
+
+    // 새 경쟁사의 과거 30일 backfill
+    try {
+      await this.backfillService.backfillAllCompetitors(storeId);
+    } catch (e: any) {
+      this.logger.warn(`재탐색 backfill 실패: ${e.message}`);
+    }
+
+    const newCount = await this.prisma.competitor.count({ where: { storeId } });
+    return { ok: true, queries, count: newCount };
+  }
+
   async autoSetup(storeId: string) {
     const store = await this.prisma.store.findUnique({ where: { id: storeId } });
     if (!store) return;
@@ -171,33 +248,50 @@ export class StoreSetupService {
         }
       }
 
-      // 3단계: 경쟁매장 탐색 (AI 생성 키워드 상위 3개로 다중 탐색)
+      // 3단계: 경쟁매장 탐색 — 사용자 의도: "내 대표 키워드들(검색량 top)로 검색 시 공통 노출 업체"
       await this.updateSetupStatus(storeId, "RUNNING", "경쟁 매장을 찾는 중...");
       const updatedStore = await this.prisma.store.findUnique({ where: { id: storeId } });
       const finalDistrict = updatedStore?.district || district;
       const finalCategory = updatedStore?.category || category;
-      // 경쟁사 검색 쿼리 3종 조합: 지역+맛집 / 지역+대표메뉴 / AI 키워드 상위 1개
+
+      // 등록된 키워드 중 검색량 top 3을 쿼리로 사용 (검색량 채워진 것만, 지역성 있는 것 우선)
+      const topKeywords = await this.prisma.storeKeyword.findMany({
+        where: {
+          storeId,
+          type: { in: ["AI_RECOMMENDED", "MAIN"] },
+          monthlySearchVolume: { gt: 0 },
+        },
+        orderBy: { monthlySearchVolume: "desc" },
+        take: 6,
+        select: { keyword: true },
+      });
       const competitorSearchQueries: string[] = [];
-      const searchRegion =
-        finalDistrict?.split(/\s+/).pop() || // "마포구 도화동" → "도화동"
-        (placeInfo?.address || "").split(/\s+/).filter(Boolean).slice(-2, -1)[0] ||
-        "";
-      const searchMenu = (finalCategory ?? "")
-        .split(/[>,]/)
-        .map((s: string) => s.trim())
-        .filter((s: string) => s.length >= 2 && s.length <= 6 && !["음식점", "한식"].includes(s))[0];
-      if (searchRegion) {
-        competitorSearchQueries.push(`${searchRegion} 맛집`.replace(/,/g, ""));
-        if (searchMenu) {
-          competitorSearchQueries.push(`${searchRegion} ${searchMenu}`.replace(/,/g, ""));
+      // 메뉴 단독(예: "아구찜") 보다 지역+메뉴(예: "공덕 아구찜") 우선 — 같은 상권 노출 확보
+      const withRegion = topKeywords.filter((k) => k.keyword.includes(" "));
+      const withoutRegion = topKeywords.filter((k) => !k.keyword.includes(" "));
+      for (const k of [...withRegion, ...withoutRegion]) {
+        if (competitorSearchQueries.length >= 3) break;
+        competitorSearchQueries.push(k.keyword.replace(/,/g, ""));
+      }
+
+      // 키워드가 부족하면 기존 로직으로 보강 (초기 가입 실패 방지)
+      if (competitorSearchQueries.length < 2) {
+        const fallbackRegion =
+          finalDistrict?.split(/\s+/).pop() ||
+          (placeInfo?.address || "").split(/\s+/).filter(Boolean).slice(-2, -1)[0] ||
+          "";
+        const fallbackMenu = (finalCategory ?? "")
+          .split(/[>,]/)
+          .map((s: string) => s.trim())
+          .filter((s: string) => s.length >= 2 && s.length <= 6 && !["음식점", "한식"].includes(s))[0];
+        if (fallbackRegion) {
+          competitorSearchQueries.push(`${fallbackRegion} 맛집`.replace(/,/g, ""));
+          if (fallbackMenu) {
+            competitorSearchQueries.push(`${fallbackRegion} ${fallbackMenu}`.replace(/,/g, ""));
+          }
         }
       }
-      // AI 키워드 중 지역+메뉴 형태 하나 추가
-      const aiMenuQuery = aiKeywords.find(
-        (k) => k.includes(" ") && !competitorSearchQueries.some((q) => q === k),
-      );
-      if (aiMenuQuery) competitorSearchQueries.push(aiMenuQuery);
-      this.logger.log(`경쟁사 검색 쿼리: ${competitorSearchQueries.join(" / ")}`);
+      this.logger.log(`경쟁사 검색 쿼리 (내 키워드 기반): ${competitorSearchQueries.join(" / ")}`);
       await this.findCompetitorsByQueries(
         storeId,
         store.name,

@@ -15,6 +15,7 @@ import { CreateCompetitorDto } from "./dto/competitor.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { PrismaService } from "../../common/prisma.service";
 import { NaverPlaceProvider } from "../../providers/naver/naver-place.provider";
+import { StoreSetupService } from "../../providers/data/store-setup.service";
 
 @ApiTags("경쟁 매장")
 @Controller("stores/:storeId/competitors")
@@ -26,6 +27,7 @@ export class CompetitorController {
     private backfillService: CompetitorBackfillService,
     private prisma: PrismaService,
     private naverPlace: NaverPlaceProvider,
+    private storeSetup: StoreSetupService,
   ) {}
 
   @Get("search")
@@ -79,6 +81,12 @@ export class CompetitorController {
   @ApiOperation({ summary: "경쟁 매장 데이터 새로고침" })
   refresh(@Param("storeId") storeId: string) {
     return this.competitorService.refreshAll(storeId);
+  }
+
+  @Post("rediscover")
+  @ApiOperation({ summary: "경쟁사 재탐색 — 현재 키워드 기준 교집합 스코어로 재선별" })
+  rediscover(@Param("storeId") storeId: string) {
+    return this.storeSetup.rediscoverCompetitors(storeId);
   }
 
   @Post("backfill-place-ids")
