@@ -75,6 +75,137 @@ export class DashboardService {
       type: c.type,
     }));
 
+    // === 6. 주간 성과/격차 (홈 대시보드 "지금 경쟁 구도" 섹션용) ===
+    const now = new Date();
+    const weekAgo = new Date(now);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    weekAgo.setUTCHours(0, 0, 0, 0);
+
+    // 내 매장 주간 증감
+    const [myLatest, myWeekAgo] = await Promise.all([
+      this.prisma.storeDailySnapshot.findFirst({
+        where: { storeId },
+        orderBy: { date: "desc" },
+        select: { visitorReviewCount: true, blogReviewCount: true, date: true },
+      }),
+      this.prisma.storeDailySnapshot.findFirst({
+        where: { storeId, date: { lte: weekAgo } },
+        orderBy: { date: "desc" },
+        select: { visitorReviewCount: true, blogReviewCount: true, date: true },
+      }),
+    ]);
+    const myOldest = myWeekAgo
+      ? null
+      : await this.prisma.storeDailySnapshot.findFirst({
+          where: { storeId },
+          orderBy: { date: "asc" },
+          select: { visitorReviewCount: true, blogReviewCount: true, date: true },
+        });
+    const myBaseline = myWeekAgo || myOldest;
+    const myWeeklyGrowth =
+      myLatest && myBaseline
+        ? {
+            visitor:
+              myLatest.visitorReviewCount != null && myBaseline.visitorReviewCount != null
+                ? myLatest.visitorReviewCount - myBaseline.visitorReviewCount
+                : null,
+            blog:
+              myLatest.blogReviewCount != null && myBaseline.blogReviewCount != null
+                ? myLatest.blogReviewCount - myBaseline.blogReviewCount
+                : null,
+            spanDays: myBaseline.date
+              ? Math.max(
+                  1,
+                  Math.round((myLatest.date.getTime() - myBaseline.date.getTime()) / 86400000),
+                )
+              : null,
+            isEstimated: !myWeekAgo, // 7일치 안 쌓여있으면 추정
+          }
+        : null;
+
+    // 경쟁사 주간 증감 top 3 (가장 공격적인 경쟁사 = 증가 많은 순)
+    const placeIds = competitors
+      .map((c) => c.competitorPlaceId)
+      .filter((x): x is string => !!x)
+      .slice(0, 10);
+    const compSnapshots = placeIds.length
+      ? await this.prisma.competitorDailySnapshot.findMany({
+          where: {
+            storeId,
+            competitorPlaceId: { in: placeIds },
+          },
+          orderBy: { date: "desc" },
+          select: {
+            competitorPlaceId: true,
+            date: true,
+            visitorReviewCount: true,
+            blogReviewCount: true,
+          },
+        })
+      : [];
+    // placeId 별 latest + weekAgo
+    const byPlace = new Map<
+      string,
+      {
+        latest: { visitor: number | null; blog: number | null; date: Date } | null;
+        weekAgo: { visitor: number | null; blog: number | null; date: Date } | null;
+        oldest: { visitor: number | null; blog: number | null; date: Date } | null;
+      }
+    >();
+    for (const s of compSnapshots) {
+      const key = s.competitorPlaceId;
+      const entry = byPlace.get(key) || { latest: null, weekAgo: null, oldest: null };
+      if (!entry.latest) {
+        entry.latest = {
+          visitor: s.visitorReviewCount,
+          blog: s.blogReviewCount,
+          date: s.date,
+        };
+      }
+      if (s.date.getTime() <= weekAgo.getTime() && !entry.weekAgo) {
+        entry.weekAgo = {
+          visitor: s.visitorReviewCount,
+          blog: s.blogReviewCount,
+          date: s.date,
+        };
+      }
+      entry.oldest = {
+        visitor: s.visitorReviewCount,
+        blog: s.blogReviewCount,
+        date: s.date,
+      };
+      byPlace.set(key, entry);
+    }
+    const competitorWeeklyGrowth = competitors
+      .filter((c) => c.competitorPlaceId && byPlace.has(c.competitorPlaceId))
+      .map((c) => {
+        const e = byPlace.get(c.competitorPlaceId!)!;
+        const baseline = e.weekAgo || e.oldest;
+        const latest = e.latest;
+        if (!latest || !baseline) return null;
+        const visitor =
+          latest.visitor != null && baseline.visitor != null
+            ? latest.visitor - baseline.visitor
+            : null;
+        const blog =
+          latest.blog != null && baseline.blog != null ? latest.blog - baseline.blog : null;
+        const spanDays = Math.max(
+          1,
+          Math.round((latest.date.getTime() - baseline.date.getTime()) / 86400000),
+        );
+        return {
+          name: c.competitorName,
+          placeId: c.competitorPlaceId,
+          visitor,
+          blog,
+          totalGrowth: (visitor ?? 0) + (blog ?? 0),
+          spanDays,
+          isEstimated: !e.weekAgo,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null)
+      .sort((a, b) => (b.totalGrowth ?? 0) - (a.totalGrowth ?? 0));
+
     return {
       store: {
         name: store.name,
@@ -102,6 +233,8 @@ export class DashboardService {
       keywordStrategy,
       keywordRanks,
       competitorComparison,
+      myWeeklyGrowth,
+      competitorWeeklyGrowth: competitorWeeklyGrowth.slice(0, 3),
       myMetrics: analysis
         ? {
             receiptReviewCount: analysis.receiptReviewCount,
