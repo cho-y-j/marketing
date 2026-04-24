@@ -73,14 +73,20 @@ export function Sidebar() {
         </Link>
       </div>
 
-      {/* 매장 등록 */}
-      <div className="px-3 pt-4">
+      {/* 매장 관리 + 등록 */}
+      <div className="px-3 pt-4 space-y-2">
         <Link
           href="/stores/new"
           className="flex items-center justify-center gap-2 h-9 rounded-xl text-xs font-semibold bg-brand text-white hover:bg-brand-dark transition-colors"
         >
           <PlusCircle size={14} />
           매장 등록
+        </Link>
+        <Link
+          href="/stores"
+          className="flex items-center justify-center gap-2 h-8 rounded-xl text-xs font-medium border border-border-primary text-text-secondary hover:bg-bg-secondary transition-colors"
+        >
+          내 매장 목록 · 삭제
         </Link>
       </div>
 
