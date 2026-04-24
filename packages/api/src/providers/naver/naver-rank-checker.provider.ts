@@ -352,4 +352,34 @@ export class NaverRankCheckerProvider {
     }
     return results;
   }
+
+  /**
+   * 키워드 검색 실제 네이버 플레이스 Top N 매장 반환 (경쟁사 수집용).
+   * - `/search/local.json` (sort=comment, 단순 리뷰많은순) 은 실제 플레이스 랭킹과 달라서
+   *   "신길 맛집"에 스타벅스/맥도날드가 위로 뜨는 참사 발생 → 이 메서드로 교체 필수
+   * - 페이지네이션으로 Top count 까지 수집 (최대 50 권장)
+   * - 반환 순서 = 네이버 플레이스 검색 노출 순서
+   */
+  async fetchTopPlaces(
+    keyword: string,
+    count: number = 20,
+  ): Promise<Array<{ id: string | null; name: string; rank: number }>> {
+    const places: Array<{ id: string | null; name: string; rank: number }> = [];
+    const seen = new Set<string>();
+    const PAGE_STEP = 10;
+    for (let start = 1; places.length < count && start <= NaverRankCheckerProvider.MAX_RANK; start += PAGE_STEP) {
+      const page = await this.fetchPlacesFromSearchHtml(keyword, start);
+      if (page.length === 0) break;
+      for (const p of page) {
+        const key = p.name.replace(/\s+/g, "");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        places.push({ ...p, rank: places.length + 1 });
+        if (places.length >= count) break;
+      }
+      if (start > 1) await new Promise((r) => setTimeout(r, 300));
+    }
+    this.logger.log(`[fetchTopPlaces] "${keyword}" Top ${places.length}개 수집`);
+    return places;
+  }
 }

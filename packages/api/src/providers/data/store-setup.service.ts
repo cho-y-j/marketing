@@ -3,6 +3,7 @@ import { PrismaService } from "../../common/prisma.service";
 import { NaverSearchadProvider } from "../naver/naver-searchad.provider";
 import { NaverSearchProvider } from "../naver/naver-search.provider";
 import { NaverPlaceProvider } from "../naver/naver-place.provider";
+import { NaverRankCheckerProvider } from "../naver/naver-rank-checker.provider";
 import { AIProvider } from "../ai/ai.provider";
 import { KeywordDiscoveryService } from "../../modules/keyword/keyword-discovery.service";
 import { RankCheckService } from "../../modules/keyword/rank-check.service";
@@ -22,6 +23,7 @@ export class StoreSetupService {
     private searchad: NaverSearchadProvider,
     private naverSearch: NaverSearchProvider,
     private naverPlace: NaverPlaceProvider,
+    private rankChecker: NaverRankCheckerProvider,
     private ai: AIProvider,
     @Inject(forwardRef(() => KeywordDiscoveryService))
     private keywordDiscovery: KeywordDiscoveryService,
@@ -513,29 +515,13 @@ export class StoreSetupService {
       }
 
       // 7-3단계: 주변 축제/이벤트 수집 (TourAPI) — 매장 지역 90일치
+      // 축제 데이터만 SeasonalEvent 테이블에 저장. StoreKeyword 자동 삽입 금지.
+      // (축제명 raw 단어를 매장 키워드로 꽂으면 "서울"/"DDP" 같은 쓰레기가 유입됨 — 2026-04-24 의뢰자 확정)
+      // 사장님이 시즌 이벤트 화면에서 원하는 축제만 수동으로 키워드에 추가하는 경로만 유지.
       await this.updateSetupStatus(storeId, "RUNNING", "주변 축제/이벤트 수집 중...");
       try {
         const eventCount = await this.eventCollector.collectForStore(storeId, 90);
         this.logger.log(`축제 ${eventCount}개 수집 완료`);
-
-        // 진행 중인 축제 키워드를 SEASONAL 로 StoreKeyword 에 자동 추가
-        const active = await this.eventCollector.getActiveEventsForStore(storeId);
-        let seasonalAdded = 0;
-        for (const ev of active.slice(0, 3)) {
-          const topKeywords = (ev.keywords as any[])?.slice(0, 2) || [];
-          for (const kw of topKeywords) {
-            if (typeof kw !== "string" || kw.length < 2 || kw.length > 20) continue;
-            try {
-              await this.prisma.storeKeyword.create({
-                data: { storeId, keyword: kw, type: "SEASONAL" },
-              });
-              seasonalAdded++;
-            } catch {} // unique 충돌은 무시
-          }
-        }
-        if (seasonalAdded > 0) {
-          this.logger.log(`시즌 키워드 ${seasonalAdded}개 자동 등록`);
-        }
       } catch (e: any) {
         this.logger.warn(`축제 수집 실패 (나중에 재시도 가능): ${e.message}`);
       }
@@ -1179,12 +1165,13 @@ ${catalogText}
    *    판단 기준: 같은 상권 / 같은 업종 / 내 매장보다 리뷰 많거나 비슷한 매장 / 체인점/무관 제외
    */
   /**
-   * 2026-04-24 재설계 — 2-레이어 경쟁사 수집:
-   *  - EXPOSURE: MAIN 키워드(예: "공덕 맛집") Top 10 → 업종 필터 OFF, Naver Top 10 그대로 저장
-   *              → "상권 슬롯 경쟁" 의미. 카페·일식·주점이어도 포함 (검색 의도=메뉴 미정)
-   *  - DIRECT:   secondary 쿼리(메뉴+지역) Top → 교집합 + AI 선별 → 저장
-   *              → "같은 업종 직접 경쟁" 의미
-   *  - BOTH:     EXPOSURE + DIRECT 양쪽 모두 나오는 최강 경쟁사
+   * 2026-04-24 근본 재설계 — 경쟁사 수집:
+   *  - 소스: `rankChecker.fetchTopPlaces` (네이버 플레이스 HTML 검색 Top)
+   *         → `naverSearch.searchPlace` (지역 OpenAPI sort=comment) 금지.
+   *           단순 리뷰많은순이라 "신길 맛집" 에 스타벅스/맥도날드/버거킹 뜨는 참사
+   *  - 필터: 음식점만 (카페/디저트/패스트푸드/주점/편의점 제외) — 의뢰자 명시 확정
+   *  - EXPOSURE: MAIN 키워드(예: "신길 맛집") Top 중 음식점만
+   *  - DIRECT:   secondary(메뉴+지역) Top 중 음식점만 + AI 선별
    */
   private async findCompetitorsByQueries(
     storeId: string,
@@ -1214,28 +1201,27 @@ ${catalogText}
       return false;
     };
 
-    // ========== Stage 1: EXPOSURE 수집 (MAIN 키워드 Top 10, 업종 필터 OFF) ==========
-    const exposureNames = new Set<string>(); // 정규화된 이름 기준
+    // ========== Stage 1: EXPOSURE 수집 (MAIN 키워드 플레이스 HTML Top 20) ==========
+    // 음식점 필터는 Stage 3 Place API 카테고리 보강 후 적용
+    const exposureNames = new Set<string>();
     const exposureCandidates: Candidate[] = [];
     if (queryPlan.main) {
-      this.logger.log(`[EXPOSURE 수집] "${queryPlan.main}" Top 10`);
+      this.logger.log(`[EXPOSURE 수집] "${queryPlan.main}" 플레이스 HTML Top 20`);
       try {
-        const results = await this.naverSearch.searchPlace(queryPlan.main, 10);
+        const results = await this.rankChecker.fetchTopPlaces(queryPlan.main, 20);
         for (const r of results) {
-          const name = r.title.replace(/<[^>]*>/g, "").trim();
-          const normalized = name.replace(/\s+/g, "");
-          if (isSelf(normalized, name)) continue;
+          const normalized = r.name.replace(/\s+/g, "");
+          if (isSelf(normalized, r.name)) continue;
           if (exposureNames.has(normalized)) continue;
           exposureNames.add(normalized);
           exposureCandidates.push({
-            name,
-            category: r.category,
-            address: r.roadAddress || r.address,
+            name: r.name,
+            placeId: r.id || undefined,
             appearances: 1,
             queryMatches: [queryPlan.main],
           });
         }
-        this.logger.log(`[EXPOSURE] ${exposureCandidates.length}곳 수집 (업종 필터 OFF)`);
+        this.logger.log(`[EXPOSURE] ${exposureCandidates.length}곳 수집 (필터 전)`);
       } catch (e: any) {
         this.logger.warn(`[EXPOSURE] 수집 실패 "${queryPlan.main}": ${e.message}`);
       }
@@ -1243,25 +1229,23 @@ ${catalogText}
       this.logger.warn(`[EXPOSURE] MAIN 키워드 없음 — skip`);
     }
 
-    // ========== Stage 2: DIRECT 후보 수집 (secondary 쿼리들, 교집합) ==========
+    // ========== Stage 2: DIRECT 후보 수집 (secondary 쿼리 플레이스 HTML) ==========
     const directCandMap = new Map<string, Candidate>();
     for (const query of queryPlan.secondary) {
       try {
-        this.logger.log(`[DIRECT 후보 수집] "${query}"`);
-        const results = await this.naverSearch.searchPlace(query, 10);
+        this.logger.log(`[DIRECT 후보 수집] "${query}" 플레이스 HTML Top 15`);
+        const results = await this.rankChecker.fetchTopPlaces(query, 15);
         for (const r of results) {
-          const name = r.title.replace(/<[^>]*>/g, "").trim();
-          const normalized = name.replace(/\s+/g, "");
-          if (isSelf(normalized, name)) continue;
+          const normalized = r.name.replace(/\s+/g, "");
+          if (isSelf(normalized, r.name)) continue;
           const existing = directCandMap.get(normalized);
           if (existing) {
             existing.appearances += 1;
             if (!existing.queryMatches.includes(query)) existing.queryMatches.push(query);
           } else {
             directCandMap.set(normalized, {
-              name,
-              category: r.category,
-              address: r.roadAddress || r.address,
+              name: r.name,
+              placeId: r.id || undefined,
               appearances: 1,
               queryMatches: [query],
             });
@@ -1275,7 +1259,7 @@ ${catalogText}
       (a, b) => b.appearances - a.appearances,
     );
     this.logger.log(
-      `[DIRECT] 후보 ${directCandidates.length}개 — 교집합(≥2) ${directCandidates.filter((c) => c.appearances >= 2).length}개`,
+      `[DIRECT] 후보 ${directCandidates.length}개 (필터 전) — 교집합(≥2) ${directCandidates.filter((c) => c.appearances >= 2).length}개`,
     );
 
     // 조기 종료 — EXPOSURE + DIRECT 후보 모두 0이면 더 진행 불가
@@ -1297,12 +1281,15 @@ ${catalogText}
       }
     }
     const allCandidates = Array.from(allCandidatesMap.values());
-    const enriched: Candidate[] = [];
+    const enrichedRaw: Candidate[] = [];
     for (const c of allCandidates) {
       try {
-        const info = await this.naverPlace.searchAndGetPlaceInfo(c.name);
+        // placeId 가 이미 있으면 getPlaceDetail, 없으면 이름 검색 후 상세
+        const info = c.placeId
+          ? await this.naverPlace.getPlaceDetail(c.placeId)
+          : await this.naverPlace.searchAndGetPlaceInfo(c.name);
         if (info) {
-          enriched.push({
+          enrichedRaw.push({
             ...c,
             placeId: info.id,
             category: info.category || c.category,
@@ -1311,16 +1298,43 @@ ${catalogText}
             blogReviewCount: info.blogReviewCount,
           });
         } else {
-          enriched.push(c);
+          enrichedRaw.push(c);
         }
       } catch {
-        enriched.push(c);
+        enrichedRaw.push(c);
       }
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    // ========== Stage 4: DIRECT 만 AI 선별 (EXPOSURE 는 Top 10 무조건 포함) ==========
-    // DIRECT 후보 = enriched 중 DIRECT 후보 원본에 있던 것만
+    // ========== Stage 3.5: 음식점 필터 (카페/패스트푸드/주점/편의점 제외) ==========
+    // 의뢰자 명시 확정 (2026-04-24): "스타벅스가 경쟁 상대냐. 영등포 맛집/신길 맛집 검색해서 나오는 음식점만"
+    const myIsBunsik = /분식/.test(category); // 내 매장이 분식이면 분식 경쟁 허용
+    const isRestaurantCategory = (cat: string | undefined): boolean => {
+      if (!cat) return false; // 카테고리 모르면 제외 (보수적)
+      // 제외 (경쟁 아님): 카페/디저트/패스트푸드/주점/편의점/기타
+      if (/카페|디저트|베이커리|빵집|빙수|아이스크림|도넛|와플|케이크|쥬스|주스/.test(cat)) return false;
+      if (/햄버거|피자|치킨|패스트푸드|프라이드/.test(cat)) return false;
+      if (/주점|술집|호프|맥주|와인바|위스키|칵테일|바\(bar\)|바&|이자카야/.test(cat)) return false;
+      if (/편의점|마트|슈퍼|정육점|반찬가게|반찬|도시락/.test(cat)) return false;
+      if (/노래|pc방|찜질|사우나|게임|카라오케/.test(cat)) return false;
+      // 분식은 내 매장이 분식일 때만 포함
+      if (/분식/.test(cat) && !myIsBunsik) return false;
+      // 포함 (음식점): 한식/양식/일식/중식/아시안/뷔페 등
+      return true;
+    };
+
+    const enriched = enrichedRaw.filter((c) => {
+      const ok = isRestaurantCategory(c.category);
+      if (!ok) {
+        this.logger.log(`[음식점 필터] 제외: ${c.name} (업종: ${c.category || "미상"})`);
+      }
+      return ok;
+    });
+    this.logger.log(
+      `[음식점 필터] ${enrichedRaw.length}곳 → ${enriched.length}곳 (제외 ${enrichedRaw.length - enriched.length})`,
+    );
+
+    // ========== Stage 4: DIRECT 만 AI 선별 ==========
     const directOnly = enriched.filter((c) => {
       const key = c.name.replace(/\s+/g, "");
       return directCandMap.has(key);
@@ -1339,8 +1353,13 @@ ${catalogText}
       `[DIRECT] AI 선별 ${directSelected.length}곳: ${directSelected.map((c) => c.name).join(", ")}`,
     );
 
-    // ========== Stage 5: 저장 — EXPOSURE / DIRECT / BOTH 분류 ==========
-    const exposureKeys = new Set(exposureCandidates.map((c) => c.name.replace(/\s+/g, "")));
+    // ========== Stage 5: 저장 — EXPOSURE / DIRECT / BOTH 분류 (음식점만) ==========
+    const enrichedKeys = new Set(enriched.map((c) => c.name.replace(/\s+/g, "")));
+    const exposureKeys = new Set(
+      exposureCandidates
+        .map((c) => c.name.replace(/\s+/g, ""))
+        .filter((k) => enrichedKeys.has(k)), // 음식점 필터 통과한 것만
+    );
     const directSelectedKeys = new Set(directSelected.map((c) => c.name.replace(/\s+/g, "")));
 
     // 저장 대상: exposureCandidates 전체 + directSelected 전체 (중복 제거)
