@@ -64,8 +64,12 @@ export function useDashboard(storeId: string) {
       };
     },
     enabled: !!storeId,
-    // AI 보강 진행 중이면 8초마다 재조회 (캐시 채워지면 즉시 반영) — 아니면 60초
-    refetchInterval: (query) =>
-      (query.state.data as any)?.aiPending ? 8000 : 60000,
+    // AI/setup 진행 중이면 5초마다 재조회 (원형 진행률 실시간 반영) — 아니면 60초
+    refetchInterval: (query) => {
+      const d: any = query.state.data;
+      if (d?.aiPending) return 5000;
+      if (d?.setupProgress?.inProgress) return 5000;
+      return 60000;
+    },
   });
 }

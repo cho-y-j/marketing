@@ -226,13 +226,48 @@ export class DashboardService {
       .filter((x): x is NonNullable<typeof x> => x != null)
       .sort((a, b) => (b.totalGrowth ?? 0) - (a.totalGrowth ?? 0));
 
+    // === setupProgress 계산 (2026-04-24 진정한 백그라운드 가입용) ===
+    // 6단계: 키워드/경쟁사/첫분석/순위체크/30일백필/브리핑
+    const hasKeywords = keywords.length > 0;
+    const hasCompetitors = competitors.length > 0;
+    const hasAnalysis = analysis != null;
+    const hasRank = keywords.some((k) => k.currentRank != null);
+    // 30일 백필 완료 여부 = 내 매장 DailySnapshot 존재
+    const snapshotCount = await this.prisma.storeDailySnapshot.count({
+      where: { storeId },
+    });
+    const hasBackfill = snapshotCount >= 5; // 최소 5일치 이상 있으면 완료로 간주
+    const hasBriefing = await this.prisma.dailyBriefing
+      .findFirst({ where: { storeId } })
+      .then((b) => b != null);
+
+    const steps = [
+      { key: "keywords", label: "키워드", done: hasKeywords },
+      { key: "competitors", label: "경쟁사", done: hasCompetitors },
+      { key: "analysis", label: "첫 분석", done: hasAnalysis },
+      { key: "rank", label: "순위 체크", done: hasRank },
+      { key: "backfill", label: "30일 추이", done: hasBackfill },
+      { key: "briefing", label: "브리핑", done: hasBriefing },
+    ];
+    const completedCount = steps.filter((s) => s.done).length;
+    const setupProgress = {
+      total: steps.length,
+      completed: completedCount,
+      percent: Math.round((completedCount / steps.length) * 100),
+      steps,
+      inProgress: completedCount < steps.length,
+    };
+
     return {
       store: {
         name: store.name,
         category: store.category,
         address: store.address,
         competitiveScore: store.competitiveScore,
+        setupStatus: store.setupStatus,
+        setupStep: store.setupStep,
       },
+      setupProgress,
       status: {
         level: competitiveLevel,
         avgRank,

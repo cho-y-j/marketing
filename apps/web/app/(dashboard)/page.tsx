@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { OnboardingCard } from "@/components/dashboard/onboarding-card";
 import { SetupProgressCard } from "@/components/dashboard/setup-progress-card";
+import { SetupProgressRing } from "@/components/dashboard/setup-progress-ring";
 import { IngredientAlertBar } from "@/components/dashboard/ingredient-alert-bar";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useCreateStore } from "@/hooks/useStore";
@@ -98,7 +99,10 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* 셋업 진행 중 */}
+      {/* 진정한 백그라운드 가입 — 6단계 원형 진행률 (완료 시 자동 숨김) */}
+      {d.setupProgress && <SetupProgressRing progress={d.setupProgress} />}
+
+      {/* 셋업 진행 중 (기존 카드 — setupStatus RUNNING/FAILED 일 때만 노출) */}
       {storeId && <SetupProgressCard storeId={storeId} />}
       <IngredientAlertBar storeId={storeId} />
 
