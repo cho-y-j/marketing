@@ -352,7 +352,7 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
             </div>
             <div className="text-right shrink-0">
               <div className={`text-2xl font-black ${rankColor}`}>
-                {myRank ? `${myRank}위` : <span className="text-base">100위 밖</span>}
+                {myRank ? `${myRank}위` : <span className="text-base">300위 밖</span>}
               </div>
               {/* 순위 변동 (어제 대비) */}
               {kw.rankChange != null && (

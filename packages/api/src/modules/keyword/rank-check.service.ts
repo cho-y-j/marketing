@@ -35,44 +35,64 @@ export class RankCheckService {
 
     // DB 업데이트 + 히스토리 저장 + 순위 변동 알림
     const rankChanges: Array<{ keyword: string; prev: number; curr: number; diff: number }> = [];
+    let unreliableCount = 0;
 
     for (const result of results) {
       const kw = store.keywords.find((k) => k.keyword === result.keyword);
-      if (kw) {
-        // 키워드 순위 업데이트
+      if (!kw) continue;
+
+      // 2026-04-24 — reliable=false 결과는 currentRank 덮어쓰지 않음 (04:14 cron 같은 NULL 오염 방지)
+      // lastCheckedAt 만 갱신해서 "시도는 했음" 시그널만 남김 — 이전 순위는 유지
+      if (!result.reliable) {
+        unreliableCount++;
         await this.prisma.storeKeyword.update({
           where: { id: kw.id },
-          data: {
-            previousRank: kw.currentRank,
-            currentRank: result.rank,
-            lastCheckedAt: result.checkedAt,
-          },
+          data: { lastCheckedAt: result.checkedAt },
         });
+        // 히스토리도 저장하지 않음 — 신뢰 불가 데이터는 기록 오염
+        continue;
+      }
 
-        // 히스토리 레코드 생성 (일별 누적)
-        await this.prisma.keywordRankHistory.create({
-          data: {
-            storeId,
+      // 키워드 순위 업데이트 (신뢰 가능한 결과만)
+      await this.prisma.storeKeyword.update({
+        where: { id: kw.id },
+        data: {
+          previousRank: kw.currentRank,
+          currentRank: result.rank,
+          lastTotalResults: result.totalResults,
+          lastCheckedAt: result.checkedAt,
+        },
+      });
+
+      // 히스토리 레코드 생성 (일별 누적)
+      await this.prisma.keywordRankHistory.create({
+        data: {
+          storeId,
+          keyword: result.keyword,
+          rank: result.rank,
+          totalResults: result.totalResults,
+          topPlaces: result.topPlaces,
+        },
+      });
+
+      // 순위 변동 감지 (이전 순위가 있고, 3단계 이상 변동 시)
+      if (kw.currentRank && result.rank) {
+        const diff = kw.currentRank - result.rank; // 양수 = 상승
+        if (Math.abs(diff) >= 3) {
+          rankChanges.push({
             keyword: result.keyword,
-            rank: result.rank,
-            totalResults: result.totalResults,
-            topPlaces: result.topPlaces,
-          },
-        });
-
-        // 순위 변동 감지 (이전 순위가 있고, 3단계 이상 변동 시)
-        if (kw.currentRank && result.rank) {
-          const diff = kw.currentRank - result.rank; // 양수 = 상승
-          if (Math.abs(diff) >= 3) {
-            rankChanges.push({
-              keyword: result.keyword,
-              prev: kw.currentRank,
-              curr: result.rank,
-              diff,
-            });
-          }
+            prev: kw.currentRank,
+            curr: result.rank,
+            diff,
+          });
         }
       }
+    }
+
+    if (unreliableCount > 0) {
+      this.logger.warn(
+        `[rank] ${unreliableCount}개 키워드 신뢰도 부족 — currentRank 유지 (이전 값 보존)`,
+      );
     }
 
     // 순위 변동 알림 발송

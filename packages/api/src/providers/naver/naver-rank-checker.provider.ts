@@ -7,6 +7,14 @@ export interface RankCheckResult {
   keyword: string;
   rank: number | null;
   totalResults: number;
+  /**
+   * 2026-04-24 추가 — 수집 신뢰도 플래그.
+   * false 인 경우:
+   *  - HTML scrape 실패 + 재시도 실패 (네이버 블락/rate limit)
+   *  - totalResults < MIN_RELIABLE_RESULTS (응답 비정상 의심)
+   * service layer 는 reliable=false 인 결과로 currentRank 를 덮어쓰지 않아야 함.
+   */
+  reliable: boolean;
   topPlaces: Array<{
     name: string;
     rank: number;
@@ -31,11 +39,20 @@ export class NaverRankCheckerProvider {
   ) {}
 
   /**
-   * 순위 체크 — search.naver.com HTML 스크래핑(axios) + Place API 병렬 보강.
-   * Chrome/브라우저 불필요. 네이버는 매장 검색결과를 SSR 로 내려줘서 axios 로
-   * 충분하며, 각 매장의 방문자/블로그 리뷰는 Place API 로 채워 풍부하게 반환.
-   * Top 100 까지 확장 (이전 Chrome 경로의 top 10 + name-only 대비 훨씬 상세).
+   * 순위 체크 — search.naver.com HTML 페이지네이션(최대 Top 300) + Place API 병렬 보강.
+   *
+   * 2026-04-24 재설계 (Phase 10-B):
+   *  - 네이버 공식 local.json API 는 display 하드 리밋 5 → 폴백으로 쓰면 rank=null 오염
+   *  - HTML scrape 실패 시 local.json 으로 떨어지지 않음 (currentRank 덮어쓰기 금지)
+   *  - Top 300 까지 페이지네이션 (start=1,11,21,...,291)
+   *  - 21~300위는 이름/placeId 만 수집 (상세 API 호출은 Top 20 만 — 비용 절감)
+   *  - 내 매장 찾으면 Stage 2 조기 종료
+   *  - reliable=false 로 호출자에게 신뢰도 시그널 전달
    */
+  private static readonly MIN_RELIABLE_RESULTS = 10; // 이보다 적으면 "수집 비정상" 판정
+  private static readonly MAX_RANK = 300;            // Top 300 까지 추적
+  private static readonly DETAIL_TOP_N = 20;         // 상위 N 개만 Place API 상세 호출
+
   async checkPlaceRank(
     keyword: string,
     storeName: string,
@@ -49,106 +66,160 @@ export class NaverRankCheckerProvider {
     storeName: string,
     naverPlaceId?: string,
   ): Promise<RankCheckResult> {
-    try {
-      // 더 많은 결과를 위해 search.naver.com HTML도 활용 (id+name 추출)
-      const naverPlaces = await this.fetchPlacesFromSearchHtml(keyword);
-      // 폴백: 공식 검색 API
-      const officialPlaces = naverPlaces.length > 0
-        ? naverPlaces
-        : (await this.naverSearch.searchPlace(keyword, 10)).map((p) => ({
-            id: null as string | null,
-            name: p.title.replace(/<[^>]*>/g, "").trim(),
-          }));
+    const normalizedStore = storeName.replace(/\s+/g, "");
+    const isSelf = (p: { id: string | null; name: string }): boolean => {
+      if (naverPlaceId && p.id && p.id === naverPlaceId) return true;
+      if (!naverPlaceId && p.name.replace(/\s+/g, "") === normalizedStore) return true;
+      return false;
+    };
 
-      const normalizedStore = storeName.replace(/\s+/g, "");
-      const topPlaces: RankCheckResult["topPlaces"] = [];
-      let rank: number | null = null;
-
-      // Top 100까지 확장 (애드로그 수준 + 초과)
-      const limit = Math.min(officialPlaces.length, 100);
-
-      // 1) isMine 매칭은 빠르게 (Place API 없이) — rank 빠르게 산출
-      for (let i = 0; i < limit; i++) {
-        const p = officialPlaces[i];
-        let isMine = false;
-        if (naverPlaceId && p.id && p.id === naverPlaceId) {
-          isMine = true;
-        } else if (!naverPlaceId) {
-          isMine = p.name.replace(/\s+/g, "") === normalizedStore;
-        }
-        if (isMine && rank === null) rank = i + 1;
-      }
-
-      // 2) Place API 병렬 호출 (배치 5개씩, 100개 매장 → 20번 배치)
-      const BATCH_SIZE = 5;
-      for (let batchStart = 0; batchStart < limit; batchStart += BATCH_SIZE) {
-        const batch = officialPlaces.slice(batchStart, batchStart + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (p, j) => {
-            const i = batchStart + j;
-            const cleanName = p.name;
-            let detail: any = null;
-            try {
-              if (p.id) {
-                detail = await this.naverPlace.getPlaceDetail(p.id);
-              } else {
-                detail = await this.naverPlace.searchAndGetPlaceInfo(cleanName);
-              }
-            } catch {}
-
-            const isMine =
-              (naverPlaceId && p.id && p.id === naverPlaceId) ||
-              (!naverPlaceId && cleanName.replace(/\s+/g, "") === normalizedStore);
-
-            return {
-              name: cleanName,
-              rank: i + 1,
-              placeId: p.id || detail?.id || undefined,
-              category: detail?.category || undefined,
-              visitorReviewCount: detail?.visitorReviewCount || undefined,
-              blogReviewCount: detail?.blogReviewCount || undefined,
-              saveCount: detail?.saveCount || undefined,
-              isMine: !!isMine,
-            };
-          }),
-        );
-        topPlaces.push(...results);
-      }
-
-      this.logger.log(
-        `순위 체크(API폴백): "${keyword}" → ${storeName}: ${rank ? `${rank}위` : `${topPlaces.length}위 밖`} (${topPlaces.length}개 매장 + 상세 수집)`,
+    // ========== Stage 1: Top 30 수집 (1차 시도 + 재시도) ==========
+    // 첫 페이지 (start=1) 만으로도 사이트 특성상 보통 20~30개 옴
+    let firstPagePlaces = await this.fetchPlacesFromSearchHtml(keyword, 1);
+    if (firstPagePlaces.length < NaverRankCheckerProvider.MIN_RELIABLE_RESULTS) {
+      this.logger.warn(
+        `[rank] "${keyword}" 1차 수집 부족 (${firstPagePlaces.length}개) — 1.5초 후 재시도`,
       );
+      await new Promise((r) => setTimeout(r, 1500));
+      firstPagePlaces = await this.fetchPlacesFromSearchHtml(keyword, 1);
+    }
 
+    // 재시도 후에도 신뢰도 부족 → 호출자에게 reliable=false 반환, currentRank 덮어쓰기 금지
+    if (firstPagePlaces.length < NaverRankCheckerProvider.MIN_RELIABLE_RESULTS) {
+      this.logger.warn(
+        `[rank] "${keyword}" 재시도 후에도 ${firstPagePlaces.length}개 — 신뢰도 부족, skip`,
+      );
       return {
         keyword,
-        rank,
-        totalResults: topPlaces.length,
-        topPlaces,
+        rank: null,
+        totalResults: firstPagePlaces.length,
+        reliable: false,
+        topPlaces: [],
         checkedAt: new Date(),
       };
-    } catch (e: any) {
-      this.logger.warn(`검색API 순위 체크 실패 [${keyword}]: ${e.message}`);
-      return { keyword, rank: null, totalResults: 0, topPlaces: [], checkedAt: new Date() };
     }
+
+    // ========== Stage 2: Top 300 까지 페이지네이션 (내 매장 찾으면 조기 종료) ==========
+    let rank: number | null = null;
+    const allPlaces: Array<{ id: string | null; name: string }> = [];
+    const seenNames = new Set<string>();
+    const pushUnique = (place: { id: string | null; name: string }) => {
+      const key = place.name.replace(/\s+/g, "");
+      if (!seenNames.has(key)) {
+        seenNames.add(key);
+        allPlaces.push(place);
+      }
+    };
+
+    for (const p of firstPagePlaces) pushUnique(p);
+    // 내 매장 찾았는지 확인
+    for (let i = 0; i < allPlaces.length; i++) {
+      if (isSelf(allPlaces[i])) {
+        rank = i + 1;
+        break;
+      }
+    }
+
+    // 첫 페이지에 없으면 다음 페이지들 탐색 (start=11, 21, 31, ...)
+    if (rank === null) {
+      const PAGE_STEP = 10;
+      for (
+        let start = 11;
+        start <= NaverRankCheckerProvider.MAX_RANK && rank === null;
+        start += PAGE_STEP
+      ) {
+        const pagePlaces = await this.fetchPlacesFromSearchHtml(keyword, start);
+        if (pagePlaces.length === 0) break; // 더 이상 결과 없음
+        const beforeCount = allPlaces.length;
+        for (const p of pagePlaces) pushUnique(p);
+        // 이번 페이지에 새로 추가된 곳들에서 내 매장 찾기
+        for (let i = beforeCount; i < allPlaces.length; i++) {
+          if (isSelf(allPlaces[i])) {
+            rank = i + 1;
+            break;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 300)); // rate limit 예방
+      }
+    }
+
+    // ========== Stage 3: Top 20 만 Place API 상세 호출 (성능 절감) ==========
+    const topPlaces: RankCheckResult["topPlaces"] = [];
+    const detailLimit = Math.min(allPlaces.length, NaverRankCheckerProvider.DETAIL_TOP_N);
+    const BATCH_SIZE = 5;
+    for (let batchStart = 0; batchStart < detailLimit; batchStart += BATCH_SIZE) {
+      const batch = allPlaces.slice(batchStart, batchStart + BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map(async (p, j) => {
+          const i = batchStart + j;
+          let detail: any = null;
+          try {
+            if (p.id) detail = await this.naverPlace.getPlaceDetail(p.id);
+            else detail = await this.naverPlace.searchAndGetPlaceInfo(p.name);
+          } catch {}
+          return {
+            name: p.name,
+            rank: i + 1,
+            placeId: p.id || detail?.id || undefined,
+            category: detail?.category || undefined,
+            visitorReviewCount: detail?.visitorReviewCount || undefined,
+            blogReviewCount: detail?.blogReviewCount || undefined,
+            saveCount: detail?.saveCount || undefined,
+            isMine: isSelf(p),
+          };
+        }),
+      );
+      topPlaces.push(...results);
+    }
+
+    this.logger.log(
+      `순위 체크: "${keyword}" → ${storeName}: ${rank ? `${rank}위` : `${NaverRankCheckerProvider.MAX_RANK}위 밖`} (${allPlaces.length}개 수집, 상세 ${topPlaces.length})`,
+    );
+
+    return {
+      keyword,
+      rank,
+      totalResults: allPlaces.length,
+      reliable: true,
+      topPlaces,
+      checkedAt: new Date(),
+    };
   }
 
   /**
-   * search.naver.com HTML에서 placeId+name 쌍 추출 (Chrome 없이)
+   * search.naver.com HTML에서 placeId+name 쌍 추출 (Chrome 없이, 페이지네이션 지원).
+   *
+   * 2026-04-24 강화 (Phase 10-B):
+   *  - 모바일 UA 고정 (사장님 실사용 환경 = 모바일 검색)
+   *  - Accept-Language: ko-KR 강제
+   *  - start 파라미터 지원 → 페이지네이션 (1, 11, 21, ...)
+   *  - 지역 쿠키 느낌 (region=korean) — 비로그인에서 결과 안정화
    */
-  private async fetchPlacesFromSearchHtml(keyword: string): Promise<Array<{ id: string | null; name: string }>> {
+  private async fetchPlacesFromSearchHtml(
+    keyword: string,
+    start: number = 1,
+  ): Promise<Array<{ id: string | null; name: string }>> {
     try {
       const axios = (await import("axios")).default;
-      const url = `https://search.naver.com/search.naver?query=${encodeURIComponent(keyword)}&where=nexearch`;
+      // 모바일 경로: m.search.naver.com (SSR, 매장 리스트 m_place 탭)
+      // start 파라미터로 페이지네이션 (1=1~10위, 11=11~20위, ...)
+      const url = `https://m.search.naver.com/search.naver?query=${encodeURIComponent(keyword)}&where=m_place&start=${start}`;
       const resp = await axios.get(url, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0",
-          Referer: "https://map.naver.com/",
+          "User-Agent":
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Referer": "https://m.naver.com/",
+          "sec-ch-ua-mobile": "?1",
+          "sec-ch-ua-platform": '"iOS"',
         },
-        timeout: 10000,
+        timeout: 15000,
       });
       const html: string = resp.data;
-      return this.extractPlacesFromHtml(html).slice(0, 100);
-    } catch {
+      return this.extractPlacesFromHtml(html);
+    } catch (e: any) {
+      this.logger.warn(`[rank] HTML scrape 실패 "${keyword}" start=${start}: ${e.message}`);
       return [];
     }
   }

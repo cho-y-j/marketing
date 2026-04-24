@@ -96,7 +96,7 @@ export default function KeywordDetailPage({
       <div className="grid grid-cols-3 gap-3">
         <KeyMetric
           label="내 순위"
-          value={myRank ? `${myRank}위` : "100위 밖"}
+          value={myRank ? `${myRank}위` : "300위 밖"}
           color={myRank && myRank <= 3 ? "blue" : myRank && myRank <= 10 ? "default" : "red"}
         />
         <KeyMetric
