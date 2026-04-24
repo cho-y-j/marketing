@@ -96,7 +96,7 @@ model FranchiseMembership {
   franchiseGroupId String
   franchiseGroup   FranchiseGroup @relation(fields: [franchiseGroupId], references: [id])
   storeId          String         @unique
-  store            Store          @relation(fields: [storeId], references: [id])
+  store            Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
   managerId        String? // 해당 가맹점 담당자 (User)
   manager          User?          @relation(fields: [managerId], references: [id])
 
@@ -171,7 +171,7 @@ model Store {
 model StoreAnalysis {
   id      String @id @default(cuid())
   storeId String
-  store   Store  @relation(fields: [storeId], references: [id])
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   // 핵심 지표
   receiptReviewCount Int?
@@ -203,7 +203,7 @@ model StoreAnalysis {
 model Competitor {
   id      String @id @default(cuid())
   storeId String
-  store   Store  @relation(fields: [storeId], references: [id])
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   competitorName    String
   competitorPlaceId String?
@@ -248,7 +248,7 @@ enum CompetitionType {
 model StoreKeyword {
   id      String @id @default(cuid())
   storeId String
-  store   Store  @relation(fields: [storeId], references: [id])
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   keyword             String
   monthlySearchVolume Int?
@@ -289,7 +289,7 @@ enum TrendDirection {
 model DailyBriefing {
   id      String @id @default(cuid())
   storeId String
-  store   Store  @relation(fields: [storeId], references: [id])
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   date            DateTime @db.Date
   summary         String
@@ -309,7 +309,7 @@ model DailyBriefing {
 model GeneratedContent {
   id      String @id @default(cuid())
   storeId String
-  store   Store  @relation(fields: [storeId], references: [id])
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   type     ContentType
   title    String
@@ -375,7 +375,7 @@ model SeasonalEvent {
 model KeywordRankHistory {
   id           String   @id @default(cuid())
   storeId      String
-  store        Store    @relation(fields: [storeId], references: [id])
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
   keyword      String
   rank         Int? // null이면 50위 밖
   totalResults Int?

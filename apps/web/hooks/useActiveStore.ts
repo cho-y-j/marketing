@@ -5,14 +5,14 @@ import { persist } from "zustand/middleware";
 
 interface ActiveStoreState {
   activeStoreId: string | null;
-  setActiveStoreId: (id: string) => void;
+  setActiveStoreId: (id: string | null) => void;
 }
 
 export const useActiveStore = create<ActiveStoreState>()(
   persist(
     (set) => ({
       activeStoreId: null,
-      setActiveStoreId: (id: string) => set({ activeStoreId: id }),
+      setActiveStoreId: (id: string | null) => set({ activeStoreId: id }),
     }),
     { name: "active-store" },
   ),

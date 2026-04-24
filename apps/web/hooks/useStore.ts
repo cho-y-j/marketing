@@ -49,6 +49,18 @@ export function useCreateStore() {
   });
 }
 
+// 매장 삭제 — 관계 레코드(키워드/경쟁사/분석/스냅샷 등) 전부 cascade + 트랜잭션
+export function useDeleteStore() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (storeId: string) => {
+      const { data } = await apiClient.delete(`/stores/${storeId}`);
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stores"] }),
+  });
+}
+
 // 셋업 진행 상태 조회 (폴링용)
 export function useSetupStatus(storeId: string) {
   return useQuery({

@@ -77,9 +77,44 @@ export class StoreService {
     });
   }
 
+  /**
+   * 매장 삭제 — 관계 테이블 일괄 정리.
+   *
+   * onDelete: Cascade 가 걸린 모델은 자동 삭제됨:
+   *   FranchiseMembership, StoreAnalysis, Competitor, StoreKeyword,
+   *   DailyBriefing, GeneratedContent, KeywordRankHistory
+   *
+   * @relation 없이 storeId 만 가진 모델은 수동 deleteMany (orphan 방지):
+   *   PendingAction, ActionLog, CompetitorAlert, KeywordVolumeHistory,
+   *   StoreReview, BlogAnalysis, StoreDailySnapshot, CompetitorDailySnapshot,
+   *   ExcludedKeyword, IngredientAlert, StoreAutoSettings, ConsultationRequest,
+   *   CompetitorHistory(via Competitor cascade), CompetitorDailySnapshot
+   */
   async remove(id: string, userId: string) {
-    await this.findOne(id, userId);
-    return this.prisma.store.delete({ where: { id } });
+    await this.findOne(id, userId); // 권한 검증 (본인 매장만 삭제)
+
+    // 트랜잭션: orphan 수동 삭제 → Store 삭제 (cascade 는 자동)
+    await this.prisma.$transaction(async (tx) => {
+      // @relation 없는 storeId-only 모델들 명시 삭제
+      await tx.pendingAction.deleteMany({ where: { storeId: id } });
+      await tx.actionLog.deleteMany({ where: { storeId: id } });
+      await tx.competitorAlert.deleteMany({ where: { storeId: id } });
+      await tx.keywordVolumeHistory.deleteMany({ where: { storeId: id } });
+      await tx.storeReview.deleteMany({ where: { storeId: id } });
+      await tx.blogAnalysis.deleteMany({ where: { storeId: id } });
+      await tx.storeDailySnapshot.deleteMany({ where: { storeId: id } });
+      await tx.competitorDailySnapshot.deleteMany({ where: { storeId: id } });
+      await tx.excludedKeyword.deleteMany({ where: { storeId: id } });
+      await tx.ingredientAlert.deleteMany({ where: { storeId: id } });
+      await tx.storeAutoSettings.deleteMany({ where: { storeId: id } });
+      await tx.consultationRequest.deleteMany({ where: { storeId: id } });
+
+      // Store 삭제 — @relation 7개는 onDelete: Cascade 로 자동 정리
+      await tx.store.delete({ where: { id } });
+    });
+
+    this.logger.log(`매장 삭제 완료: ${id} (유저 ${userId})`);
+    return { ok: true, id };
   }
 
 }

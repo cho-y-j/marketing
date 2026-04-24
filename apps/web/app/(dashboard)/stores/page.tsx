@@ -3,22 +3,40 @@
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty-state";
-import { useStores } from "@/hooks/useStore";
+import { useStores, useDeleteStore } from "@/hooks/useStore";
 import { useActiveStore } from "@/hooks/useActiveStore";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { getScoreLevel } from "@/lib/design-system";
-import { Store, Plus, MapPin, Tag, ArrowRight, Check } from "lucide-react";
+import { Store, Plus, MapPin, Tag, ArrowRight, Check, Trash2, Loader2 } from "lucide-react";
 
 export default function StoresPage() {
   const { data: stores, isLoading } = useStores();
   const { activeStoreId, setActiveStoreId } = useActiveStore();
   const router = useRouter();
+  const deleteStore = useDeleteStore();
 
   const handleSelect = (storeId: string) => {
     setActiveStoreId(storeId);
     toast.success("매장이 전환되었습니다");
     router.push("/");
+  };
+
+  const handleDelete = (storeId: string, storeName: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // 카드 클릭 (매장 전환) 방지
+    const confirmMsg = `"${storeName}" 매장을 삭제하시겠습니까?\n\n관련된 키워드·경쟁사·분석 데이터가 모두 함께 삭제되며 복구할 수 없습니다.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    deleteStore.mutate(storeId, {
+      onSuccess: () => {
+        toast.success(`"${storeName}" 매장이 삭제되었습니다`);
+        // 활성 매장이 삭제된 경우 선택 해제
+        if (activeStoreId === storeId) setActiveStoreId(null);
+      },
+      onError: (err: any) => {
+        toast.error(err.response?.data?.message || "삭제 실패 — 잠시 후 다시 시도해주세요");
+      },
+    });
   };
 
   if (isLoading) {
@@ -128,7 +146,22 @@ export default function StoresPage() {
                     </div>
                   </div>
 
-                  <ArrowRight size={16} className="text-text-tertiary shrink-0" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      aria-label={`${store.name} 삭제`}
+                      onClick={(e) => handleDelete(store.id, store.name, e)}
+                      disabled={deleteStore.isPending}
+                      className="size-9 min-h-[36px] flex items-center justify-center rounded-lg text-text-tertiary hover:text-score-bad hover:bg-score-bad/10 transition-colors disabled:opacity-50"
+                    >
+                      {deleteStore.isPending && deleteStore.variables === store.id ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={14} />
+                      )}
+                    </button>
+                    <ArrowRight size={16} className="text-text-tertiary" />
+                  </div>
                 </div>
               </div>
             );
