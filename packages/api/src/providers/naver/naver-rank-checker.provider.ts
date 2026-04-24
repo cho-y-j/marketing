@@ -73,30 +73,61 @@ export class NaverRankCheckerProvider {
       return false;
     };
 
-    // ========== Stage 1: Top 30 수집 (1차 시도 + 재시도) ==========
-    // 첫 페이지 (start=1) 만으로도 사이트 특성상 보통 20~30개 옴
-    let firstPagePlaces = await this.fetchPlacesFromSearchHtml(keyword, 1);
-    if (firstPagePlaces.length < NaverRankCheckerProvider.MIN_RELIABLE_RESULTS) {
+    // ========== Stage 1: 1차 수집 + 재시도 비교 (일관성 판정) ==========
+    //
+    // 신뢰도 판정 로직 (2026-04-24):
+    //   1차 결과 >= MIN_RELIABLE_RESULTS      → reliable (재시도 불필요)
+    //   1차 결과 <  MIN_RELIABLE_RESULTS      → 재시도 1회
+    //     재시도 결과 >= MIN_RELIABLE_RESULTS → reliable (1차 실패, 2차 성공)
+    //     재시도 == 1차                       → reliable (자연적 희귀 키워드, 실제 상한)
+    //     재시도 != 1차                       → unreliable (일시적 네이버 불안정)
+    //     재시도 0                            → unreliable (완전 실패)
+    //
+    // 이로써 "공덕 아구찜" 처럼 실제로 매장 6개만 존재하는 키워드도 정상 저장되면서,
+    // "05:00 cron 이 갑자기 5개만 받은" 일시적 불안정은 여전히 걸러짐.
+    const firstPlaces = await this.fetchPlacesFromSearchHtml(keyword, 1);
+    let firstPagePlaces = firstPlaces;
+    let reliable = true;
+
+    if (firstPlaces.length < NaverRankCheckerProvider.MIN_RELIABLE_RESULTS) {
       this.logger.warn(
-        `[rank] "${keyword}" 1차 수집 부족 (${firstPagePlaces.length}개) — 1.5초 후 재시도`,
+        `[rank] "${keyword}" 1차 수집 ${firstPlaces.length}개 — 1.5초 후 재시도로 일관성 검증`,
       );
       await new Promise((r) => setTimeout(r, 1500));
-      firstPagePlaces = await this.fetchPlacesFromSearchHtml(keyword, 1);
-    }
+      const retryPlaces = await this.fetchPlacesFromSearchHtml(keyword, 1);
 
-    // 재시도 후에도 신뢰도 부족 → 호출자에게 reliable=false 반환, currentRank 덮어쓰기 금지
-    if (firstPagePlaces.length < NaverRankCheckerProvider.MIN_RELIABLE_RESULTS) {
-      this.logger.warn(
-        `[rank] "${keyword}" 재시도 후에도 ${firstPagePlaces.length}개 — 신뢰도 부족, skip`,
-      );
-      return {
-        keyword,
-        rank: null,
-        totalResults: firstPagePlaces.length,
-        reliable: false,
-        topPlaces: [],
-        checkedAt: new Date(),
-      };
+      if (retryPlaces.length === 0) {
+        // 재시도 완전 실패 — 일시적 네트워크/블락
+        this.logger.warn(`[rank] "${keyword}" 재시도 실패 (0개) — skip`);
+        return {
+          keyword, rank: null, totalResults: firstPlaces.length,
+          reliable: false, topPlaces: [], checkedAt: new Date(),
+        };
+      }
+
+      // 일관성 판정: 두 번 같은 결과 수면 자연적 한계, 다르면 불안정
+      if (retryPlaces.length === firstPlaces.length) {
+        this.logger.log(
+          `[rank] "${keyword}" 자연적 한계 (1차=${firstPlaces.length}, 재시도=${retryPlaces.length}) — reliable`,
+        );
+        reliable = true;
+      } else if (retryPlaces.length >= NaverRankCheckerProvider.MIN_RELIABLE_RESULTS) {
+        // 재시도가 충분한 결과 — 1차는 일시적 불안정이었음, 재시도 결과 채택
+        this.logger.log(
+          `[rank] "${keyword}" 재시도 성공 (${firstPlaces.length} → ${retryPlaces.length}) — reliable`,
+        );
+        firstPagePlaces = retryPlaces;
+        reliable = true;
+      } else {
+        // 두 결과가 다르고 둘 다 임계 미만 — 불안정
+        this.logger.warn(
+          `[rank] "${keyword}" 불안정 (1차=${firstPlaces.length}, 재시도=${retryPlaces.length}) — skip`,
+        );
+        return {
+          keyword, rank: null, totalResults: firstPlaces.length,
+          reliable: false, topPlaces: [], checkedAt: new Date(),
+        };
+      }
     }
 
     // ========== Stage 2: Top 300 까지 페이지네이션 (내 매장 찾으면 조기 종료) ==========
@@ -180,7 +211,7 @@ export class NaverRankCheckerProvider {
       keyword,
       rank,
       totalResults: allPlaces.length,
-      reliable: true,
+      reliable,
       topPlaces,
       checkedAt: new Date(),
     };
