@@ -20,9 +20,13 @@ export class CompetitorService {
     private backfillService: CompetitorBackfillService,
   ) {}
 
-  async findAll(storeId: string) {
+  async findAll(storeId: string, competitionType?: "EXPOSURE" | "DIRECT") {
+    const where: { storeId: string; competitionType?: { in: Array<"EXPOSURE" | "DIRECT" | "BOTH"> } } = { storeId };
+    // BOTH 는 양쪽 탭에 모두 노출 (최강 경쟁사)
+    if (competitionType === "EXPOSURE") where.competitionType = { in: ["EXPOSURE", "BOTH"] };
+    else if (competitionType === "DIRECT") where.competitionType = { in: ["DIRECT", "BOTH"] };
     return this.prisma.competitor.findMany({
-      where: { storeId },
+      where,
       orderBy: { createdAt: "desc" },
     });
   }
@@ -158,7 +162,7 @@ export class CompetitorService {
   }
 
   // 경쟁 비교 분석 데이터
-  async getComparison(storeId: string) {
+  async getComparison(storeId: string, competitionType?: "EXPOSURE" | "DIRECT") {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       include: {
@@ -166,9 +170,10 @@ export class CompetitorService {
         keywords: { take: 5, orderBy: { monthlySearchVolume: "desc" } },
       },
     });
-    const competitors = await this.prisma.competitor.findMany({
-      where: { storeId },
-    });
+    const where: { storeId: string; competitionType?: { in: Array<"EXPOSURE" | "DIRECT" | "BOTH"> } } = { storeId };
+    if (competitionType === "EXPOSURE") where.competitionType = { in: ["EXPOSURE", "BOTH"] };
+    else if (competitionType === "DIRECT") where.competitionType = { in: ["DIRECT", "BOTH"] };
+    const competitors = await this.prisma.competitor.findMany({ where });
 
     const myAnalysis = store?.analyses?.[0];
     return {
@@ -187,6 +192,7 @@ export class CompetitorService {
         name: c.competitorName,
         placeId: c.competitorPlaceId,
         type: c.type,
+        competitionType: c.competitionType,
         blogReviewCount: c.blogReviewCount ?? 0,
         receiptReviewCount: c.receiptReviewCount ?? 0,
         dailySearchVolume: c.dailySearchVolume ?? 0,

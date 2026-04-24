@@ -57,12 +57,21 @@ type Row = {
   blog: MetricData;
 };
 
+type TabType = "EXPOSURE" | "DIRECT";
+
 export default function CompetitorsPage() {
   const { storeId } = useCurrentStoreId();
-  const { data: competitors, refetch } = useCompetitors(storeId);
-  const { data: comparison, isLoading } = useCompetitorComparison(storeId);
+
+  // 2026-04-24: 2-레이어 경쟁 탭 (상권 강자 / 같은 업종)
+  const [tab, setTab] = useState<TabType>("EXPOSURE");
+
+  const { data: competitors, refetch } = useCompetitors(storeId, tab);
+  const { data: comparison, isLoading } = useCompetitorComparison(storeId, tab);
   const addComp = useAddCompetitor(storeId);
   const deleteComp = useDeleteCompetitor(storeId);
+
+  // 전체 경쟁사 개수 (탭 배지용)
+  const { data: allCompetitors } = useCompetitors(storeId);
 
   const [newName, setNewName] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -70,6 +79,14 @@ export default function CompetitorsPage() {
   const [sortMetric, setSortMetric] = useState<Metric>("visitor"); // 순위 기준
   const [sortKey, setSortKey] = useState<SortKey>("cumulative");
   const [customDate, setCustomDate] = useState<string>("");
+
+  // 탭별 경쟁사 개수 계산 (전체에서 집계, BOTH 는 양쪽 카운트)
+  const exposureCount = (allCompetitors ?? []).filter(
+    (c: any) => c.competitionType === "EXPOSURE" || c.competitionType === "BOTH",
+  ).length;
+  const directCount = (allCompetitors ?? []).filter(
+    (c: any) => c.competitionType === "DIRECT" || c.competitionType === "BOTH",
+  ).length;
 
   const { data: dailyResp } = useQuery<{ competitors: any[]; summary: any }>({
     queryKey: ["competitors-daily", storeId],
@@ -257,7 +274,9 @@ export default function CompetitorsPage() {
         <div>
           <h2 className="text-xl md:text-2xl font-bold">경쟁매장</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            누적량과 증감률을 한눈에 · 경쟁사 {competitors?.length ?? 0}곳
+            {tab === "EXPOSURE"
+              ? `대표 키워드 Top 매장 (업종 불문) · ${competitors?.length ?? 0}곳`
+              : `같은 업종 직접 경쟁 · ${competitors?.length ?? 0}곳`}
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={handleRefresh} disabled={refreshing}>
@@ -265,6 +284,39 @@ export default function CompetitorsPage() {
           데이터 갱신
         </Button>
       </div>
+
+      {/* ===== 2-레이어 탭 ===== */}
+      <div className="flex gap-1 p-1 bg-muted rounded-lg text-sm" role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === "EXPOSURE"}
+          onClick={() => setTab("EXPOSURE")}
+          className={`flex-1 px-3 py-2 rounded-md font-medium transition-colors min-h-[36px] ${
+            tab === "EXPOSURE"
+              ? "bg-background shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          상권 강자 <span className="text-xs opacity-70">({exposureCount})</span>
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === "DIRECT"}
+          onClick={() => setTab("DIRECT")}
+          className={`flex-1 px-3 py-2 rounded-md font-medium transition-colors min-h-[36px] ${
+            tab === "DIRECT"
+              ? "bg-background shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          같은 업종 <span className="text-xs opacity-70">({directCount})</span>
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground -mt-2 px-1">
+        {tab === "EXPOSURE"
+          ? "대표 키워드로 검색 시 노출되는 Top 매장 — 업종은 달라도 같은 상권 슬롯을 두고 경쟁"
+          : "같은 메뉴/업종으로 직접 경쟁하는 매장 — 메뉴·객단가·전략 비교 대상"}
+      </p>
 
       {/* ===== 진단 박스 ===== */}
       {myRank && (

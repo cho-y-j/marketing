@@ -3,11 +3,14 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 
-export function useCompetitors(storeId: string) {
+export type CompetitionType = "EXPOSURE" | "DIRECT";
+
+export function useCompetitors(storeId: string, competitionType?: CompetitionType) {
   return useQuery({
-    queryKey: ["competitors", storeId],
+    queryKey: ["competitors", storeId, competitionType ?? "ALL"],
     queryFn: async () => {
-      const { data } = await apiClient.get(`/stores/${storeId}/competitors`);
+      const params = competitionType ? { competitionType } : undefined;
+      const { data } = await apiClient.get(`/stores/${storeId}/competitors`, { params });
       return data;
     },
     enabled: !!storeId,
@@ -15,11 +18,12 @@ export function useCompetitors(storeId: string) {
   });
 }
 
-export function useCompetitorComparison(storeId: string) {
+export function useCompetitorComparison(storeId: string, competitionType?: CompetitionType) {
   return useQuery({
-    queryKey: ["competitors", storeId, "compare"],
+    queryKey: ["competitors", storeId, "compare", competitionType ?? "ALL"],
     queryFn: async () => {
-      const { data } = await apiClient.get(`/stores/${storeId}/competitors/compare`);
+      const params = competitionType ? { competitionType } : undefined;
+      const { data } = await apiClient.get(`/stores/${storeId}/competitors/compare`, { params });
       return data;
     },
     enabled: !!storeId,

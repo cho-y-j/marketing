@@ -48,9 +48,12 @@ export class CompetitorController {
   }
 
   @Get()
-  @ApiOperation({ summary: "경쟁 매장 목록" })
-  findAll(@Param("storeId") storeId: string) {
-    return this.competitorService.findAll(storeId);
+  @ApiOperation({ summary: "경쟁 매장 목록 (competitionType: EXPOSURE|DIRECT 로 필터)" })
+  findAll(
+    @Param("storeId") storeId: string,
+    @Query("competitionType") competitionType?: "EXPOSURE" | "DIRECT",
+  ) {
+    return this.competitorService.findAll(storeId, competitionType);
   }
 
   @Post()
@@ -72,9 +75,12 @@ export class CompetitorController {
   }
 
   @Get("compare")
-  @ApiOperation({ summary: "경쟁 비교 분석" })
-  compare(@Param("storeId") storeId: string) {
-    return this.competitorService.getComparison(storeId);
+  @ApiOperation({ summary: "경쟁 비교 분석 (competitionType: EXPOSURE|DIRECT 로 필터)" })
+  compare(
+    @Param("storeId") storeId: string,
+    @Query("competitionType") competitionType?: "EXPOSURE" | "DIRECT",
+  ) {
+    return this.competitorService.getComparison(storeId, competitionType);
   }
 
   @Post("refresh")

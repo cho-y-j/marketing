@@ -212,6 +212,12 @@ model Competitor {
 
   type CompetitorType @default(AUTO)
 
+  // 2026-04-24 추가 — 경쟁 레이어 구분 (대표 키워드 상권 강자 / 같은 업종 직접 경쟁)
+  // EXPOSURE: 대표 키워드 Top 10 (업종 불문) — "공덕 맛집" 검색자 노출 경쟁
+  // DIRECT:   메뉴 키워드 Top (같은 업종) — "공덕 아구찜" 같은 업종 직접 경쟁
+  // BOTH:     양쪽에 모두 노출되는 최강 경쟁사
+  competitionType CompetitionType @default(DIRECT)
+
   receiptReviewCount Int?
   blogReviewCount    Int?
   dailySearchVolume  Int?
@@ -223,12 +229,19 @@ model Competitor {
   createdAt DateTime @default(now())
 
   @@index([storeId])
+  @@index([storeId, competitionType])
 }
 
 enum CompetitorType {
   AUTO
   USER_SET
   CROSS_INDUSTRY
+}
+
+enum CompetitionType {
+  EXPOSURE
+  DIRECT
+  BOTH
 }
 
 // ===== 키워드 =====
