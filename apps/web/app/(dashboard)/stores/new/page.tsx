@@ -112,9 +112,10 @@ export default function NewStorePage() {
       },
       {
         onSuccess: (data: any) => {
-          // 신규 등록 매장을 즉시 활성 매장으로 전환 (이전 매장으로 잘못 진입 방지)
+          // 신규 등록 매장을 즉시 활성 매장으로 전환 + 대시보드 바로 진입
+          // (2026-04-24 사장님 확정: setup 대기 페이지 건너뛰기. 대시보드 섹션이 "분석중" 표시하며 점진 채워짐)
           setActiveStoreId(data.id);
-          router.push(`/stores/setup?id=${data.id}&name=${encodeURIComponent(data.name)}`);
+          router.push(`/`);
         },
       },
     );
