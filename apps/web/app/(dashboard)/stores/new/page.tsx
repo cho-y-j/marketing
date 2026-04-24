@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useCreateStore } from "@/hooks/useStore";
+import { useActiveStore } from "@/hooks/useActiveStore";
 import { apiClient } from "@/lib/api-client";
 import {
   Store,
@@ -26,6 +27,7 @@ import {
 export default function NewStorePage() {
   const router = useRouter();
   const createStore = useCreateStore();
+  const { setActiveStoreId } = useActiveStore();
 
   const [input, setInput] = useState("");
   const [preview, setPreview] = useState<any>(null);
@@ -110,6 +112,8 @@ export default function NewStorePage() {
       },
       {
         onSuccess: (data: any) => {
+          // 신규 등록 매장을 즉시 활성 매장으로 전환 (이전 매장으로 잘못 진입 방지)
+          setActiveStoreId(data.id);
           router.push(`/stores/setup?id=${data.id}&name=${encodeURIComponent(data.name)}`);
         },
       },

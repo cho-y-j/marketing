@@ -183,46 +183,35 @@ export class StoreSetupService {
       }
     }
 
-    // 2) medium — district + 메뉴 합성 (예: 마포 아구찜) max 2개
-    //    narrow 로 상권 내 경쟁사 확보 + medium 으로 같은 업종 인근 확보
-    const districtToken =
-      (storeMeta?.district || "")
-        .split(/\s+/)
-        .map((p) => p.replace(/(구|시|군)$/, ""))
-        .find((t) => t.length >= 2) ||
-      (storeMeta?.address || "")
-        .split(/\s+/)
-        .map((p) => p.replace(/(구|시|군|도|동|읍|면)$/, ""))
-        .find((t) => t.length >= 2);
-    if (districtToken && menuArr.length > 0) {
-      let mediumCount = 0;
+    // 2026-04-24 수정: 행정동 접미사 유지 + 시+동 결합 우선 (네이버 검색 정확도 보장)
+    // 예) 주소 "충북 청주시 흥덕구 복대동" → 우선순위:
+    //     (a) "청주 복대동 고기집" (시+동 결합 — 가장 정확)
+    //     (b) "복대동 고기집" (동 단독 — 전국 중복 있을 수 있어 차선)
+    //     (c) "청주 고기집" (시 단독)
+    const addrParts = (storeMeta?.address || "").split(/\s+/).filter(Boolean);
+    const cityName = addrParts
+      .find((p) => /^(서울|부산|대구|인천|광주|대전|울산|세종)/.test(p))?.replace(/(특별시|광역시)$/, "") ||
+      addrParts.find((p) => p.endsWith("시"))?.replace(/시$/, "");
+    const dongName = addrParts.find((p) => p.endsWith("동") || p.endsWith("읍") || p.endsWith("면"));
+
+    // 2) medium — 시+동+메뉴 (예: "청주 복대동 고기집") max 2개
+    if (cityName && dongName && menuArr.length > 0) {
+      let count = 0;
       for (const menu of menuArr) {
-        if (mediumCount >= 2) break;
-        addSecondary(`${districtToken} ${menu}`);
-        mediumCount++;
+        if (count >= 2) break;
+        addSecondary(`${cityName} ${dongName} ${menu}`);
+        count++;
       }
     }
 
-    // 3) 메뉴 단독 (같은 업종 전국 노출 매장 — 벤치마크) max 1개
-    for (const k of topKeywords) {
-      if (hasMenuToken(k.keyword) && !k.keyword.includes(" ")) {
-        addSecondary(k.keyword);
-        break;
-      }
+    // 3) 동 단독 + 메뉴 (예: "복대동 고기집") max 1개
+    if (secondary.length < 3 && dongName && menuArr.length > 0) {
+      addSecondary(`${dongName} ${menuArr[0]}`);
     }
 
-    // 4) 여전히 부족하면 city + 메뉴 (예: 서울 아구찜)
-    if (secondary.length < 2 && menuArr.length > 0) {
-      const cityToken = (storeMeta?.address || "")
-        .split(/\s+/)
-        .map((p) => p.replace(/(특별시|광역시|시|도)$/, ""))
-        .find((t) => /^(서울|부산|대구|인천|광주|대전|울산|경기|충북|충남|전북|전남|경북|경남|제주|강원)$/.test(t));
-      if (cityToken) {
-        for (const menu of menuArr) {
-          if (secondary.length >= 3) break;
-          addSecondary(`${cityToken} ${menu}`);
-        }
-      }
+    // 4) 여전히 부족하면 시 + 메뉴 (예: "청주 고기집")
+    if (secondary.length < 3 && cityName && menuArr.length > 0) {
+      addSecondary(`${cityName} ${menuArr[0]}`);
     }
 
     return { main: mainKeyword?.keyword || null, secondary: secondary.slice(0, 5) };
@@ -274,17 +263,11 @@ export class StoreSetupService {
       const category = placeInfo?.category || store.category || "";
       const district = this.extractDistrict(address) || store.district || "";
 
-      // 2단계: Claude CLI 단독 키워드 생성 (룰 기반 제거 — "단양군 단양읍 음식점>한식" 같은 쓰레기 방지)
-      await this.updateSetupStatus(storeId, "RUNNING", "AI가 매장 맞춤 키워드를 생성하는 중...");
-      const aiResult = await this.generateSmartKeywords(
-        store.name, address, category, district,
-        {
-          roadAddress: placeInfo?.roadAddress,
-          placeId: store.naverPlaceId || undefined,
-          reviewCount: placeInfo?.visitorReviewCount,
-          blogReviewCount: placeInfo?.blogReviewCount,
-        },
-      );
+      // 2단계: 규칙 기반 키워드 생성 (2026-04-24 의뢰자 확정 — AI 제거, 0.1초 즉시)
+      // 주소에서 시+동 추출 + 업종 매핑 테이블로 3개 키워드 결정적 생성
+      await this.updateSetupStatus(storeId, "RUNNING", "지역·업종 기반 키워드 생성 중...");
+      const aiResult = this.generateRuleBasedKeywords(address, category, store.name);
+
       // 사용자가 과거에 제외한 키워드는 재생성 시 제외
       const excluded = await this.prisma.excludedKeyword.findMany({
         where: { storeId },
@@ -292,21 +275,13 @@ export class StoreSetupService {
       });
       const excludedSet = new Set(excluded.map((e) => e.keyword));
       const keywords = aiResult.keywords.filter((k) => !excludedSet.has(k));
-      // 2026-04-24 의뢰자 확정 — 정확히 3개 (유입 1 + 상황 1 + 메뉴 1). 나머지는 키워드 추천에서 수동 추가
       const KEYWORD_CAP = 3;
-      let cappedKeywords = keywords;
-      if (keywords.length > KEYWORD_CAP) {
-        const withPrimary = keywords.includes(aiResult.primaryKeyword)
-          ? [aiResult.primaryKeyword, ...keywords.filter((k) => k !== aiResult.primaryKeyword)]
-          : [aiResult.primaryKeyword, ...keywords];
-        cappedKeywords = withPrimary.slice(0, KEYWORD_CAP);
-      }
-      // primaryKeyword 가 excludedSet 에 걸려 사라진 경우 — 대표 키워드는 예외로 보호 (사용자가 매장 대표로 쓸 키워드)
+      let cappedKeywords = keywords.slice(0, KEYWORD_CAP);
       if (!cappedKeywords.includes(aiResult.primaryKeyword) && aiResult.primaryKeyword) {
         cappedKeywords = [aiResult.primaryKeyword, ...cappedKeywords].slice(0, KEYWORD_CAP);
       }
       this.logger.log(
-        `AI 키워드 ${cappedKeywords.length}개 확정 (대표: ${aiResult.primaryKeyword}): ${cappedKeywords.join(", ")}`,
+        `[규칙기반] 키워드 ${cappedKeywords.length}개 확정 (대표: ${aiResult.primaryKeyword}): ${cappedKeywords.join(", ")}`,
       );
 
       // fail-fast: 키워드 2개 미만이면 가입 실패 처리 (저볼륨 필터가 남기는 최소 1~2개 허용)
@@ -868,7 +843,132 @@ export class StoreSetupService {
     return [...new Set(keywords)];
   }
 
-  // AI가 플레이스 정보 전체를 분석해서 실전 키워드 생성
+  /**
+   * 2026-04-24 규칙 기반 키워드 생성 — AI 호출 제거 (10~15초 → 0.1초).
+   *
+   * 사장님 확정 원칙:
+   *  1. 주소에서 시+동 추출 → 기본 지역 베이스 (예: "청주 복대동")
+   *  2. 업종 → 상황 매핑 테이블 (고기집=회식, 카페=데이트, 국밥=점심 등)
+   *  3. 업종 → 메뉴 토큰 추출 (카테고리 마지막 구체 어휘)
+   *  4. 키워드 3개 고정: [지역 맛집] [지역 상황] [지역 메뉴]
+   *
+   * AI 가 필요하지 않음 — 단순한 결정적 규칙.
+   * 추천/발굴은 별도 /keywords 페이지에서 사장님이 직접.
+   */
+  private generateRuleBasedKeywords(
+    address: string,
+    category: string,
+    _storeName: string,
+  ): { keywords: string[]; primaryKeyword: string } {
+    // === 1) 주소 파싱 ===
+    const addrParts = address.split(/\s+/).filter(Boolean);
+
+    // 시 추출 — 광역시 또는 일반 시
+    const cityShort =
+      addrParts.find((p) => /^(서울|부산|대구|인천|광주|대전|울산|세종)/.test(p))
+        ?.replace(/(특별시|광역시)$/, "") ||
+      addrParts.find((p) => p.endsWith("시"))?.replace(/시$/, "");
+
+    // 행정동/읍/면 — 접미사 유지. "3241" 같은 숫자·한글자·숫자동 제외
+    const dongName = addrParts.find((p) => {
+      if (!(p.endsWith("동") || p.endsWith("읍") || p.endsWith("면"))) return false;
+      if (p.length < 2) return false;
+      if (/^\d+동$/.test(p)) return false;
+      if (p === "동") return false;
+      return true;
+    });
+
+    const gu = addrParts.find((p) => p.endsWith("구") && p.length >= 3)?.replace(/구$/, "");
+
+    // 지역 베이스 우선순위:
+    //   ① 시 + 동 (예: "청주 복대동") — 가장 정확
+    //   ② 동 단독 (예: "복대동")
+    //   ③ 시 + 구 (예: "청주 흥덕")
+    //   ④ 시 단독 또는 구 단독
+    let regionBase: string;
+    if (cityShort && dongName) {
+      regionBase = `${cityShort} ${dongName}`;
+    } else if (dongName) {
+      regionBase = dongName;
+    } else if (cityShort && gu) {
+      regionBase = `${cityShort} ${gu}`;
+    } else {
+      regionBase = cityShort || gu || "";
+    }
+
+    if (!regionBase) {
+      // 주소 파싱 완전 실패 — 빈 배열 반환 (상위에서 에러 처리)
+      this.logger.warn(`[규칙기반] 주소 파싱 실패: "${address}"`);
+      return { keywords: [], primaryKeyword: "" };
+    }
+
+    // === 2) 업종 → 상황 매핑 ===
+    //  (카페/디저트 = 데이트, 치킨 = 야식, 국밥 = 점심, 고기 = 회식 등)
+    let situation = "회식"; // 기본
+    const catLower = category;
+    if (/카페|디저트|베이커리|빵집|빙수|아이스크림|도넛|와플|쥬스|주스/.test(catLower)) situation = "데이트";
+    else if (/치킨|피자|족발|보쌈|패스트푸드/.test(catLower)) situation = "야식";
+    else if (/국밥|백반|분식|김밥|해장|죽|칼국수|라면/.test(catLower)) situation = "점심";
+    else if (/한정식|코스|파인다이닝|오마카세/.test(catLower)) situation = "기념일";
+    else if (/술집|주점|호프|와인바|이자카야|맥주/.test(catLower)) situation = "술자리";
+    // 나머지 (고기/아구찜/횟집/한식/양식/일식/중식) → 회식 (기본)
+
+    // === 3) 업종 → 메뉴 토큰 추출 ===
+    //  카테고리 분해 후 가장 구체적인 토큰 선택. 포괄어 제외.
+    const POLYMERIC = new Set([
+      "음식점", "한식", "양식", "일식", "중식", "분식", "아시안", "퓨전",
+      "요리", "기타", "카페", "디저트",
+    ]);
+    const categoryParts = catLower
+      .split(/[>,]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2 && s.length <= 8 && !POLYMERIC.has(s));
+
+    // 구체적 메뉴 토큰 (예: "육류" < "삼겹살", "고기요리" < "소고기구이")
+    // 마지막이 가장 구체적이라 마지막부터 선택
+    let menuToken = categoryParts[categoryParts.length - 1] || "";
+
+    // "육류" 같은 애매한 토큰은 "고기집" 으로 대체
+    const MENU_ALIAS: Record<string, string> = {
+      "육류": "고기집",
+      "고기요리": "고기집",
+      "돼지고기구이": "삼겹살",
+      "소고기구이": "소고기",
+      "닭요리": "치킨",
+      "가금류": "치킨",
+      "생선회": "회",
+      "회": "회",
+      "해산물": "회",
+      "한정식": "한정식",
+      "아귀찜": "아구찜",
+      "해물찜": "해물찜",
+    };
+    if (MENU_ALIAS[menuToken]) menuToken = MENU_ALIAS[menuToken];
+
+    // 메뉴 토큰 추출 실패 시 생략 (2개만)
+    const menuKeyword = menuToken ? `${regionBase} ${menuToken}` : "";
+
+    // === 4) 최종 키워드 3개 구성 ===
+    const keywords = [
+      `${regionBase} 맛집`,        // 유입 (대표)
+      `${regionBase} ${situation}`, // 상황
+    ];
+    if (menuKeyword) keywords.push(menuKeyword); // 메뉴
+
+    // 정제 (POLYMERIC 단독 방지, 중복 제거, 공백/쉼표 정리)
+    const cleaned = this.sanitizeKeywords(keywords, regionBase);
+
+    this.logger.log(
+      `[규칙기반] 생성 — 지역="${regionBase}" 상황="${situation}" 메뉴="${menuToken}" → [${cleaned.join(", ")}]`,
+    );
+
+    return {
+      keywords: cleaned,
+      primaryKeyword: `${regionBase} 맛집`,
+    };
+  }
+
+  // (레거시) AI가 플레이스 정보 전체를 분석해서 실전 키워드 생성 — 더 이상 호출되지 않음
   private async generateSmartKeywords(
     storeName: string,
     address: string,
@@ -902,18 +1002,20 @@ export class StoreSetupService {
       .map((s) => s.trim())
       .filter((s) => s.length >= 2);
 
-    // 2026-04-24 의뢰자 확정 — 주소가 truth. brandLocationHint 는 보조.
-    // 이유: "화춘가든 복대본점" 같은 매장은 주소("복대동")가 훨씬 정확.
-    // 매장명 힌트는 동이 애매할 때(상권명으로 쓰이는 경우)만 보조.
+    // 2026-04-24 2차 수정 — 의뢰자 확정: 동 접미사 유지 원칙.
+    // "복대동" 을 "복대" 로 줄이면 네이버가 어디인지 모름 → 전국 매칭 → 서울 송파/용인 광교 등 엉뚱한 경쟁사 수집.
+    // 행정동명은 **접미사 그대로 유지**. 예: 복대동, 신길동, 오창읍. 공덕역처럼 역명이 유명한 경우만 AI 가 예외 판단.
     const regionHint =
-      dong?.replace(/(동|읍|면)$/, "") ||
-      gu?.replace(/구$/, "") ||
+      dong ||                         // "복대동" 그대로 유지 ← 핵심 수정
+      gu?.replace(/구$/, "") ||       // 구만 제거 (마포구 → 마포)
       brandLocationHint ||
       "";
 
-    // AI 혼란 방지: 접미사 제거
-    const cleanDong = dong?.replace(/(동|읍|면)$/, "");
+    // AI 프롬프트 전달용 — 동은 유지, 구는 제거
+    const cleanDong = dong;  // "복대동" 그대로
     const cleanGu = gu?.replace(/구$/, "");
+    // 시 추출 — "충북 청주시 흥덕구 복대동" → "청주" (시+동 결합 키워드 생성용)
+    const cityShort = city; // 이미 위에서 추출됨 ("청주")
 
     // 2026-04-24 재작성 — 의뢰자 확정:
     //  - 총 3~5개 (적게, 정확히)
@@ -924,16 +1026,31 @@ export class StoreSetupService {
 
 ## 작업 순서
 
-### 1단계: 지역 분석
-- **핵심 유입 지역명**: 고객이 실제 검색할 때 쓰는 **순수 지역명**
-  - **절대 규칙 — 다음 접미사는 절대 붙이지 마라**: "동", "읍", "면", "군", "구", "시"
-  - ❌ "단양읍", "마포구", "도화동", "강남구"
-  - ✓ "단양", "마포", "강남", "공덕"
-- **다의적 동명 주의 — 단독 사용 금지**:
-  - "신길"(서울+안산), "역삼"(서울+부산), "화곡", "중구", "동대문" 등 전국 중복되는 동명은 **단독 사용 금지**
-  - 반드시 **역명**(신길역, 역삼역) 또는 **상위 상권명**(영등포, 강남) 으로 대체
-- **주변 지하철역**: 매장 반경 1km 내 지하철역 (있으면 최대 2개, 없으면 null)
-- **주변 상권/랜드마크**: 유명 상권명 (있으면 최대 2개, 없으면 null)
+### 1단계: 지역 분석 — **네이버 검색 결과가 정확히 나오는 지역명 선택**
+- **대원칙**: 네이버에서 검색했을 때 **"해당 매장 주변 결과"** 가 나오는 지역명을 선택.
+  지역명이 애매하면 검색 결과가 전국 각지로 흩어짐 (서울 매장이 경쟁사로 뜨는 참사).
+
+- **우선순위**:
+  1. **주변 역명** (가장 유명 + 전국 유일): "공덕역", "강남역", "신길역"
+  2. **시+행정동 결합** (행정동명은 전국 중복 → 시로 명시): "청주 복대동", "부산 해운대동"
+  3. **행정동명 단독** (동 접미사 유지): "복대동", "도화동"
+  4. **구/시/군명**: "흥덕구", "단양"
+  5. **매장명 상권힌트**: "공덕", "뱅뱅사거리" (역/유명 상권만)
+
+- **접미사 유지 규칙** (매우 중요):
+  - ✅ "복대동" — 유지 (동 제거하면 "복대" = 네이버 모름)
+  - ✅ "청주 복대동" — 유지 (시+동 결합이 가장 정확)
+  - ✅ "오창읍" — 유지
+  - ✅ "단양" — 단양은 군명이라 단독으로도 유명 (예외)
+  - ❌ "마포구" → "마포" (구는 제거 OK — "마포" 는 유명)
+  - ❌ "서울" — 광역시 단독 금지 (전국 규모)
+
+- **다의적 동명**: "신길"(서울+안산), "역삼"(서울+부산) 등은 **반드시 시+동 or 역명**
+  - ❌ "신길 맛집"
+  - ✅ "신길역 맛집" 또는 "서울 신길동 맛집"
+
+- **주변 지하철역**: 매장 반경 1km 내 (있으면 최대 2개)
+- **주변 상권/랜드마크**: 유명 상권명 (있으면 최대 2개)
 
 ### 2단계: 키워드 생성 (총 **정확히 3개**, 품질 최우선)
 1. 구성 규칙 — **각 카테고리 1개씩, 총 3개**:
@@ -1010,7 +1127,7 @@ export class StoreSetupService {
 }
 \`\`\`
 
-## 예시 — 단양 보리밥집 (지방, 역 없음)
+## 예시 — 단양 보리밥집 (지방, 역 없음, 단양은 군명 단독 가능)
 \`\`\`json
 {
   "analysis": {"primaryRegion": "단양", "primaryKeyword": "단양 맛집", "subwayStations": null, "landmarks": ["수안보"]},
@@ -1021,6 +1138,22 @@ export class StoreSetupService {
   ]
 }
 \`\`\`
+
+## 예시 — 청주 복대동 고깃집 (행정동 접미사 유지 + 시+동 결합)
+\`\`\`json
+{
+  "analysis": {"primaryRegion": "청주 복대동", "primaryKeyword": "청주 복대동 맛집", "subwayStations": null, "landmarks": ["가경터미널"]},
+  "keywords": [
+    {"kw": "청주 복대동 맛집", "category": "유입"},
+    {"kw": "청주 복대동 회식", "category": "상황"},
+    {"kw": "청주 복대동 고기집", "category": "메뉴"}
+  ]
+}
+\`\`\`
+**⚠️ 위 예시가 왜 이래야 하는가**:
+- "복대" 단독 → 네이버가 어디인지 모름 → 전국 매칭 → 서울/용인 결과 섞임
+- "복대동" → 청주 복대동 외에 전국 동명 중복 가능성 (안전하려면 "청주 복대동")
+- 행정동 접미사 유지 + 시명 결합이 가장 정확
 
 ## 예시 — 공덕 카페 (카페 업종)
 \`\`\`json
@@ -1108,15 +1241,16 @@ export class StoreSetupService {
       }
     }
 
-    // AI 완전 실패 시 규칙 기반 최소 폴백 (AI 없이도 셋업 성공하도록 5개 이상 보장)
+    // AI 완전 실패 시 규칙 기반 최소 폴백
     const fallback: string[] = [];
-    // 2026-04-24 확정: 주소(동 > 구) 우선, brandLocationHint 는 보조.
-    // "화춘가든 복대본점" 에서 "복대본" 이 regionHint 로 잘못 들어가던 문제 방지
+    // 2026-04-24 동 접미사 유지 — "복대동" 그대로. "복대" 로 줄이면 전국 매칭 → 참사
     const primaryRegion =
-      dong?.replace(/(동|읍|면)$/, "") ||
+      dong ||                           // "복대동" 그대로
       gu?.replace(/구$/, "") ||
       brandLocationHint ||
       "";
+    // 시+동 조합 키워드용 (예: "청주 복대동")
+    const cityDong = city && dong ? `${city} ${dong}` : dong || "";
     // 대도시 여부 (역 키워드 생성 여부 판단)
     const isMetro = /특별시|광역시|서울|부산|대구|인천|광주|대전|울산|수원|성남|고양/.test(address);
     // 대표 메뉴 추출 (카테고리 원문/포괄어 제외, 세부 메뉴만)
@@ -1129,16 +1263,15 @@ export class StoreSetupService {
     );
 
     if (primaryRegion) {
-      // 유입 카테고리 (최소 2개) — 첫 번째가 폴백 primaryKeyword
-      fallback.push(`${primaryRegion} 맛집`);
-      if (isMetro) fallback.push(`${primaryRegion}역 맛집`);
-      else fallback.push(`${primaryRegion} 식당`);
-      // 상황 카테고리 (최소 2개)
-      fallback.push(`${primaryRegion} 회식`);
-      fallback.push(`${primaryRegion} 점심`);
-      // 메뉴 카테고리 (대표 메뉴 각각 1개씩)
-      for (const menu of safeMenus.slice(0, 3)) {
-        fallback.push(`${primaryRegion} ${menu}`);
+      // 2026-04-24: 시+동 조합 우선 (예: "청주 복대동 맛집") — 전국 동명 중복 방지
+      const base = cityDong || primaryRegion; // "청주 복대동" 이 있으면 우선
+      // 유입 (대표 키워드 포함)
+      fallback.push(`${base} 맛집`);
+      // 상황
+      fallback.push(`${base} 회식`);
+      // 메뉴
+      for (const menu of safeMenus.slice(0, 2)) {
+        fallback.push(`${base} ${menu}`);
       }
     }
 
@@ -1247,17 +1380,12 @@ ${catalogText}
       if (typeof raw0 !== "string") continue;
       // 1차 정제: trim, 쉼표 제거, 공백 정규화
       let k = raw0.trim().replace(/,/g, "").replace(/\s+/g, " ");
-      // 2차 정제: 지명 접미사 자동 제거 — "단양읍 맛집" → "단양 맛집", "마포구 맛집" → "마포 맛집"
-      //   주의: "공덕역"처럼 역명은 유지, "도화동" 같은 행정동명은 축약
-      k = k.replace(/([가-힣]{2,4})(읍|면|군)(\s|$)/g, "$1$3");
-      // "{지명}구" 도 제거 (단 "중구" 같은 1글자 구명은 유지)
-      k = k.replace(/([가-힣]{3,})(구)(\s|$)/g, "$1$3");
-      // "{지명}동" 도 제거 (브랜드 힌트가 더 구체적이므로 행정동 → 지명으로 축약)
-      k = k.replace(/([가-힣]{2,})(동)(\s|$)/g, (match, name, _suffix, tail) => {
-        // "공덕동" → "공덕"으로. 단 "역동" 같은 기능어는 유지.
-        if (["역동", "서동", "북동", "남동"].includes(name + "동")) return match;
-        return name + tail;
-      });
+      // 2026-04-24 2차 재설계 — 의뢰자 확정:
+      // 행정동/읍/면/군/구 접미사 **자동 제거 금지**.
+      // "복대동" → "복대" 로 줄이면 네이버가 어디인지 모름 → 전국 매칭 → 서울 송파/용인 광교 등 참사.
+      // AI 가 직접 올바른 지역명(복대동, 청주 복대동, 신길역 등)을 생성하도록 맡김.
+      // 단 "{지명}시"(서울시→서울) 정도만 안전하게 축약.
+      k = k.replace(/([가-힣]{2,})(특별시|광역시)(\s|$)/g, "$1$3");
       k = k.trim().replace(/\s+/g, " ");
 
       if (k.length < 2 || k.length > 30) continue;
