@@ -228,12 +228,24 @@ export class StoreSetupService {
     return { main: mainKeyword?.keyword || null, secondary: secondary.slice(0, 5) };
   }
 
-  async autoSetup(storeId: string) {
+  async autoSetup(
+    storeId: string,
+    opts?: {
+      customKeywords?: string[];
+      customCompetitorNames?: string[];
+    },
+  ) {
     const store = await this.prisma.store.findUnique({ where: { id: storeId } });
     if (!store) return;
 
     // 셋업 시작 상태 기록
     await this.updateSetupStatus(storeId, "RUNNING", "매장 정보 수집 중...");
+    if (opts?.customKeywords?.length) {
+      this.logger.log(`[custom] 사용자 입력 키워드 ${opts.customKeywords.length}개: ${opts.customKeywords.join(", ")}`);
+    }
+    if (opts?.customCompetitorNames?.length) {
+      this.logger.log(`[custom] 사용자 입력 경쟁사 ${opts.customCompetitorNames.length}개: ${opts.customCompetitorNames.join(", ")}`);
+    }
 
     try {
       // 1단계: 플레이스에서 실제 정보 수집
@@ -280,8 +292,8 @@ export class StoreSetupService {
       });
       const excludedSet = new Set(excluded.map((e) => e.keyword));
       const keywords = aiResult.keywords.filter((k) => !excludedSet.has(k));
-      // 10개 미만 cap (의뢰자 2026-04-24 요청) — primaryKeyword 는 반드시 포함시킨 뒤 자르기
-      const KEYWORD_CAP = 9;
+      // 2026-04-24 의뢰자 확정 — 정확히 3개 (유입 1 + 상황 1 + 메뉴 1). 나머지는 키워드 추천에서 수동 추가
+      const KEYWORD_CAP = 3;
       let cappedKeywords = keywords;
       if (keywords.length > KEYWORD_CAP) {
         const withPrimary = keywords.includes(aiResult.primaryKeyword)
@@ -320,6 +332,27 @@ export class StoreSetupService {
         } catch (e: any) {
           if (!e.message?.includes("Unique")) {
             this.logger.warn(`키워드 추가 실패 [${kw}]: ${e.message}`);
+          }
+        }
+      }
+
+      // 1-1) 사장님이 직접 입력한 커스텀 키워드 추가 저장 (type:MANUAL, 중복 제외)
+      if (opts?.customKeywords?.length) {
+        const aiSet = new Set(cappedKeywords.map((k) => k.replace(/\s+/g, "")));
+        for (const rawKw of opts.customKeywords) {
+          const kw = rawKw.trim().replace(/\s+/g, " ");
+          if (kw.length < 2 || kw.length > 30) continue;
+          if (aiSet.has(kw.replace(/\s+/g, ""))) continue; // AI 생성과 중복 스킵
+          try {
+            const created = await this.prisma.storeKeyword.create({
+              data: { storeId, keyword: kw, type: "USER_ADDED" },
+            });
+            createdKeywords.push({ id: created.id, keyword: kw });
+            this.logger.log(`[custom] 키워드 추가: "${kw}"`);
+          } catch (e: any) {
+            if (!e.message?.includes("Unique")) {
+              this.logger.warn(`[custom] 키워드 추가 실패 [${kw}]: ${e.message}`);
+            }
           }
         }
       }
@@ -405,6 +438,51 @@ export class StoreSetupService {
       this.logger.log(
         `경쟁사 쿼리 계획 — MAIN: "${competitorQueryPlan.main ?? "없음"}" / secondary: ${competitorQueryPlan.secondary.join(" / ")}`,
       );
+
+      // 3-0) 사장님이 직접 입력한 커스텀 경쟁사 먼저 저장 (Place API 로 placeId 조회)
+      if (opts?.customCompetitorNames?.length) {
+        for (const rawName of opts.customCompetitorNames) {
+          const name = rawName.trim().replace(/\s+/g, " ");
+          if (name.length < 2 || name.length > 60) continue;
+          // URL 이면 placeId 추출, 아니면 Place API 검색
+          const urlMatch = name.match(/place\/(\d+)|restaurant\/(\d+)|cafe\/(\d+)/);
+          let placeId: string | undefined;
+          let info: any = null;
+          try {
+            if (urlMatch) {
+              placeId = urlMatch[1] || urlMatch[2] || urlMatch[3];
+              info = await this.naverPlace.getPlaceDetail(placeId!);
+            } else {
+              info = await this.naverPlace.searchAndGetPlaceInfo(name);
+              placeId = info?.id;
+            }
+          } catch (e: any) {
+            this.logger.warn(`[custom] 경쟁사 Place 조회 실패 [${name}]: ${e.message}`);
+          }
+          try {
+            await this.prisma.competitor.create({
+              data: {
+                storeId,
+                competitorName: info?.name || name,
+                competitorPlaceId: placeId || undefined,
+                category: info?.category || finalCategory || undefined,
+                type: "USER_SET",
+                competitionType: "DIRECT",
+                receiptReviewCount: info?.visitorReviewCount || undefined,
+                blogReviewCount: info?.blogReviewCount || undefined,
+                lastComparedAt: new Date(),
+              },
+            });
+            this.logger.log(`[custom] 경쟁사 저장: ${info?.name || name} (placeId=${placeId || "미상"})`);
+          } catch (e: any) {
+            if (!e.message?.includes("Unique")) {
+              this.logger.warn(`[custom] 경쟁사 저장 실패 [${name}]: ${e.message}`);
+            }
+          }
+        }
+      }
+
+      // 3-1) AI 자동 경쟁사 탐색 (커스텀 저장 후 슬롯 감안)
       await this.findCompetitorsByQueries(
         storeId,
         store.name,
@@ -426,130 +504,29 @@ export class StoreSetupService {
         );
       }
 
-      // 4단계: 히든 키워드 발굴 + 자동 등록
-      await this.updateSetupStatus(storeId, "RUNNING", "히든 키워드를 발굴하는 중...");
-      let hiddenCount = 0;
-      try {
-        const discovery = await this.keywordDiscovery.discoverKeywords(storeId);
-        for (const hidden of discovery.hidden) {
-          try {
-            await this.prisma.storeKeyword.create({
-              data: {
-                storeId,
-                keyword: hidden.keyword,
-                type: "HIDDEN",
-                monthlySearchVolume: hidden.monthlyVolume || null,
-                lastCheckedAt: new Date(),
-              },
-            });
-            hiddenCount++;
-          } catch (e: any) {
-            if (!e.message?.includes("Unique")) {
-              this.logger.warn(`히든 키워드 추가 실패 [${hidden.keyword}]: ${e.message}`);
-            }
-          }
-        }
-        this.logger.log(`히든 키워드 ${hiddenCount}개 등록`);
-      } catch (e: any) {
-        this.logger.warn(`히든 키워드 발굴 실패: ${e.message}`);
-      }
-
-      // 5단계: 첫 AI 분석 자동 실행
-      await this.updateSetupStatus(storeId, "RUNNING", "AI가 매장을 분석하는 중...");
-      let analysisScore: number | null = null;
-      try {
-        const analysis = await this.analysisService.analyzeStore(storeId);
-        analysisScore = analysis.competitiveScore as number | null;
-        this.logger.log(`첫 분석 완료: 경쟁력 ${analysisScore}점`);
-      } catch (e: any) {
-        this.logger.warn(`첫 분석 실패 (나중에 재시도 가능): ${e.message}`);
-      }
-
-      // 6단계: 첫 순위 체크 — 가입 당일 내 키워드별 현재 순위 확보 (증감 기준선)
-      await this.updateSetupStatus(storeId, "RUNNING", "키워드 순위를 체크하는 중...");
-      await this.rankCheckService.checkAllKeywordRanks(storeId);
-      // 최소 1개 키워드는 순위 잡혀야 정상 셋업 (Top 50 밖이어도 rank=null 로 기록되지만, 체크 자체 실패는 에러)
-      const checkedCount = await this.prisma.storeKeyword.count({
-        where: { storeId, lastCheckedAt: { not: null } },
-      });
-      if (checkedCount < 1) {
-        throw new Error(`순위 체크 실패 — 0개 키워드 체크됨. 네이버 검색 엔진을 확인하세요.`);
-      }
-      this.logger.log(`첫 순위 체크 완료 — ${checkedCount}개 키워드 체크`);
-
-      // 7단계: 첫 일별 스냅샷 — 리뷰/검색량 기준선 확보
-      await this.updateSetupStatus(storeId, "RUNNING", "리뷰 기준선을 기록하는 중...");
-      try {
-        const today = new Date();
-        today.setUTCHours(0, 0, 0, 0);
-        await this.dailySnapshotJob.collectStoreSnapshots(today);
-        await this.dailySnapshotJob.collectCompetitorSnapshots(today);
-        this.logger.log(`첫 스냅샷 기록 완료`);
-      } catch (e: any) {
-        this.logger.warn(`첫 스냅샷 실패 (나중에 재시도 가능): ${e.message}`);
-      }
-
-      // 7-2단계: 과거 30일 역산 backfill — 가입 즉시 추이 차트 확보
-      await this.updateSetupStatus(storeId, "RUNNING", "과거 30일 추이를 역산하는 중...");
-      try {
-        await this.backfillService.backfillStore(storeId);
-        await this.backfillService.backfillAllCompetitors(storeId);
-        this.logger.log(`30일 역산 backfill 완료`);
-      } catch (e: any) {
-        this.logger.warn(`30일 backfill 실패 (나중에 재시도 가능): ${e.message}`);
-      }
-
-      // 7-2.5단계: 주재료 자동 판정 (KAMIS 가격 추적 대상)
-      await this.updateSetupStatus(storeId, "RUNNING", "주재료 자동 판정 중...");
-      try {
-        const ingredients = await this.detectKeyIngredients(store.name, finalCategory, aiResult.keywords);
-        if (ingredients.length > 0) {
-          await this.prisma.store.update({
-            where: { id: storeId },
-            data: { keyIngredients: ingredients },
-          });
-          this.logger.log(`주재료 ${ingredients.length}개 등록: ${ingredients.join(", ")}`);
-        }
-      } catch (e: any) {
-        this.logger.warn(`주재료 판정 실패 (나중에 수동 설정 가능): ${e.message}`);
-      }
-
-      // 7-3단계: 주변 축제/이벤트 수집 (TourAPI) — 매장 지역 90일치
-      // 축제 데이터만 SeasonalEvent 테이블에 저장. StoreKeyword 자동 삽입 금지.
-      // (축제명 raw 단어를 매장 키워드로 꽂으면 "서울"/"DDP" 같은 쓰레기가 유입됨 — 2026-04-24 의뢰자 확정)
-      // 사장님이 시즌 이벤트 화면에서 원하는 축제만 수동으로 키워드에 추가하는 경로만 유지.
-      await this.updateSetupStatus(storeId, "RUNNING", "주변 축제/이벤트 수집 중...");
-      try {
-        const eventCount = await this.eventCollector.collectForStore(storeId, 90);
-        this.logger.log(`축제 ${eventCount}개 수집 완료`);
-      } catch (e: any) {
-        this.logger.warn(`축제 수집 실패 (나중에 재시도 가능): ${e.message}`);
-      }
-
-      // 8단계: 첫 브리핑 생성
-      await this.updateSetupStatus(storeId, "RUNNING", "오늘의 브리핑을 생성하는 중...");
-      try {
-        await this.briefingService.generateDailyBriefing(storeId);
-        this.logger.log(`첫 브리핑 생성 완료`);
-      } catch (e: any) {
-        this.logger.warn(`첫 브리핑 생성 실패 (나중에 재시도 가능): ${e.message}`);
-      }
-
-      // 9단계: 셋업 완료
-      const totalKeywords = keywordCount + hiddenCount;
-      const scoreText = analysisScore ? `, 경쟁력 ${analysisScore}점` : "";
+      // ============================================================
+      // ✅ 2026-04-24 비동기화 — 키워드+경쟁사 완료 시점에 COMPLETED 전환
+      //    나머지(히든/분석/순위/백필/주재료/축제/브리핑) 은 백그라운드
+      //    → 사장님 대시보드 진입 대기 시간 약 10분 → 약 60~90초
+      // ============================================================
       await this.prisma.store.update({
         where: { id: storeId },
         data: {
           setupStatus: "COMPLETED",
-          setupStep: `키워드 ${totalKeywords}개, 경쟁사 ${competitorCount}개${scoreText}`,
+          setupStep: `키워드 ${keywordCount}개, 경쟁사 ${competitorCount}개 (추가 분석 진행 중)`,
           setupError: null,
           setupCompletedAt: new Date(),
         },
       });
       this.logger.log(
-        `자동 셋업 완료: ${store.name} (키워드 ${totalKeywords}개, 히든 ${hiddenCount}개, 경쟁사 ${competitorCount}개${scoreText})`,
+        `✅ 핵심 셋업 완료 → 대시보드 진입 가능: ${store.name} (키워드 ${keywordCount}개, 경쟁사 ${competitorCount}개). 백그라운드 후속 작업 시작`,
       );
+
+      // 백그라운드 후속 작업 — await 없이 fire-and-forget
+      // 실패해도 전체 셋업은 COMPLETED 유지, 개별 단계 실패는 로그만 남김
+      this.runBackgroundSetup(storeId, store.name, finalCategory, aiResult.keywords).catch((e) => {
+        this.logger.error(`[백그라운드 셋업] 실패 ${store.name}: ${e.message}`);
+      });
 
     } catch (e: any) {
       this.logger.error(`자동 셋업 실패 [${store.name}]: ${e.message}`);
@@ -571,6 +548,118 @@ export class StoreSetupService {
       where: { id: storeId },
       data: { setupStatus: status, setupStep: step },
     });
+  }
+
+  /**
+   * 비동기 백그라운드 셋업 — 매장 등록 시 핵심(키워드+경쟁사) 끝난 직후 fire-and-forget 호출.
+   * 대시보드 진입 후 사장님이 보는 동안 조용히 채움.
+   * 각 단계 실패는 로그만 남기고 전체 셋업은 COMPLETED 유지.
+   */
+  private async runBackgroundSetup(
+    storeId: string,
+    storeName: string,
+    category: string,
+    aiKeywords: string[],
+  ) {
+    this.logger.log(`[백그라운드 셋업 시작] ${storeName}`);
+
+    // 1) 히든 키워드 발굴
+    try {
+      const discovery = await this.keywordDiscovery.discoverKeywords(storeId);
+      let hiddenCount = 0;
+      for (const hidden of discovery.hidden) {
+        try {
+          await this.prisma.storeKeyword.create({
+            data: {
+              storeId,
+              keyword: hidden.keyword,
+              type: "HIDDEN",
+              monthlySearchVolume: hidden.monthlyVolume || null,
+              lastCheckedAt: new Date(),
+            },
+          });
+          hiddenCount++;
+        } catch (e: any) {
+          if (!e.message?.includes("Unique")) {
+            this.logger.warn(`[bg] 히든 키워드 추가 실패 [${hidden.keyword}]: ${e.message}`);
+          }
+        }
+      }
+      this.logger.log(`[bg] 히든 키워드 ${hiddenCount}개 등록`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 히든 키워드 발굴 실패: ${e.message}`);
+    }
+
+    // 2) 첫 AI 분석 (경쟁력 점수)
+    try {
+      const analysis = await this.analysisService.analyzeStore(storeId);
+      this.logger.log(`[bg] 첫 분석 완료: 경쟁력 ${analysis.competitiveScore}점`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 첫 분석 실패: ${e.message}`);
+    }
+
+    // 3) 첫 순위 체크 (Top 300 페이지네이션, 키워드당 30~60초)
+    try {
+      await this.rankCheckService.checkAllKeywordRanks(storeId);
+      const checkedCount = await this.prisma.storeKeyword.count({
+        where: { storeId, lastCheckedAt: { not: null } },
+      });
+      this.logger.log(`[bg] 첫 순위 체크 완료 — ${checkedCount}개 키워드 체크`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 순위 체크 실패: ${e.message}`);
+    }
+
+    // 4) 첫 일별 스냅샷 (리뷰/검색량 기준선)
+    try {
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      await this.dailySnapshotJob.collectStoreSnapshots(today);
+      await this.dailySnapshotJob.collectCompetitorSnapshots(today);
+      this.logger.log(`[bg] 첫 스냅샷 기록 완료`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 첫 스냅샷 실패: ${e.message}`);
+    }
+
+    // 5) 30일 역산 backfill (내 매장 + 경쟁사들)
+    try {
+      await this.backfillService.backfillStore(storeId);
+      await this.backfillService.backfillAllCompetitors(storeId);
+      this.logger.log(`[bg] 30일 역산 backfill 완료`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 30일 backfill 실패: ${e.message}`);
+    }
+
+    // 6) 주재료 자동 판정 (KAMIS 연계)
+    try {
+      const ingredients = await this.detectKeyIngredients(storeName, category, aiKeywords);
+      if (ingredients.length > 0) {
+        await this.prisma.store.update({
+          where: { id: storeId },
+          data: { keyIngredients: ingredients },
+        });
+        this.logger.log(`[bg] 주재료 ${ingredients.length}개 등록: ${ingredients.join(", ")}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[bg] 주재료 판정 실패: ${e.message}`);
+    }
+
+    // 7) 주변 축제/이벤트 수집 (TourAPI) — StoreKeyword 자동 삽입은 금지
+    try {
+      const eventCount = await this.eventCollector.collectForStore(storeId, 90);
+      this.logger.log(`[bg] 축제 ${eventCount}개 수집 완료`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 축제 수집 실패: ${e.message}`);
+    }
+
+    // 8) 첫 브리핑 생성 (AI)
+    try {
+      await this.briefingService.generateDailyBriefing(storeId);
+      this.logger.log(`[bg] 첫 브리핑 생성 완료`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 첫 브리핑 생성 실패: ${e.message}`);
+    }
+
+    this.logger.log(`[백그라운드 셋업 완료] ${storeName}`);
   }
 
   // 셋업 상태 조회 (프론트 폴링용)
@@ -824,100 +913,121 @@ export class StoreSetupService {
     const cleanDong = dong?.replace(/(동|읍|면)$/, "");
     const cleanGu = gu?.replace(/구$/, "");
 
-    // 의뢰자(마케팅 전문가) 공식 프롬프트 — AI가 먼저 지역 맥락을 추론한 뒤 키워드 생성
-    // 2026-04-24: primaryKeyword 필수 필드 추가 — 대표 키워드 1개를 AI가 명시 선정 → MAIN 타입으로 저장
-    const systemPrompt = `당신은 자영업 마케팅 전문가. 주어진 매장에 대해 **먼저 지역 맥락을 파악**한 뒤, 실제 고객 유입으로 이어지는 검색 키워드를 생성해야 함.
+    // 2026-04-24 재작성 — 의뢰자 확정:
+    //  - 총 3~5개 (적게, 정확히)
+    //  - 다의적 행정동명(신길/역삼/중구/화곡 등) 단독 사용 금지 — 역명·상위 상권명 우선
+    //  - 업종별 상황 키워드 적합성 검증 (삼겹살에 "점심" 같은 미스매치 차단)
+    //  - primaryKeyword 는 역명 기반 우선 (예: "신길역 맛집")
+    const systemPrompt = `당신은 자영업 마케팅 전문가. 주어진 매장에 대해 **지역 맥락과 업종 특성**을 모두 고려해 실제 고객 유입으로 이어지는 검색 키워드 **3~5개**를 생성한다.
 
 ## 작업 순서
 
-### 1단계: 지역 분석 (너 머릿속에서 먼저 판단)
+### 1단계: 지역 분석
 - **핵심 유입 지역명**: 고객이 실제 검색할 때 쓰는 **순수 지역명**
   - **절대 규칙 — 다음 접미사는 절대 붙이지 마라**: "동", "읍", "면", "군", "구", "시"
-  - ❌ "단양읍", "단양군", "마포구", "도화동", "강남구"
+  - ❌ "단양읍", "마포구", "도화동", "강남구"
   - ✓ "단양", "마포", "강남", "공덕"
-  - 행정 경계가 아닌 **상권/역 이름 우선**:
-    - 주소가 "서울 마포구 도화동"이고 매장명이 "공덕직영점" → 핵심 지역은 **"공덕"** (도화 X, 마포 X)
-    - 주소가 "충북 단양군 단양읍" → 핵심 지역은 **"단양"** (단양읍 X, 단양군 X)
+- **다의적 동명 주의 — 단독 사용 금지**:
+  - "신길"(서울+안산), "역삼"(서울+부산), "화곡", "중구", "동대문" 등 전국 중복되는 동명은 **단독 사용 금지**
+  - 반드시 **역명**(신길역, 역삼역) 또는 **상위 상권명**(영등포, 강남) 으로 대체
 - **주변 지하철역**: 매장 반경 1km 내 지하철역 (있으면 최대 2개, 없으면 null)
 - **주변 상권/랜드마크**: 유명 상권명 (있으면 최대 2개, 없으면 null)
-  예: 강남역 주변 → "뱅뱅사거리", "신논현"
 
-### 2단계: 키워드 생성 — 아래 규칙 **모두** 준수
-1. 지역 키워드:
-   - 지하철역이 있으면 '지역명' + '지역명+역' 두 형태 (예: 공덕 맛집, 공덕역 맛집)
-   - 역이 없는 지방 지역은 '지역명'만 (억지로 '역' 붙이지 말 것)
-   - 추가 상권/랜드마크가 있으면 포함 (예: 뱅뱅사거리 맛집)
-2. 키워드는 3가지 카테고리로 분류해서 생성:
-   - **유입** (예: 맛집, 식당) — 최소 2개
-   - **상황** (예: 회식, 점심, 데이트, 가족모임, 혼밥) — 최소 2개
-   - **메뉴** (예: 아구찜, 소고기 같은 세부 메뉴) — 최소 2개
-3. 총 7~10개로 구성
-4. 고객 검색 흐름 반영 (유입 → 상황 → 메뉴)
-5. '고기집', '한식', '음식점' 같은 포괄적 키워드 **단독 사용 금지** — 반드시 지역명 결합 or 세부 메뉴
-6. 카테고리 원문 절대 포함 금지 (예: "음식점>한식" ❌)
-7. 단순 정보 탐색 키워드 금지 (예: "한식 역사" ❌)
-8. 유사 의미 키워드 중복 최소화
+### 2단계: 키워드 생성 (총 **정확히 3개**, 품질 최우선)
+1. 구성 규칙 — **각 카테고리 1개씩, 총 3개**:
+   - **유입 1개 (필수)**: 대표 키워드. **역명 우선** (예: "신길역 맛집", "영등포 맛집")
+   - **상황 1개 (필수)**: 해당 업종에 **가장 적합한** 상황 1개만 (아래 업종별 매핑 참조)
+   - **메뉴 1개 (필수)**: 대표 메뉴 + 지역 결합 (예: "신길역 삼겹살")
+2. **업종별 적합 상황 매핑** ⭐ 반드시 준수:
+   | 업종 | 적합 (포함 OK) | 부적합 (금지) |
+   |---|---|---|
+   | 삼겹살/고기집/갈비 | 회식, 저녁, 술집, 술안주 | 점심, 아침, 브런치 |
+   | 국밥/백반/분식/김밥 | 점심, 해장, 아침 | 회식, 데이트, 기념일 |
+   | 치킨/피자/족발/보쌈 | 야식, 배달, 주말 | 점심, 상견례 |
+   | 카페/디저트/베이커리 | 데이트, 수다, 공부 | 회식, 술자리 |
+   | 한정식/고급 한식/양식 | 데이트, 기념일, 상견례 | 해장, 야식 |
+   | 횟집/일식/초밥 | 회식, 저녁, 가족모임 | 점심(회전초밥 제외) |
+   | 아구찜/해물찜/매운갈비찜 | 회식, 저녁, 술안주 | 아침, 브런치 |
+3. 지역 키워드 형식:
+   - 지하철역 있으면 **역명 우선** (예: "신길역 맛집") — 역명은 전국 유일하여 정확
+   - 역 없는 지방은 순수 지역명 (예: "단양 맛집")
+4. 금지:
+   - '고기집', '한식', '음식점' 같은 **포괄적 단독 키워드**
+   - 카테고리 원문 (예: "음식점>한식")
+   - 단순 정보 탐색 ("한식 역사")
+   - 업종에 **부적합한 상황 키워드** (위 매핑 위반 시 시도 실패로 간주)
 
-### 3단계: **대표 키워드(primaryKeyword) 1개 명시 선정** ⭐ 필수
-생성한 키워드 중 **"메뉴 미정 상태에서 이 매장을 발견할 확률이 가장 높은 키워드 1개"** 를 선택.
-- 선정 기준 (우선순위):
-  1. **지역+유입** (예: "공덕 맛집") — 가장 보편적 진입점. 기본값
-  2. 지역+상황 (예: "강남 회식") — 회식/데이트 특화 매장
-  3. 랜드마크+유입 (예: "뱅뱅사거리 맛집") — 관광지/특수상권
-- **절대 메뉴 키워드 선택 금지** — 메뉴 키워드는 이미 결정한 고객용 (전환 검색)
-- primaryKeyword 는 반드시 keywords 배열 안에도 존재해야 함
+### 3단계: **대표 키워드(primaryKeyword) 1개 선정** ⭐ 필수
+- 선정 기준:
+  1. **역명+유입** 최우선 (예: "신길역 맛집", "강남역 맛집") — 지역 명확, 검색 흐름 보편
+  2. 상위 상권+유입 차선 (예: "영등포 맛집") — 역명 불명확 시
+  3. 랜드마크+유입 (예: "뱅뱅사거리 맛집") — 특수 상권
+- **절대 메뉴 키워드 선택 금지** (메뉴는 전환 검색용, 진입 아님)
+- **절대 다의적 동명 단독 금지** ("신길 맛집" ❌, "신길역 맛집" ✅)
+- primaryKeyword 는 반드시 keywords 배열 안에 존재
 
-## 출력 형식 (JSON만, 설명 없이)
+## 출력 형식 (JSON만, 설명 없이, **정확히 3개**)
 
 \`\`\`json
 {
   "analysis": {
-    "primaryRegion": "공덕",
-    "primaryKeyword": "공덕 맛집",
-    "subwayStations": ["공덕역"],
-    "landmarks": ["공덕오거리"]
+    "primaryRegion": "신길역",
+    "primaryKeyword": "신길역 맛집",
+    "subwayStations": ["신길역", "영등포역"],
+    "landmarks": ["영등포"]
   },
   "keywords": [
-    {"kw": "공덕 맛집", "category": "유입"},
+    {"kw": "신길역 맛집", "category": "유입"},
+    {"kw": "신길역 회식", "category": "상황"},
+    {"kw": "신길역 삼겹살", "category": "메뉴"}
+  ]
+}
+\`\`\`
+
+## 예시 — 공덕 아구찜집
+\`\`\`json
+{
+  "analysis": {"primaryRegion": "공덕", "primaryKeyword": "공덕역 맛집", "subwayStations": ["공덕역"], "landmarks": ["공덕오거리"]},
+  "keywords": [
     {"kw": "공덕역 맛집", "category": "유입"},
-    {"kw": "공덕 회식", "category": "상황"},
     {"kw": "공덕역 회식", "category": "상황"},
-    {"kw": "공덕 점심", "category": "상황"},
-    {"kw": "공덕 아구찜", "category": "메뉴"},
-    {"kw": "공덕 해물찜", "category": "메뉴"},
     {"kw": "공덕역 아구찜", "category": "메뉴"}
   ]
 }
 \`\`\`
 
-## 예시 — 육목원 (강남 소고기집)
+## 예시 — 강남 소고기집
 \`\`\`json
 {
-  "analysis": {"primaryRegion": "강남", "primaryKeyword": "강남 맛집", "subwayStations": ["강남역"], "landmarks": ["뱅뱅사거리"]},
+  "analysis": {"primaryRegion": "강남", "primaryKeyword": "강남역 맛집", "subwayStations": ["강남역"], "landmarks": ["뱅뱅사거리"]},
   "keywords": [
-    {"kw": "강남 맛집", "category": "유입"},
     {"kw": "강남역 맛집", "category": "유입"},
     {"kw": "강남 회식", "category": "상황"},
-    {"kw": "강남역 회식", "category": "상황"},
-    {"kw": "강남 소고기", "category": "메뉴"},
-    {"kw": "강남역 소고기", "category": "메뉴"},
-    {"kw": "뱅뱅사거리 맛집", "category": "유입"}
+    {"kw": "강남역 소고기", "category": "메뉴"}
   ]
 }
 \`\`\`
 
-## 예시 — 지방 매장 (단양 보리밥집, 역 없음)
+## 예시 — 단양 보리밥집 (지방, 역 없음)
 \`\`\`json
 {
   "analysis": {"primaryRegion": "단양", "primaryKeyword": "단양 맛집", "subwayStations": null, "landmarks": ["수안보"]},
   "keywords": [
     {"kw": "단양 맛집", "category": "유입"},
-    {"kw": "단양 한정식", "category": "유입"},
-    {"kw": "단양 가족모임", "category": "상황"},
     {"kw": "단양 점심", "category": "상황"},
-    {"kw": "단양 보리밥", "category": "메뉴"},
-    {"kw": "단양 흑마늘", "category": "메뉴"},
-    {"kw": "수안보 맛집", "category": "유입"}
+    {"kw": "단양 보리밥", "category": "메뉴"}
+  ]
+}
+\`\`\`
+
+## 예시 — 공덕 카페 (카페 업종)
+\`\`\`json
+{
+  "analysis": {"primaryRegion": "공덕", "primaryKeyword": "공덕역 카페", "subwayStations": ["공덕역"], "landmarks": null},
+  "keywords": [
+    {"kw": "공덕역 카페", "category": "유입"},
+    {"kw": "공덕 데이트", "category": "상황"},
+    {"kw": "공덕 브런치 카페", "category": "메뉴"}
   ]
 }
 \`\`\``;
@@ -960,10 +1070,12 @@ export class StoreSetupService {
               byCategory[e.category] = (byCategory[e.category] || 0) + 1;
             }
           }
+          // 2026-04-24: 정확히 3개 체제 — 유입 1 + 상황 1 + 메뉴 1 (각 카테고리 최소 1)
           const balanced =
-            (byCategory["유입"] || 0) >= 2 &&
+            (byCategory["유입"] || 0) >= 1 &&
+            (byCategory["상황"] || 0) >= 1 &&
             (byCategory["메뉴"] || 0) >= 1 &&
-            cleaned.length >= 5;
+            cleaned.length >= 3;
 
           if (balanced) {
             // primaryKeyword 검증 — AI가 누락/잘못 지정 시 유입 카테고리 첫 키워드로 폴백
@@ -1165,20 +1277,19 @@ ${catalogText}
    *    판단 기준: 같은 상권 / 같은 업종 / 내 매장보다 리뷰 많거나 비슷한 매장 / 체인점/무관 제외
    */
   /**
-   * 2026-04-24 근본 재설계 — 경쟁사 수집:
-   *  - 소스: `rankChecker.fetchTopPlaces` (네이버 플레이스 HTML 검색 Top)
-   *         → `naverSearch.searchPlace` (지역 OpenAPI sort=comment) 금지.
-   *           단순 리뷰많은순이라 "신길 맛집" 에 스타벅스/맥도날드/버거킹 뜨는 참사
-   *  - 필터: 음식점만 (카페/디저트/패스트푸드/주점/편의점 제외) — 의뢰자 명시 확정
-   *  - EXPOSURE: MAIN 키워드(예: "신길 맛집") Top 중 음식점만
-   *  - DIRECT:   secondary(메뉴+지역) Top 중 음식점만 + AI 선별
+   * 2026-04-24 단순화 재설계 — 의뢰자 확정:
+   *  - 대표 키워드(MAIN, 예: "신길역 맛집") Top 3 → EXPOSURE (상권 강자, 업종 무관)
+   *  - 동종 메뉴 키워드(secondary) Top 3 → DIRECT (같은 업종 직접 경쟁)
+   *  - 최대 6개 (중복 제거 시 더 적을 수 있음)
+   *  - 2-레이어 AI 선별/음식점 필터 전부 제거 — APOLLO_STATE 파서가 이미 광고/비음식점 배제
+   *  - 음식점 단독 필터는 불필요: 대표 키워드 "~~ 맛집" 이 네이버 restaurantList 쿼리로 제한
    */
   private async findCompetitorsByQueries(
     storeId: string,
     storeName: string,
     queryPlan: { main: string | null; secondary: string[] },
     category: string,
-    myStore?: { visitorReviewCount?: number | null; blogReviewCount?: number | null; address?: string | null },
+    _myStore?: { visitorReviewCount?: number | null; blogReviewCount?: number | null; address?: string | null },
   ) {
     const normalizedStoreName = storeName.replace(/\s+/g, "");
     type Candidate = {
@@ -1188,8 +1299,7 @@ ${catalogText}
       address?: string;
       visitorReviewCount?: number;
       blogReviewCount?: number;
-      appearances: number;
-      queryMatches: string[];
+      source: "EXPOSURE" | "DIRECT";
     };
 
     const isSelf = (normalized: string, name: string): boolean => {
@@ -1201,53 +1311,55 @@ ${catalogText}
       return false;
     };
 
-    // ========== Stage 1: EXPOSURE 수집 (MAIN 키워드 플레이스 HTML Top 20) ==========
-    // 음식점 필터는 Stage 3 Place API 카테고리 보강 후 적용
-    const exposureNames = new Set<string>();
-    const exposureCandidates: Candidate[] = [];
+    // 2026-04-24 의뢰자 확정 — 총 6개 (EXPOSURE 3 + DIRECT 3)
+    // EXPOSURE: 대표 키워드 Top 3 (상권 강자, 업종 무관)
+    // DIRECT: 메뉴+상황 키워드 Top 합산 상위 3 (동종 직접 경쟁)
+    const EXPOSURE_CAP = 3;
+    const DIRECT_CAP = 3;
+
+    // ========== Stage 1: EXPOSURE — 대표 키워드 Top 3 (상권 강자) ==========
+    const exposureList: Candidate[] = [];
+    const seenKeys = new Set<string>();
     if (queryPlan.main) {
-      this.logger.log(`[EXPOSURE 수집] "${queryPlan.main}" 플레이스 HTML Top 20`);
+      this.logger.log(`[EXPOSURE] 대표키워드 "${queryPlan.main}" Top ${EXPOSURE_CAP} 수집`);
       try {
-        const results = await this.rankChecker.fetchTopPlaces(queryPlan.main, 20);
+        const results = await this.rankChecker.fetchTopPlaces(queryPlan.main, EXPOSURE_CAP + 5);
         for (const r of results) {
-          const normalized = r.name.replace(/\s+/g, "");
-          if (isSelf(normalized, r.name)) continue;
-          if (exposureNames.has(normalized)) continue;
-          exposureNames.add(normalized);
-          exposureCandidates.push({
+          const norm = r.name.replace(/\s+/g, "");
+          if (isSelf(norm, r.name)) continue;
+          if (seenKeys.has(norm)) continue;
+          seenKeys.add(norm);
+          exposureList.push({
             name: r.name,
             placeId: r.id || undefined,
-            appearances: 1,
-            queryMatches: [queryPlan.main],
+            source: "EXPOSURE",
           });
+          if (exposureList.length >= EXPOSURE_CAP) break;
         }
-        this.logger.log(`[EXPOSURE] ${exposureCandidates.length}곳 수집 (필터 전)`);
       } catch (e: any) {
         this.logger.warn(`[EXPOSURE] 수집 실패 "${queryPlan.main}": ${e.message}`);
       }
-    } else {
-      this.logger.warn(`[EXPOSURE] MAIN 키워드 없음 — skip`);
     }
 
-    // ========== Stage 2: DIRECT 후보 수집 (secondary 쿼리 플레이스 HTML) ==========
-    const directCandMap = new Map<string, Candidate>();
+    // ========== Stage 2: DIRECT — 메뉴 키워드 Top N 합산 후 상위 3개 (동종 경쟁) ==========
+    const directMap = new Map<string, Candidate & { hits: number }>();
     for (const query of queryPlan.secondary) {
       try {
-        this.logger.log(`[DIRECT 후보 수집] "${query}" 플레이스 HTML Top 15`);
-        const results = await this.rankChecker.fetchTopPlaces(query, 15);
+        this.logger.log(`[DIRECT] 메뉴키워드 "${query}" Top 10 수집`);
+        const results = await this.rankChecker.fetchTopPlaces(query, 10);
         for (const r of results) {
-          const normalized = r.name.replace(/\s+/g, "");
-          if (isSelf(normalized, r.name)) continue;
-          const existing = directCandMap.get(normalized);
+          const norm = r.name.replace(/\s+/g, "");
+          if (isSelf(norm, r.name)) continue;
+          if (seenKeys.has(norm)) continue; // EXPOSURE 와 중복 제외
+          const existing = directMap.get(norm);
           if (existing) {
-            existing.appearances += 1;
-            if (!existing.queryMatches.includes(query)) existing.queryMatches.push(query);
+            existing.hits += 1;
           } else {
-            directCandMap.set(normalized, {
+            directMap.set(norm, {
               name: r.name,
               placeId: r.id || undefined,
-              appearances: 1,
-              queryMatches: [query],
+              source: "DIRECT",
+              hits: 1,
             });
           }
         }
@@ -1255,131 +1367,46 @@ ${catalogText}
         this.logger.warn(`[DIRECT] 수집 실패 [${query}]: ${e.message}`);
       }
     }
-    const directCandidates = Array.from(directCandMap.values()).sort(
-      (a, b) => b.appearances - a.appearances,
-    );
-    this.logger.log(
-      `[DIRECT] 후보 ${directCandidates.length}개 (필터 전) — 교집합(≥2) ${directCandidates.filter((c) => c.appearances >= 2).length}개`,
-    );
+    const directList: Candidate[] = Array.from(directMap.values())
+      .sort((a, b) => b.hits - a.hits) // 여러 메뉴 키워드 교집합 우선
+      .slice(0, DIRECT_CAP);
+    for (const c of directList) seenKeys.add(c.name.replace(/\s+/g, ""));
 
-    // 조기 종료 — EXPOSURE + DIRECT 후보 모두 0이면 더 진행 불가
-    if (exposureCandidates.length === 0 && directCandidates.length === 0) {
-      this.logger.warn(`[경쟁사] 후보 0개 — 네이버 검색 완전 실패`);
+    if (exposureList.length === 0 && directList.length === 0) {
+      this.logger.warn(`[경쟁사] 수집 0건 — 네이버 검색 실패 or 결과 없음`);
       return;
     }
 
-    // ========== Stage 3: Place API 보강 (EXPOSURE + DIRECT 합쳐서 중복 제거) ==========
-    const allCandidatesMap = new Map<string, Candidate>();
-    for (const c of exposureCandidates) {
-      allCandidatesMap.set(c.name.replace(/\s+/g, ""), c);
-    }
-    // DIRECT 후보는 상위 20개까지만 보강 (API 호출 제한)
-    for (const c of directCandidates.slice(0, 20)) {
-      const key = c.name.replace(/\s+/g, "");
-      if (!allCandidatesMap.has(key)) {
-        allCandidatesMap.set(key, c);
-      }
-    }
-    const allCandidates = Array.from(allCandidatesMap.values());
-    const enrichedRaw: Candidate[] = [];
-    for (const c of allCandidates) {
+    // ========== Stage 3: Place API 로 상세 보강 (리뷰/카테고리/주소) ==========
+    const all: Candidate[] = [...exposureList, ...directList];
+    const enriched: Candidate[] = [];
+    for (const c of all) {
       try {
-        // placeId 가 이미 있으면 getPlaceDetail, 없으면 이름 검색 후 상세
         const info = c.placeId
           ? await this.naverPlace.getPlaceDetail(c.placeId)
           : await this.naverPlace.searchAndGetPlaceInfo(c.name);
         if (info) {
-          enrichedRaw.push({
+          enriched.push({
             ...c,
-            placeId: info.id,
+            placeId: info.id || c.placeId,
             category: info.category || c.category,
             address: info.roadAddress || info.address || c.address,
             visitorReviewCount: info.visitorReviewCount,
             blogReviewCount: info.blogReviewCount,
           });
         } else {
-          enrichedRaw.push(c);
+          enriched.push(c);
         }
       } catch {
-        enrichedRaw.push(c);
+        enriched.push(c);
       }
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    // ========== Stage 3.5: 음식점 필터 (카페/패스트푸드/주점/편의점 제외) ==========
-    // 의뢰자 명시 확정 (2026-04-24): "스타벅스가 경쟁 상대냐. 영등포 맛집/신길 맛집 검색해서 나오는 음식점만"
-    const myIsBunsik = /분식/.test(category); // 내 매장이 분식이면 분식 경쟁 허용
-    const isRestaurantCategory = (cat: string | undefined): boolean => {
-      if (!cat) return false; // 카테고리 모르면 제외 (보수적)
-      // 제외 (경쟁 아님): 카페/디저트/패스트푸드/주점/편의점/기타
-      if (/카페|디저트|베이커리|빵집|빙수|아이스크림|도넛|와플|케이크|쥬스|주스/.test(cat)) return false;
-      if (/햄버거|피자|치킨|패스트푸드|프라이드/.test(cat)) return false;
-      if (/주점|술집|호프|맥주|와인바|위스키|칵테일|바\(bar\)|바&|이자카야/.test(cat)) return false;
-      if (/편의점|마트|슈퍼|정육점|반찬가게|반찬|도시락/.test(cat)) return false;
-      if (/노래|pc방|찜질|사우나|게임|카라오케/.test(cat)) return false;
-      // 분식은 내 매장이 분식일 때만 포함
-      if (/분식/.test(cat) && !myIsBunsik) return false;
-      // 포함 (음식점): 한식/양식/일식/중식/아시안/뷔페 등
-      return true;
-    };
-
-    const enriched = enrichedRaw.filter((c) => {
-      const ok = isRestaurantCategory(c.category);
-      if (!ok) {
-        this.logger.log(`[음식점 필터] 제외: ${c.name} (업종: ${c.category || "미상"})`);
-      }
-      return ok;
-    });
-    this.logger.log(
-      `[음식점 필터] ${enrichedRaw.length}곳 → ${enriched.length}곳 (제외 ${enrichedRaw.length - enriched.length})`,
-    );
-
-    // ========== Stage 4: DIRECT 만 AI 선별 ==========
-    const directOnly = enriched.filter((c) => {
-      const key = c.name.replace(/\s+/g, "");
-      return directCandMap.has(key);
-    });
-    const directSelected = directOnly.length > 0
-      ? await this.aiSelectCompetitors(
-          storeName,
-          category,
-          myStore?.address || "",
-          myStore?.visitorReviewCount ?? 0,
-          myStore?.blogReviewCount ?? 0,
-          directOnly,
-        )
-      : [];
-    this.logger.log(
-      `[DIRECT] AI 선별 ${directSelected.length}곳: ${directSelected.map((c) => c.name).join(", ")}`,
-    );
-
-    // ========== Stage 5: 저장 — EXPOSURE / DIRECT / BOTH 분류 (음식점만) ==========
-    const enrichedKeys = new Set(enriched.map((c) => c.name.replace(/\s+/g, "")));
-    const exposureKeys = new Set(
-      exposureCandidates
-        .map((c) => c.name.replace(/\s+/g, ""))
-        .filter((k) => enrichedKeys.has(k)), // 음식점 필터 통과한 것만
-    );
-    const directSelectedKeys = new Set(directSelected.map((c) => c.name.replace(/\s+/g, "")));
-
-    // 저장 대상: exposureCandidates 전체 + directSelected 전체 (중복 제거)
-    const toSave = new Map<string, Candidate>();
+    // ========== Stage 4: 저장 ==========
+    let savedExposure = 0, savedDirect = 0;
     for (const c of enriched) {
-      const key = c.name.replace(/\s+/g, "");
-      const inExposure = exposureKeys.has(key);
-      const inDirect = directSelectedKeys.has(key);
-      if (inExposure || inDirect) {
-        toSave.set(key, c);
-      }
-    }
-
-    let savedExposure = 0, savedDirect = 0, savedBoth = 0;
-    for (const c of toSave.values()) {
-      const key = c.name.replace(/\s+/g, "");
-      const inExposure = exposureKeys.has(key);
-      const inDirect = directSelectedKeys.has(key);
-      const competitionType: "EXPOSURE" | "DIRECT" | "BOTH" =
-        inExposure && inDirect ? "BOTH" : inExposure ? "EXPOSURE" : "DIRECT";
+      const competitionType = c.source; // EXPOSURE or DIRECT (BOTH 폐기)
 
       let dailySearch: number | undefined;
       try {
@@ -1405,15 +1432,14 @@ ${catalogText}
             lastComparedAt: new Date(),
           },
         });
-        if (competitionType === "BOTH") savedBoth++;
-        else if (competitionType === "EXPOSURE") savedExposure++;
+        if (competitionType === "EXPOSURE") savedExposure++;
         else savedDirect++;
       } catch (e: any) {
         this.logger.warn(`경쟁사 저장 실패 [${c.name}]: ${e.message}`);
       }
     }
     this.logger.log(
-      `[경쟁사 저장 완료] EXPOSURE ${savedExposure} / DIRECT ${savedDirect} / BOTH ${savedBoth} (총 ${savedExposure + savedDirect + savedBoth})`,
+      `[경쟁사 저장 완료] EXPOSURE ${savedExposure} (상권) / DIRECT ${savedDirect} (동종) / 총 ${savedExposure + savedDirect}`,
     );
   }
 

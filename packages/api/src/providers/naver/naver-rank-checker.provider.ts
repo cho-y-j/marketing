@@ -151,26 +151,38 @@ export class NaverRankCheckerProvider {
       }
     }
 
-    // 첫 페이지에 없으면 다음 페이지들 탐색 (start=11, 21, 31, ...)
+    // 첫 페이지에 없으면 다음 페이지들 탐색 — 2026-04-24 병렬 배치로 리팩터
+    // 의뢰자 요구: Top 300 정밀도 유지 (광역 250위 = 로컬 30위 진단용). 시간만 단축.
+    // 5페이지씩 묶어서 Promise.all 병렬 → 배치 내 내 매장 발견 시 해당 페이지까지만 rank 계산 후 종료.
     if (rank === null) {
       const PAGE_STEP = 10;
-      for (
-        let start = 11;
-        start <= NaverRankCheckerProvider.MAX_RANK && rank === null;
-        start += PAGE_STEP
-      ) {
-        const pagePlaces = await this.fetchPlacesFromSearchHtml(keyword, start);
-        if (pagePlaces.length === 0) break; // 더 이상 결과 없음
-        const beforeCount = allPlaces.length;
-        for (const p of pagePlaces) pushUnique(p);
-        // 이번 페이지에 새로 추가된 곳들에서 내 매장 찾기
-        for (let i = beforeCount; i < allPlaces.length; i++) {
-          if (isSelf(allPlaces[i])) {
-            rank = i + 1;
-            break;
+      const BATCH_SIZE = 5; // 5페이지씩 병렬 (≈50위 블록)
+      const pagesToFetch: number[] = [];
+      for (let start = 11; start <= NaverRankCheckerProvider.MAX_RANK; start += PAGE_STEP) {
+        pagesToFetch.push(start);
+      }
+      for (let bi = 0; bi < pagesToFetch.length && rank === null; bi += BATCH_SIZE) {
+        const batch = pagesToFetch.slice(bi, bi + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map((s) => this.fetchPlacesFromSearchHtml(keyword, s).then((places) => ({ start: s, places }))),
+        );
+        // start 오름차순으로 순서 보존 (병렬이어도 순위는 정렬 유지)
+        batchResults.sort((a, b) => a.start - b.start);
+        let emptyPageHit = false;
+        for (const { places } of batchResults) {
+          if (places.length === 0) { emptyPageHit = true; break; }
+          const beforeCount = allPlaces.length;
+          for (const p of places) pushUnique(p);
+          for (let i = beforeCount; i < allPlaces.length; i++) {
+            if (isSelf(allPlaces[i])) {
+              rank = i + 1;
+              break;
+            }
           }
+          if (rank !== null) break;
         }
-        await new Promise((r) => setTimeout(r, 300)); // rate limit 예방
+        if (emptyPageHit) break; // 검색 결과 끝 — 더 이상 페이지 없음
+        await new Promise((r) => setTimeout(r, 300)); // 배치 간 rate limit 예방
       }
     }
 
@@ -256,15 +268,104 @@ export class NaverRankCheckerProvider {
   }
 
   /**
-   * HTML에서 플레이스 매장 목록 추출 — name + id 쌍.
-   * 네이버 검색 결과에 "id":"숫자","name":"매장명" 또는 인접한 형태로 들어있음.
-   * 순서를 유지하며 (검색 노출 순) 중복 제거.
+   * HTML 에서 플레이스 검색 결과 매장 목록 추출.
+   *
+   * 2026-04-24 근본 재작성 — 이전 정규식 방식은 `"id":숫자,"name":"매장명"` 을 전체 HTML 에서
+   * 무차별로 긁어서 **광고 섹션(RestaurantAdSummary) 까지 경쟁사로 저장하는 참사** 발생.
+   * 네이버 `__APOLLO_STATE__` JSON 블록에 실제 검색 결과와 광고가 명확히 분리 저장돼 있으므로
+   * 그 JSON 의 `ROOT_QUERY.restaurantList` items 순서 + `RestaurantListSummary` 참조로만 추출.
+   *
+   * 우선순위:
+   *   1) __APOLLO_STATE__ JSON 파싱 → restaurantList items 순회 (정석)
+   *   2) 실패 시 기존 정규식 방식 (legacy, 오염 위험 있음)
    */
   private extractPlacesFromHtml(html: string): Array<{ id: string | null; name: string }> {
+    // === 1순위: __APOLLO_STATE__ JSON 파서 ===
+    const apolloPlaces = this.extractPlacesFromApolloState(html);
+    if (apolloPlaces.length > 0) return apolloPlaces;
+
+    // === 2순위: 기존 정규식 (APOLLO_STATE 없을 때만, 오염 위험 있음) ===
+    return this.extractPlacesFromLegacyRegex(html);
+  }
+
+  /**
+   * __APOLLO_STATE__ JSON 에서 실제 검색 결과(RestaurantListSummary)만 추출.
+   * RestaurantAdSummary (광고 섹션) 는 참조하지 않음 — 경쟁사 오염 방지.
+   * ROOT_QUERY.restaurantList(...).items 순서 = 네이버 플레이스 검색 노출 순서 그대로.
+   */
+  private extractPlacesFromApolloState(
+    html: string,
+  ): Array<{ id: string | null; name: string }> {
+    const marker = "naver.search.ext.nmb.salt.__APOLLO_STATE__ = ";
+    const start = html.indexOf(marker);
+    if (start === -1) return [];
+    const jsonStart = start + marker.length;
+
+    // { 부터 균형 맞는 } 까지 (문자열 내부 중괄호 무시)
+    let depth = 0;
+    let end = -1;
+    let inStr = false;
+    let escape = false;
+    for (let i = jsonStart; i < html.length; i++) {
+      const c = html[i];
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) { end = i + 1; break; }
+      }
+    }
+    if (end === -1) return [];
+
+    let state: any;
+    try {
+      state = JSON.parse(html.slice(jsonStart, end));
+    } catch (e: any) {
+      this.logger.warn(`[apollo] JSON 파싱 실패: ${e.message}`);
+      return [];
+    }
+
+    const rootQuery = state.ROOT_QUERY;
+    if (!rootQuery || typeof rootQuery !== "object") return [];
+
+    // restaurantList(...) 키 찾기 — 쿼리 파라미터 포함된 긴 키
+    const listKey = Object.keys(rootQuery).find((k) => k.startsWith("restaurantList("));
+    if (!listKey) return [];
+    const listNode = rootQuery[listKey];
+    const items: Array<{ __ref?: string }> = listNode?.items || [];
+    if (items.length === 0) return [];
+
+    const places: Array<{ id: string | null; name: string }> = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      if (!it || !it.__ref) continue;
+      const entry = state[it.__ref];
+      if (!entry) continue;
+      // 광고(RestaurantAdSummary) 는 skip — 검색 결과 리스트에도 섞일 여지는 없지만 보수적으로
+      if (entry.__typename === "RestaurantAdSummary") continue;
+      const name = (entry.name || "").trim();
+      const id = entry.id ? String(entry.id) : null;
+      if (!name || name.length < 2 || name.length > 40) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      places.push({ id, name });
+    }
+    return places;
+  }
+
+  /**
+   * 레거시 정규식 파서 — __APOLLO_STATE__ 가 없는 HTML 대응용 최후 폴백.
+   * 광고 섹션까지 긁을 위험이 있어 1순위 경로 실패 시에만 사용.
+   */
+  private extractPlacesFromLegacyRegex(
+    html: string,
+  ): Array<{ id: string | null; name: string }> {
     const places: Array<{ id: string | null; name: string }> = [];
     const seen = new Set<string>();
 
-    // 검색어, UI 요소, 일반 단어 필터
     const excludeSet = new Set([
       "랭킹", "많이찾는", "요즘뜨는", "TV에나온", "저장많은", "리뷰많은",
       "인기 메뉴", "플레이스", "nexearch", "naver", "search", "place",
@@ -273,17 +374,11 @@ export class NaverRankCheckerProvider {
     const excludePatterns = [
       /^naver/i, /^search/i, /^http/i, /^image/i, /^icon/i,
       /^[가-힣]{1}$/,
-      // 가격대/필터 라벨 — 네이버는 "1만원 ~ 2만원" 같은 가격필터를 placeId 10000/20000 등으로 섞어 내보냄
       /^\d+만원/, /만원\s*[~∼]/, /\d+원\s*이상/, /\d+원\s*이하/,
-      // 거리/시간 필터
       /^\d+(m|km|분|시간)\s*(이내|이상|이하)?/i,
-      // 카테고리 탭 ("한식", "카페" 등 단일 카테고리는 매장이 아닐 가능성 높음) — 매장은 보통 2음절 이상 고유명
     ];
-    // placeId가 라운드 숫자(10000, 20000, 30000, ..., 100000) 필터인 경우 제외
     const filterIdPattern = /^\d0000$/;
 
-    // 1) "id":"숫자".....,"name":"매장명" 패턴 — placeId 와 name 을 함께 추출
-    //    네이버는 plain JSON 으로 내보내므로 같은 객체 안에 id + name 이 인접
     const pairPattern = /"id"\s*:\s*"?(\d{5,12})"?[^{}]{0,500}?"name"\s*:\s*"([^"]{2,50})"/g;
     let m: RegExpExecArray | null;
     while ((m = pairPattern.exec(html)) !== null) {
@@ -304,7 +399,6 @@ export class NaverRankCheckerProvider {
       }
     }
 
-    // 2) 폴백: name 필드만 추출 (id 없음)
     if (places.length === 0) {
       const namePattern = /"name"\s*:\s*"([^"]{2,50})"/g;
       while ((m = namePattern.exec(html)) !== null) {
@@ -324,7 +418,6 @@ export class NaverRankCheckerProvider {
       }
     }
 
-    // 3) 마지막 폴백: place_bluelink 마크업
     if (places.length === 0) {
       const linkPattern = /place_bluelink[^>]*>([^<]+)/g;
       while ((m = linkPattern.exec(html)) !== null) {

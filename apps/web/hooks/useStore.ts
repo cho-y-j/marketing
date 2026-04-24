@@ -41,6 +41,8 @@ export function useCreateStore() {
       subCategory?: string;
       address?: string;
       district?: string;
+      customKeywords?: string[];
+      customCompetitorNames?: string[];
     }) => {
       const { data } = await apiClient.post("/stores", dto);
       return data;

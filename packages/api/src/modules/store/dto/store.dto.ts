@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsString, IsOptional, IsUrl } from "class-validator";
+import { IsString, IsOptional, IsUrl, IsArray, ArrayMaxSize } from "class-validator";
 
 export class CreateStoreDto {
   @ApiProperty({ example: "맛있는 고깃집", description: "매장명" })
@@ -34,6 +34,28 @@ export class CreateStoreDto {
   @IsOptional()
   @IsString()
   district?: string;
+
+  @ApiProperty({
+    example: ["신길역 맛집", "신길역 회식", "신길역 삼겹살"],
+    required: false,
+    description: "사장님이 직접 입력한 키워드 (선택). 비어있으면 AI 자동 생성. 입력 시 우선 저장",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(10)
+  customKeywords?: string[];
+
+  @ApiProperty({
+    example: ["철산장", "최선도 여의도본점"],
+    required: false,
+    description: "사장님이 직접 입력한 경쟁매장 이름 또는 URL (선택). 비어있으면 AI 자동 탐색",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(10)
+  customCompetitorNames?: string[];
 }
 
 export class UpdateStoreDto {

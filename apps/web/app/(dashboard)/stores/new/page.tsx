@@ -17,6 +17,10 @@ import {
   Star,
   MessageSquare,
   FileText,
+  X,
+  Plus,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 export default function NewStorePage() {
@@ -27,6 +31,37 @@ export default function NewStorePage() {
   const [preview, setPreview] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // 사장님 선택 입력 — 비우면 AI 자동 생성
+  const [customKeywords, setCustomKeywords] = useState<string[]>([]);
+  const [keywordInput, setKeywordInput] = useState("");
+  const [customCompetitors, setCustomCompetitors] = useState<string[]>([]);
+  const [competitorInput, setCompetitorInput] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const addKeyword = () => {
+    const kw = keywordInput.trim();
+    if (!kw || customKeywords.includes(kw) || customKeywords.length >= 10) {
+      setKeywordInput("");
+      return;
+    }
+    setCustomKeywords([...customKeywords, kw]);
+    setKeywordInput("");
+  };
+  const removeKeyword = (kw: string) =>
+    setCustomKeywords(customKeywords.filter((k) => k !== kw));
+
+  const addCompetitor = () => {
+    const c = competitorInput.trim();
+    if (!c || customCompetitors.includes(c) || customCompetitors.length >= 10) {
+      setCompetitorInput("");
+      return;
+    }
+    setCustomCompetitors([...customCompetitors, c]);
+    setCompetitorInput("");
+  };
+  const removeCompetitor = (c: string) =>
+    setCustomCompetitors(customCompetitors.filter((k) => k !== c));
 
   // URL인지 매장명인지 자동 판단
   const isUrl = (text: string) =>
@@ -68,6 +103,9 @@ export default function NewStorePage() {
           : `https://map.naver.com/v5/entry/place/${preview.id || preview.placeId}`,
         category: preview.category || undefined,
         address: preview.roadAddress || preview.address || undefined,
+        customKeywords: customKeywords.length > 0 ? customKeywords : undefined,
+        customCompetitorNames:
+          customCompetitors.length > 0 ? customCompetitors : undefined,
       },
       {
         onSuccess: (data: any) => {
@@ -182,6 +220,122 @@ export default function NewStorePage() {
             <div className="mt-4 p-3 bg-white rounded-md text-xs text-muted-foreground">
               <strong className="text-foreground">자동 분석 항목:</strong> 키워드 자동 생성, 경쟁 매장 탐색, 순위 조회, 검색량 분석이
               등록 즉시 자동으로 시작됩니다.
+            </div>
+
+            {/* 선택 입력 — 사장님이 원하시면 직접 지정, 비우면 AI 자동 */}
+            <div className="mt-4 border-t pt-3">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                className="w-full flex items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <span>직접 추가 (선택) — 키워드·경쟁매장을 미리 지정하면 AI 가 이를 우선 사용합니다</span>
+                {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+
+              {showAdvanced && (
+                <div className="mt-3 space-y-4">
+                  {/* 키워드 입력 */}
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5">
+                      추적할 키워드 <span className="text-muted-foreground font-normal">(선택 · 최대 10개)</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="예: 신길역 맛집, 신길역 회식"
+                        value={keywordInput}
+                        onChange={(e) => setKeywordInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            addKeyword();
+                          }
+                        }}
+                        className="text-sm"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={addKeyword}
+                        disabled={!keywordInput.trim() || customKeywords.length >= 10}
+                      >
+                        <Plus size={14} />
+                      </Button>
+                    </div>
+                    {customKeywords.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {customKeywords.map((kw) => (
+                          <Badge key={kw} variant="secondary" className="gap-1 pr-1 text-xs">
+                            {kw}
+                            <button
+                              type="button"
+                              onClick={() => removeKeyword(kw)}
+                              className="ml-0.5 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                              aria-label={`${kw} 제거`}
+                            >
+                              <X size={10} />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground mt-1.5">
+                      비우시면 AI 가 매장을 분석해 3개를 자동 추천합니다
+                    </p>
+                  </div>
+
+                  {/* 경쟁매장 입력 */}
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5">
+                      비교할 경쟁매장 <span className="text-muted-foreground font-normal">(선택 · 매장명 또는 URL · 최대 10개)</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="예: 철산장, 또는 네이버 플레이스 URL"
+                        value={competitorInput}
+                        onChange={(e) => setCompetitorInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            addCompetitor();
+                          }
+                        }}
+                        className="text-sm"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={addCompetitor}
+                        disabled={!competitorInput.trim() || customCompetitors.length >= 10}
+                      >
+                        <Plus size={14} />
+                      </Button>
+                    </div>
+                    {customCompetitors.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {customCompetitors.map((c) => (
+                          <Badge key={c} variant="secondary" className="gap-1 pr-1 text-xs">
+                            {c.length > 30 ? c.slice(0, 30) + "…" : c}
+                            <button
+                              type="button"
+                              onClick={() => removeCompetitor(c)}
+                              className="ml-0.5 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                              aria-label={`${c} 제거`}
+                            >
+                              <X size={10} />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground mt-1.5">
+                      비우시면 AI 가 상권·동종업종 기준으로 6곳을 자동 탐색합니다
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <Button

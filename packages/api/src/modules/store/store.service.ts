@@ -41,10 +41,16 @@ export class StoreService {
     });
 
     // 비동기 자동 셋업 — 실패해도 store는 반환, 상태는 DB에 기록됨
-    this.storeSetup.autoSetup(store.id).catch((e) => {
-      this.logger.warn(`자동 셋업 실패 [${store.name}]: ${e.message}`);
-      // setupStatus=FAILED 는 autoSetup 내부에서 이미 기록됨
-    });
+    // customKeywords/customCompetitorNames 는 AI 자동 생성보다 우선 저장됨
+    this.storeSetup
+      .autoSetup(store.id, {
+        customKeywords: dto.customKeywords,
+        customCompetitorNames: dto.customCompetitorNames,
+      })
+      .catch((e) => {
+        this.logger.warn(`자동 셋업 실패 [${store.name}]: ${e.message}`);
+        // setupStatus=FAILED 는 autoSetup 내부에서 이미 기록됨
+      });
 
     return store;
   }
