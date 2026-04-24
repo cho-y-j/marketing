@@ -366,7 +366,7 @@ export class StoreSetupService {
       const KEEP_KEYWORDS = /(회식|상견례|룸|단체|모임|돌잔치)/;
       const addressParts = address.split(/\s+/).filter(Boolean);
       // 매장명 브랜드 힌트도 지역 토큰으로 포함 (예: "공덕직영점" → "공덕")
-      const brandHintForFilter = store.name.match(/([가-힣]{2,4}?)(직영점|역점|지점|점)/)?.[1];
+      const brandHintForFilter = store.name.match(/([가-힣]{2,4}?)(본점|본관|직영점|역점|지점|점)/)?.[1];
       const regionTokens = [
         ...addressParts.map((p: string) => p.replace(/(시|군|구|동|읍|면)$/, "")),
         ...(district || "").split(/\s+/).map((p: string) => p.replace(/(시|군|구|동|읍|면)$/, "")),
@@ -893,7 +893,8 @@ export class StoreSetupService {
     });
 
     // 매장명에서 지명 힌트 추출 (예: "창심관 공덕직영점" → "공덕")
-    const brandLocationHint = storeName.match(/([가-힣]{2,4}?)(직영점|역점|지점|점)/)?.[1];
+    // 2026-04-24: "본점|본관" 추가 — "화춘가든 복대본점" 이 "복대본+점" 으로 잘못 매칭되던 문제 방지
+    const brandLocationHint = storeName.match(/([가-힣]{2,4}?)(본점|본관|직영점|역점|지점|점)/)?.[1];
 
     // 카테고리 분해 (예: "한식 > 아귀찜,해물찜" → ["한식", "아귀찜", "해물찜"])
     const categoryParts = category
@@ -901,12 +902,13 @@ export class StoreSetupService {
       .map((s) => s.trim())
       .filter((s) => s.length >= 2);
 
-    // 지역 힌트 — 매장명 브랜드 힌트(공덕) 우선, 없으면 행정동 → 구
-    // 읍/면/동 접미사 모두 제거 (단양읍 → 단양, 공덕동 → 공덕)
+    // 2026-04-24 의뢰자 확정 — 주소가 truth. brandLocationHint 는 보조.
+    // 이유: "화춘가든 복대본점" 같은 매장은 주소("복대동")가 훨씬 정확.
+    // 매장명 힌트는 동이 애매할 때(상권명으로 쓰이는 경우)만 보조.
     const regionHint =
-      brandLocationHint ||
       dong?.replace(/(동|읍|면)$/, "") ||
       gu?.replace(/구$/, "") ||
+      brandLocationHint ||
       "";
 
     // AI 혼란 방지: 접미사 제거
@@ -1035,7 +1037,7 @@ export class StoreSetupService {
     const userPrompt = `매장 정보:
 - 매장명: ${storeName}
 - 주소: ${extraInfo?.roadAddress || address}
-- 매장명 브랜드 지역 힌트: ${brandLocationHint || "-"} (있으면 도로명주소보다 우선)
+- 매장명 브랜드 지역 힌트: ${brandLocationHint || "-"} (참고용 — 주소가 우선)
 - 구/동(정제): ${cleanGu || "-"} / ${cleanDong || "-"}
 - 업종 카테고리: ${category}
 - 대표 메뉴/세부 카테고리: ${categoryParts.join(", ") || "-"}
@@ -1108,11 +1110,12 @@ export class StoreSetupService {
 
     // AI 완전 실패 시 규칙 기반 최소 폴백 (AI 없이도 셋업 성공하도록 5개 이상 보장)
     const fallback: string[] = [];
-    // 지명 접미사 모두 제거 (단양읍 → 단양)
+    // 2026-04-24 확정: 주소(동 > 구) 우선, brandLocationHint 는 보조.
+    // "화춘가든 복대본점" 에서 "복대본" 이 regionHint 로 잘못 들어가던 문제 방지
     const primaryRegion =
-      brandLocationHint ||
       dong?.replace(/(동|읍|면)$/, "") ||
       gu?.replace(/구$/, "") ||
+      brandLocationHint ||
       "";
     // 대도시 여부 (역 키워드 생성 여부 판단)
     const isMetro = /특별시|광역시|서울|부산|대구|인천|광주|대전|울산|수원|성남|고양/.test(address);
@@ -1317,56 +1320,58 @@ ${catalogText}
     const EXPOSURE_CAP = 3;
     const DIRECT_CAP = 3;
 
-    // ========== Stage 1: EXPOSURE — 대표 키워드 Top 3 (상권 강자) ==========
-    const exposureList: Candidate[] = [];
+    // ========== Stage 1+2 병렬: EXPOSURE(main) + DIRECT(secondary) 동시 수집 ==========
+    // 2026-04-24 성능 개선 — 순차 62초 → 병렬 ~20초 (가장 느린 쿼리 시간만 소요)
     const seenKeys = new Set<string>();
-    if (queryPlan.main) {
-      this.logger.log(`[EXPOSURE] 대표키워드 "${queryPlan.main}" Top ${EXPOSURE_CAP} 수집`);
-      try {
-        const results = await this.rankChecker.fetchTopPlaces(queryPlan.main, EXPOSURE_CAP + 5);
-        for (const r of results) {
-          const norm = r.name.replace(/\s+/g, "");
-          if (isSelf(norm, r.name)) continue;
-          if (seenKeys.has(norm)) continue;
-          seenKeys.add(norm);
-          exposureList.push({
-            name: r.name,
-            placeId: r.id || undefined,
-            source: "EXPOSURE",
-          });
-          if (exposureList.length >= EXPOSURE_CAP) break;
-        }
-      } catch (e: any) {
-        this.logger.warn(`[EXPOSURE] 수집 실패 "${queryPlan.main}": ${e.message}`);
-      }
+    this.logger.log(
+      `[경쟁사 병렬 수집] 대표="${queryPlan.main ?? "없음"}" + 메뉴=${JSON.stringify(queryPlan.secondary)}`,
+    );
+    const [mainResults, ...secondaryResults] = await Promise.all([
+      queryPlan.main
+        ? this.rankChecker.fetchTopPlaces(queryPlan.main, EXPOSURE_CAP + 5).catch((e) => {
+            this.logger.warn(`[EXPOSURE] 수집 실패 "${queryPlan.main}": ${e.message}`);
+            return [] as Array<{ id: string | null; name: string; rank: number }>;
+          })
+        : Promise.resolve([] as Array<{ id: string | null; name: string; rank: number }>),
+      ...queryPlan.secondary.map((query) =>
+        this.rankChecker.fetchTopPlaces(query, 10).catch((e) => {
+          this.logger.warn(`[DIRECT] 수집 실패 [${query}]: ${e.message}`);
+          return [] as Array<{ id: string | null; name: string; rank: number }>;
+        }),
+      ),
+    ]);
+
+    // EXPOSURE 집계 — 병렬 반환 결과에서 Top EXPOSURE_CAP 추출
+    const exposureList: Candidate[] = [];
+    for (const r of mainResults) {
+      const norm = r.name.replace(/\s+/g, "");
+      if (isSelf(norm, r.name)) continue;
+      if (seenKeys.has(norm)) continue;
+      seenKeys.add(norm);
+      exposureList.push({ name: r.name, placeId: r.id || undefined, source: "EXPOSURE" });
+      if (exposureList.length >= EXPOSURE_CAP) break;
     }
 
-    // ========== Stage 2: DIRECT — 메뉴 키워드 Top N 합산 후 상위 3개 (동종 경쟁) ==========
+    // DIRECT 집계 — secondary 여러 쿼리 결과 교집합 집계 (hits 높은 순)
     const directMap = new Map<string, Candidate & { hits: number }>();
-    for (const query of queryPlan.secondary) {
-      try {
-        this.logger.log(`[DIRECT] 메뉴키워드 "${query}" Top 10 수집`);
-        const results = await this.rankChecker.fetchTopPlaces(query, 10);
-        for (const r of results) {
-          const norm = r.name.replace(/\s+/g, "");
-          if (isSelf(norm, r.name)) continue;
-          if (seenKeys.has(norm)) continue; // EXPOSURE 와 중복 제외
-          const existing = directMap.get(norm);
-          if (existing) {
-            existing.hits += 1;
-          } else {
-            directMap.set(norm, {
-              name: r.name,
-              placeId: r.id || undefined,
-              source: "DIRECT",
-              hits: 1,
-            });
-          }
+    secondaryResults.forEach((results) => {
+      for (const r of results) {
+        const norm = r.name.replace(/\s+/g, "");
+        if (isSelf(norm, r.name)) continue;
+        if (seenKeys.has(norm)) continue; // EXPOSURE 와 중복 제외
+        const existing = directMap.get(norm);
+        if (existing) {
+          existing.hits += 1;
+        } else {
+          directMap.set(norm, {
+            name: r.name,
+            placeId: r.id || undefined,
+            source: "DIRECT",
+            hits: 1,
+          });
         }
-      } catch (e: any) {
-        this.logger.warn(`[DIRECT] 수집 실패 [${query}]: ${e.message}`);
       }
-    }
+    });
     const directList: Candidate[] = Array.from(directMap.values())
       .sort((a, b) => b.hits - a.hits) // 여러 메뉴 키워드 교집합 우선
       .slice(0, DIRECT_CAP);
@@ -1377,31 +1382,28 @@ ${catalogText}
       return;
     }
 
-    // ========== Stage 3: Place API 로 상세 보강 (리뷰/카테고리/주소) ==========
+    // ========== Stage 3: Place API 상세 보강 — 전체 병렬 (6개 병렬 호출) ==========
     const all: Candidate[] = [...exposureList, ...directList];
-    const enriched: Candidate[] = [];
-    for (const c of all) {
-      try {
-        const info = c.placeId
-          ? await this.naverPlace.getPlaceDetail(c.placeId)
-          : await this.naverPlace.searchAndGetPlaceInfo(c.name);
-        if (info) {
-          enriched.push({
-            ...c,
-            placeId: info.id || c.placeId,
-            category: info.category || c.category,
-            address: info.roadAddress || info.address || c.address,
-            visitorReviewCount: info.visitorReviewCount,
-            blogReviewCount: info.blogReviewCount,
-          });
-        } else {
-          enriched.push(c);
-        }
-      } catch {
-        enriched.push(c);
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    const enriched: Candidate[] = await Promise.all(
+      all.map(async (c) => {
+        try {
+          const info = c.placeId
+            ? await this.naverPlace.getPlaceDetail(c.placeId)
+            : await this.naverPlace.searchAndGetPlaceInfo(c.name);
+          if (info) {
+            return {
+              ...c,
+              placeId: info.id || c.placeId,
+              category: info.category || c.category,
+              address: info.roadAddress || info.address || c.address,
+              visitorReviewCount: info.visitorReviewCount,
+              blogReviewCount: info.blogReviewCount,
+            } as Candidate;
+          }
+        } catch {}
+        return c;
+      }),
+    );
 
     // ========== Stage 4: 저장 ==========
     let savedExposure = 0, savedDirect = 0;

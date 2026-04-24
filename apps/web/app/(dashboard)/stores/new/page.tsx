@@ -37,7 +37,8 @@ export default function NewStorePage() {
   const [keywordInput, setKeywordInput] = useState("");
   const [customCompetitors, setCustomCompetitors] = useState<string[]>([]);
   const [competitorInput, setCompetitorInput] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // 2026-04-24 의뢰자 확정 — 기본 펼침. 자동 생성 시작 전 사장님이 바로 입력할 수 있어야 함
+  const [showAdvanced, setShowAdvanced] = useState(true);
 
   const addKeyword = () => {
     const kw = keywordInput.trim();
@@ -227,9 +228,9 @@ export default function NewStorePage() {
               <button
                 type="button"
                 onClick={() => setShowAdvanced((v) => !v)}
-                className="w-full flex items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                className="w-full flex items-center justify-between text-sm font-semibold text-foreground hover:text-brand transition-colors"
               >
-                <span>직접 추가 (선택) — 키워드·경쟁매장을 미리 지정하면 AI 가 이를 우선 사용합니다</span>
+                <span>📌 키워드·경쟁매장 직접 지정 <span className="text-xs font-normal text-muted-foreground">(선택 — 비우면 AI 자동)</span></span>
                 {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
 

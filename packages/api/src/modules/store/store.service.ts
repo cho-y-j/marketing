@@ -115,7 +115,19 @@ export class StoreService {
       await tx.storeAutoSettings.deleteMany({ where: { storeId: id } });
       await tx.consultationRequest.deleteMany({ where: { storeId: id } });
 
-      // Store 삭제 — @relation 7개는 onDelete: Cascade 로 자동 정리
+      // 2026-04-24: CompetitorHistory FK 가 RESTRICT → Competitor 삭제 전 수동 정리 필수
+      // (안 지우면 store.delete 가 "Foreign key constraint violated: CompetitorHistory_competitorId_fkey" 로 실패)
+      const comps = await tx.competitor.findMany({
+        where: { storeId: id },
+        select: { id: true },
+      });
+      if (comps.length > 0) {
+        await tx.competitorHistory.deleteMany({
+          where: { competitorId: { in: comps.map((c) => c.id) } },
+        });
+      }
+
+      // Store 삭제 — @relation 은 onDelete: Cascade 로 자동 정리
       await tx.store.delete({ where: { id } });
     });
 
