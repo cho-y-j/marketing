@@ -275,6 +275,7 @@ export class EventCollectorService {
    */
   async suggestMarketingKeywords(storeId: string, eventId: string): Promise<{
     keywords: Array<{ keyword: string; reason: string }>;
+    strategies: Array<{ idea: string; difficulty: "쉬움" | "보통" | "어려움"; expectedEffect: string }>;
     event: { name: string; startDate: Date; endDate: Date };
   }> {
     const [store, event] = await Promise.all([
@@ -286,25 +287,35 @@ export class EventCollectorService {
     ]);
     if (!store || !event) throw new Error("store or event not found");
 
-    const systemPrompt = `당신은 자영업 마케팅 전문가. 특정 지역 축제를 매장 유입으로 연결하는 실전 광고 키워드를 추천한다.
+    const systemPrompt = `당신은 자영업 마케팅 전문가. 특정 지역 축제를 매장 유입으로 연결하는 **실전 광고 키워드 + 매장 행동 전략** 을 같이 추천한다.
 
-## 원칙
+## 1) 광고 키워드 (5~8개)
 - 축제 방문객/관광객이 축제 전/후 **실제 검색할 만한 키워드**
 - 축제 이름 + 매장 지역 + 매장 업종/메뉴 조합 중심
 - 방문 의도 있는 키워드 (정보 탐색 X)
 - 포괄어 금지 ("맛집", "한식" 단독 X — 반드시 지역 결합)
-- 각 키워드의 추천 이유 한 줄 (왜 이게 효과적인지)
+- 각 키워드의 추천 이유 한 줄
+
+## 2) 매장 행동 전략 (3~5개) — "키워드만으로는 손님이 안 옴"
+사장님이 축제 시즌에 매장에서 **실제로 준비할 행동**. 키워드가 입력값이 아니라 매장 자체 실행이 답.
+- 메뉴 조정 (한정 세트, 네이밍 변경, 사이드 추가)
+- 고객 유인 (영수증 인증 할인, 어린이 증정, 단체 좌석 우대)
+- 홍보 채널 (플레이스 소식 게시, SNS 해시태그, 매장 입구 POP)
+각 항목에 difficulty (쉬움/보통/어려움) + expectedEffect (한 줄 기대효과)
 
 ## 출력 (JSON만, 설명 없이)
 {
   "keywords": [
-    {"keyword": "단양 철쭉제 맛집", "reason": "축제 방문객의 식사 검색 1순위"},
-    {"keyword": "단양 소백산 등산 후 보리밥", "reason": "철쭉제 + 등산 + 매장 대표메뉴 조합"},
-    ...
+    {"keyword": "단양 철쭉제 맛집", "reason": "축제 방문객의 식사 검색 1순위"}
+  ],
+  "strategies": [
+    {"idea": "철쭉제 한정 4인 세트 출시", "difficulty": "쉬움", "expectedEffect": "단체 객단가 +20%"},
+    {"idea": "축제 영수증 인증 시 음료 1잔 무료", "difficulty": "쉬움", "expectedEffect": "재방문 유도"},
+    {"idea": "매장 입구에 '철쭉제 환영' POP 배치", "difficulty": "쉬움", "expectedEffect": "지나가는 방문객 인지↑"}
   ]
 }
 
-5~8개 생성. 중복/유사 금지.`;
+키워드 5~8개 + 전략 3~5개. 중복/유사 금지.`;
 
     const userPrompt = `[매장 정보]
 - 이름: ${store.name}
@@ -329,14 +340,31 @@ export class EventCollectorService {
       const keywords = (parsed.keywords ?? [])
         .filter((k: any) => typeof k?.keyword === "string" && typeof k?.reason === "string")
         .slice(0, 8);
-      this.logger.log(`축제 "${event.name}" 광고 키워드 ${keywords.length}개 [${resp.provider}]`);
+      // 매장 행동 전략 — difficulty 화이트리스트로 견고하게
+      const ALLOWED_DIFFICULTY = new Set(["쉬움", "보통", "어려움"]);
+      const strategies = (parsed.strategies ?? [])
+        .filter(
+          (s: any) =>
+            typeof s?.idea === "string" &&
+            typeof s?.expectedEffect === "string" &&
+            ALLOWED_DIFFICULTY.has(s?.difficulty),
+        )
+        .slice(0, 5);
+      this.logger.log(
+        `축제 "${event.name}" 키워드 ${keywords.length}개 + 전략 ${strategies.length}개 [${resp.provider}]`,
+      );
       return {
         keywords,
+        strategies,
         event: { name: event.name, startDate: event.startDate, endDate: event.endDate },
       };
     } catch (e: any) {
-      this.logger.warn(`광고 키워드 추천 실패: ${e.message}`);
-      return { keywords: [], event: { name: event.name, startDate: event.startDate, endDate: event.endDate } };
+      this.logger.warn(`광고 키워드/전략 추천 실패: ${e.message}`);
+      return {
+        keywords: [],
+        strategies: [],
+        event: { name: event.name, startDate: event.startDate, endDate: event.endDate },
+      };
     }
   }
 

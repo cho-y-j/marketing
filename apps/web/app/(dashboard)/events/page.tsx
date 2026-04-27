@@ -37,6 +37,11 @@ const RADIUS_OPTIONS: Array<{ label: string; value: number | null }> = [
 ];
 
 type KeywordSuggestion = { keyword: string; reason: string };
+type Strategy = {
+  idea: string;
+  difficulty: "쉬움" | "보통" | "어려움";
+  expectedEffect: string;
+};
 
 export default function EventsPage() {
   const { storeId } = useCurrentStoreId();
@@ -164,6 +169,7 @@ export default function EventsPage() {
 
 function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
   const [suggestions, setSuggestions] = useState<KeywordSuggestion[] | null>(null);
+  const [strategies, setStrategies] = useState<Strategy[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [addedKeywords, setAddedKeywords] = useState<Set<string>>(new Set());
   const qc = useQueryClient();
@@ -175,7 +181,10 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
         `/stores/${storeId}/events/${event.id}/suggest-keywords`,
       );
       setSuggestions(data.keywords);
-      if (data.keywords.length === 0) toast.info("추천 키워드 없음 — 재시도해 보세요");
+      setStrategies(data.strategies ?? []);
+      if (data.keywords.length === 0 && (!data.strategies || data.strategies.length === 0)) {
+        toast.info("추천 결과 없음 — 재시도해 보세요");
+      }
     } catch (e: any) {
       toast.error(e.response?.data?.message || "추천 실패");
     } finally {
@@ -300,6 +309,51 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* AI 맞춤 전략 — 키워드만으로는 손님이 오지 않음. 매장 행동 제안. */}
+        {/* DESIGN-apple §10: Paperlogy / keep-all / -0.018em / 8px radius / 36px+ 터치 */}
+        {strategies && strategies.length > 0 && (
+          <div className="mt-3 pt-3 border-t space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Sparkles size={12} className="text-brand" />
+              <span className="text-xs font-semibold text-foreground tracking-tight">
+                AI 맞춤 전략 ({strategies.length}개)
+              </span>
+              <span className="text-[10px] text-muted-foreground ml-1">— 매장에서 직접 준비할 행동</span>
+            </div>
+            <div className="space-y-1.5">
+              {strategies.map((st, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg border border-border bg-white px-3 py-2.5 break-keep"
+                >
+                  <div className="flex items-start gap-2">
+                    <Badge
+                      variant="outline"
+                      className={`shrink-0 text-[10px] py-0 px-1.5 ${
+                        st.difficulty === "쉬움"
+                          ? "bg-green-50 text-green-700 border-green-200"
+                          : st.difficulty === "보통"
+                          ? "bg-amber-50 text-amber-700 border-amber-200"
+                          : "bg-red-50 text-red-700 border-red-200"
+                      }`}
+                    >
+                      {st.difficulty}
+                    </Badge>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-foreground leading-snug">
+                        {st.idea}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                        💡 {st.expectedEffect}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
