@@ -385,7 +385,8 @@ export class IngredientPriceService {
 
   /** 매장 keyIngredients 갱신 (전체 교체) */
   async setKeyIngredients(storeId: string, ingredients: string[]): Promise<string[]> {
-    const cleaned = [...new Set(ingredients.map((s) => s.trim()).filter((s) => s.length >= 2 && s.length <= 15))];
+    // 한국어 1글자 식재료 (쌀/콩/무/파/배 등) 허용 — 최소 1자
+    const cleaned = [...new Set(ingredients.map((s) => s.trim()).filter((s) => s.length >= 1 && s.length <= 15))];
     const updated = await this.prisma.store.update({
       where: { id: storeId },
       data: { keyIngredients: cleaned },
@@ -397,7 +398,8 @@ export class IngredientPriceService {
   /** 재료 1개 추가 */
   async addKeyIngredient(storeId: string, name: string): Promise<string[]> {
     const trimmed = name.trim();
-    if (trimmed.length < 2 || trimmed.length > 15) throw new Error("재료명은 2~15자");
+    // 한국어 1글자 식재료(쌀·콩·무·파·소·돼지의 단글자형) 가 다수 — 최소 1자 허용
+    if (trimmed.length < 1 || trimmed.length > 15) throw new Error("재료명은 1~15자");
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: { keyIngredients: true },
