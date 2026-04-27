@@ -20,23 +20,26 @@ type Mode = "menu" | "manual" | "ocr-loading" | "ocr-confirm";
 
 export function SalesInputModal({
   storeId,
-  date,
+  date: initialDate,
   initial,
   onClose,
 }: {
   storeId: string;
-  date: string; // YYYY-MM-DD
+  date: string; // YYYY-MM-DD — 시작 기본값 (사장님이 모달 안에서 변경 가능)
   initial?: { totalAmount?: number; cardAmount?: number; cashAmount?: number; note?: string };
   onClose: () => void;
 }) {
   const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>(initial?.totalAmount ? "manual" : "menu");
+  const [date, setDate] = useState(initialDate); // 사장님이 며칠 전 선택 가능
   const [total, setTotal] = useState(initial?.totalAmount?.toString() || "");
   const [card, setCard] = useState(initial?.cardAmount?.toString() || "");
   const [cash, setCash] = useState(initial?.cashAmount?.toString() || "");
   const [note, setNote] = useState(initial?.note || "");
   const [ocrSource, setOcrSource] = useState<"MANUAL" | "OCR">("MANUAL");
   const [ocrText, setOcrText] = useState<string>("");
+  const today = new Date().toISOString().slice(0, 10);
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const save = useMutation({
@@ -70,6 +73,7 @@ export function SalesInputModal({
       totalAmount: number | null;
       cardAmount: number | null;
       cashAmount: number | null;
+      receiptDate: string | null;
       rawText: string;
       confidence: "high" | "low";
     }) => {
@@ -81,13 +85,19 @@ export function SalesInputModal({
       setTotal(String(r.totalAmount));
       if (r.cardAmount != null) setCard(String(r.cardAmount));
       if (r.cashAmount != null) setCash(String(r.cashAmount));
+      // OCR 이 영수증 발행일 잡으면 그 날짜로 자동 설정 — 사장님 편의
+      if (r.receiptDate) setDate(r.receiptDate);
       setOcrSource("OCR");
       setOcrText(r.rawText);
       setMode("ocr-confirm");
       if (r.confidence === "low") {
-        toast.info("인식 정확도 낮음 — 숫자 확인해주세요");
+        toast.info("인식 정확도 낮음 — 숫자·날짜 확인해주세요");
       } else {
-        toast.success("영수증 인식 완료 — 확인 후 저장");
+        toast.success(
+          r.receiptDate
+            ? `영수증 인식 완료 — ${r.receiptDate} 매출로 저장됩니다`
+            : "영수증 인식 완료 — 확인 후 저장",
+        );
       }
     },
     onError: (e: any) => {
@@ -120,14 +130,28 @@ export function SalesInputModal({
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4 break-keep">
       <div className="w-full md:max-w-md bg-white rounded-t-2xl md:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
-        {/* 헤더 */}
-        <div className="sticky top-0 bg-white border-b border-border px-4 py-3 flex items-center justify-between">
-          <h3 className="text-base font-bold tracking-tight">
-            매출 입력 <span className="text-xs text-muted-foreground font-normal ml-1">{date}</span>
-          </h3>
+        {/* 헤더 — 날짜 변경 가능 (며칠 전 매출 입력 가능, 영수증 OCR 자동 설정) */}
+        <div className="sticky top-0 bg-white border-b border-border px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <h3 className="text-base font-bold tracking-tight shrink-0">매출 입력</h3>
+            <input
+              type="date"
+              value={date}
+              max={today}
+              min={sixtyDaysAgo}
+              onChange={(e) => setDate(e.target.value)}
+              className="text-xs border border-border rounded-md px-2 py-1 min-h-[36px] bg-white focus:border-emerald-400 outline-none"
+              title="다른 날짜 매출 입력하시려면 변경"
+            />
+            {date !== today && (
+              <span className="text-[10px] text-amber-600 font-semibold whitespace-nowrap">
+                과거 날짜
+              </span>
+            )}
+          </div>
           <button
             onClick={onClose}
-            className="p-2 -m-2 inline-flex items-center justify-center min-w-[36px] min-h-[36px] rounded-md hover:bg-muted/40 text-muted-foreground"
+            className="p-2 -m-2 inline-flex items-center justify-center min-w-[36px] min-h-[36px] rounded-md hover:bg-muted/40 text-muted-foreground shrink-0"
             aria-label="닫기"
           >
             <X size={16} />

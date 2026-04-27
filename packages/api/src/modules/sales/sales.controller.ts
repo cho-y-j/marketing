@@ -37,6 +37,17 @@ export class SalesController {
     return this.service.getMarketingROI(storeId);
   }
 
+  @Get("missing")
+  @ApiOperation({ summary: "최근 N일 중 매출 미입력 날짜 (홈 알림 카드용)" })
+  missing(
+    @Param("storeId") storeId: string,
+    @Query("days") days?: string,
+  ) {
+    return this.service
+      .getMissingDates(storeId, days ? parseInt(days, 10) : 7)
+      .then((dates) => ({ days: days ? parseInt(days, 10) : 7, missing: dates }));
+  }
+
   @Post()
   @ApiOperation({ summary: "매출 입력 (또는 OCR 후 사장님 확인 후 저장)" })
   save(

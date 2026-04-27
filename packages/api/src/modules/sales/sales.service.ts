@@ -75,6 +75,7 @@ export class SalesService {
     totalAmount: number | null;
     cardAmount: number | null;
     cashAmount: number | null;
+    receiptDate: string | null; // YYYY-MM-DD — 영수증에서 추출된 발행일
     rawText: string;
     confidence: "high" | "low";
   }> {
@@ -118,10 +119,48 @@ export class SalesService {
     }
 
     const parsed = this.extractAmountsFromText(rawText);
+    const receiptDate = this.extractReceiptDate(rawText);
     this.logger.log(
-      `[영수증 파싱] total=${parsed.totalAmount} card=${parsed.cardAmount} cash=${parsed.cashAmount} conf=${parsed.confidence}`,
+      `[영수증 파싱] total=${parsed.totalAmount} card=${parsed.cardAmount} cash=${parsed.cashAmount} date=${receiptDate} conf=${parsed.confidence}`,
     );
-    return { ...parsed, rawText };
+    return { ...parsed, receiptDate, rawText };
+  }
+
+  /**
+   * 영수증 텍스트에서 발행일 추출 — 영수증마다 형식 다양:
+   *   2026-04-27 / 2026/04/27 / 2026.04.27 / 2026년 4월 27일 / 26-04-27
+   * 미래 날짜 또는 60일 이전 날짜는 무시 (오인식 방지).
+   */
+  private extractReceiptDate(text: string): string | null {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const earliest = new Date(today);
+    earliest.setUTCDate(earliest.getUTCDate() - 60);
+
+    const candidates: Date[] = [];
+    // YYYY[-./]MM[-./]DD
+    const re1 = /(20\d{2})[-./년\s]+(0?[1-9]|1[0-2])[-./월\s]+(0?[1-9]|[12]\d|3[01])/g;
+    let m: RegExpExecArray | null;
+    while ((m = re1.exec(text)) !== null) {
+      const d = new Date(`${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}T00:00:00Z`);
+      if (!isNaN(d.getTime())) candidates.push(d);
+    }
+    // YY[-./]MM[-./]DD (2자리 연도)
+    const re2 = /(?:^|[^\d])(\d{2})[-./](0?[1-9]|1[0-2])[-./](0?[1-9]|[12]\d|3[01])(?!\d)/g;
+    while ((m = re2.exec(text)) !== null) {
+      const yy = parseInt(m[1], 10);
+      // 25 → 2025, 99 → 1999 (보수적: 70 이상은 19xx)
+      const year = yy >= 70 ? 1900 + yy : 2000 + yy;
+      const d = new Date(`${year}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}T00:00:00Z`);
+      if (!isNaN(d.getTime())) candidates.push(d);
+    }
+
+    // 오늘 + 60일 이내 + 미래 아님
+    const valid = candidates.filter((d) => d <= today && d >= earliest);
+    if (valid.length === 0) return null;
+    // 가장 최근 (영수증의 발행일 = 보통 가장 위에 있는 날짜)
+    valid.sort((a, b) => b.getTime() - a.getTime());
+    return valid[0].toISOString().slice(0, 10);
   }
 
   /**
@@ -293,6 +332,32 @@ export class SalesService {
       result.push({ label: k, ...v });
     }
     return { period, points: result };
+  }
+
+  /**
+   * 매출 입력 안 된 날짜 조회 — 최근 N일 중 row 없는 날만.
+   * 홈 화면 "지난 N일 미입력" 알림 카드용.
+   */
+  async getMissingDates(storeId: string, days = 7): Promise<string[]> {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const since = new Date(today);
+    since.setUTCDate(since.getUTCDate() - days);
+
+    const rows = await this.prisma.sales.findMany({
+      where: { storeId, date: { gte: since, lte: today } },
+      select: { date: true },
+    });
+    const filledDates = new Set(rows.map((r) => r.date.toISOString().slice(0, 10)));
+
+    const missing: string[] = [];
+    for (let i = 0; i <= days; i++) {
+      const d = new Date(since);
+      d.setUTCDate(d.getUTCDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      if (!filledDates.has(key)) missing.push(key);
+    }
+    return missing;
   }
 
   /**
