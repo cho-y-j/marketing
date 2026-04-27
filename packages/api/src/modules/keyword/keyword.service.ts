@@ -86,125 +86,174 @@ export class KeywordService {
       });
     }
 
-    // 각 키워드의 최신 RankHistory + 직전 rich 기록으로 각 Top 3 행의 델타 계산
-    const LINEAR_DAILY_RATE = 0.003;
-    const linearPast = (current: number | null | undefined) => {
-      if (current == null || current === 0) return null;
-      return Math.round(current * Math.max(0, 1 - LINEAR_DAILY_RATE * 1)); // 1일 전 기준
-    };
+    // 1d/7d/30d 비교용 기준일 — 오늘 UTC 자정에서 -1, -7, -30
+    const todayUtc = new Date();
+    todayUtc.setUTCHours(0, 0, 0, 0);
+    const date1d = new Date(todayUtc);
+    date1d.setUTCDate(date1d.getUTCDate() - 1);
+    const date7d = new Date(todayUtc);
+    date7d.setUTCDate(date7d.getUTCDate() - 7);
+    const date30d = new Date(todayUtc);
+    date30d.setUTCDate(date30d.getUTCDate() - 30);
 
-    const enriched = await Promise.all(
-      keywords.map(async (kw) => {
-        const latest = await this.prisma.keywordRankHistory.findFirst({
+    // 내 매장 — StoreDailySnapshot 의 1일전/7일전/30일전 visitor/blog (백필 추정값 또는 실측)
+    const myStoreSnaps = await this.prisma.storeDailySnapshot.findMany({
+      where: { storeId, date: { in: [date1d, date7d, date30d] } },
+      select: { date: true, visitorReviewCount: true, blogReviewCount: true },
+    });
+    const mySnap1d = myStoreSnaps.find((s) => s.date.getTime() === date1d.getTime()) ?? null;
+    const mySnap7d = myStoreSnaps.find((s) => s.date.getTime() === date7d.getTime()) ?? null;
+    const mySnap30d = myStoreSnaps.find((s) => s.date.getTime() === date30d.getTime()) ?? null;
+
+    // 모든 키워드의 latest KeywordRankHistory 한 번에 모음 (top3 placeId 합집합 추출용)
+    const latestPerKw = await Promise.all(
+      keywords.map((kw) =>
+        this.prisma.keywordRankHistory.findFirst({
           where: { storeId, keyword: kw.keyword },
           orderBy: { checkedAt: "desc" },
           select: { topPlaces: true, totalResults: true, checkedAt: true, rank: true },
+        }),
+      ),
+    );
+    const latestMap = new Map<string, (typeof latestPerKw)[number]>();
+    keywords.forEach((kw, i) => latestMap.set(kw.keyword, latestPerKw[i]));
+
+    // 모든 top3 의 competitorPlaceId 합집합 — CompetitorDailySnapshot 한 번에 조회
+    const allPlaceIds = new Set<string>();
+    for (const l of latestPerKw) {
+      const tp = (l?.topPlaces as any[]) ?? [];
+      for (const p of tp.slice(0, 3)) {
+        if (p.placeId && !p.isMine) allPlaceIds.add(p.placeId);
+      }
+      // myPlace (Top3 밖이어도) 도 placeId 있으면 포함 — 단, 내 매장은 StoreDailySnapshot 사용하니 제외
+    }
+    const compSnaps =
+      allPlaceIds.size > 0
+        ? await this.prisma.competitorDailySnapshot.findMany({
+            where: {
+              storeId,
+              competitorPlaceId: { in: [...allPlaceIds] },
+              date: { in: [date1d, date7d, date30d] },
+            },
+            select: {
+              date: true,
+              competitorPlaceId: true,
+              visitorReviewCount: true,
+              blogReviewCount: true,
+            },
+          })
+        : [];
+    const compMap1d = new Map<string, { visitor: number | null; blog: number | null }>();
+    const compMap7d = new Map<string, { visitor: number | null; blog: number | null }>();
+    const compMap30d = new Map<string, { visitor: number | null; blog: number | null }>();
+    for (const s of compSnaps) {
+      const t = s.date.getTime();
+      const target =
+        t === date1d.getTime() ? compMap1d :
+        t === date7d.getTime() ? compMap7d :
+        t === date30d.getTime() ? compMap30d :
+        null;
+      if (target) {
+        target.set(s.competitorPlaceId, {
+          visitor: s.visitorReviewCount,
+          blog: s.blogReviewCount,
         });
-        // 어제/가장 오래된 리뷰 포함 기록 — 순위 + 리뷰수 델타 모두 여기서 계산
-        const prevRich = latest
+      }
+    }
+
+    // 키워드별 1일/7일 순위 비교용 — KeywordRankHistory 의 N일전 row (순위만)
+    const enriched = await Promise.all(
+      keywords.map(async (kw) => {
+        const latest = latestMap.get(kw.keyword) ?? null;
+
+        const prev1d = latest
           ? await this.prisma.keywordRankHistory.findFirst({
               where: {
                 storeId, keyword: kw.keyword,
                 checkedAt: { lt: latest.checkedAt },
               },
               orderBy: { checkedAt: "desc" },
-              select: { rank: true, topPlaces: true },
+              select: { rank: true, checkedAt: true },
             })
           : null;
-        const prevRichMap = new Map<string, { visitor?: number | null; blog?: number | null }>();
-        for (const p of (prevRich?.topPlaces as any[]) || []) {
-          const entry = { visitor: p.visitorReviewCount ?? null, blog: p.blogReviewCount ?? null };
-          if (p.placeId) prevRichMap.set(p.placeId, entry);
-          prevRichMap.set(p.name, entry);
-        }
+        const findPrevRankByDays = async (daysAgo: number) => {
+          if (!latest) return null;
+          const t = new Date(latest.checkedAt.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+          return this.prisma.keywordRankHistory.findFirst({
+            where: {
+              storeId, keyword: kw.keyword,
+              checkedAt: {
+                gte: new Date(t.getTime() - 12 * 60 * 60 * 1000),
+                lte: new Date(t.getTime() + 12 * 60 * 60 * 1000),
+              },
+            },
+            orderBy: { checkedAt: "desc" },
+            select: { rank: true },
+          });
+        };
+        const [prev7d, prev30d] = await Promise.all([
+          findPrevRankByDays(7),
+          findPrevRankByDays(30),
+        ]);
 
         const allPlaces: any[] = (latest?.topPlaces as any[]) || [];
 
-        // Top 3 — 각 place 에 증감 계산 (3단 폴백: prev history → CompetitorDailySnapshot → 선형 추정)
-        const placeIds3 = allPlaces.slice(0, 3).map((p) => p.placeId).filter(Boolean);
-        const compSnaps = placeIds3.length
-          ? await this.prisma.competitorDailySnapshot.findMany({
-              where: {
-                storeId,
-                competitorPlaceId: { in: placeIds3 },
-                date: { lt: new Date(new Date().setHours(0, 0, 0, 0)) },
-              },
-              orderBy: { date: "desc" },
-              select: {
-                competitorPlaceId: true,
-                visitorReviewCount: true,
-                blogReviewCount: true,
-                isEstimated: true,
-              },
-            })
-          : [];
-        const compMap = new Map<string, { visitor: number | null; blog: number | null; isEst: boolean }>();
-        for (const s of compSnaps) {
-          if (!compMap.has(s.competitorPlaceId)) {
-            compMap.set(s.competitorPlaceId, {
-              visitor: s.visitorReviewCount,
-              blog: s.blogReviewCount,
-              isEst: s.isEstimated,
-            });
-          }
-        }
-
-        const top3 = allPlaces.slice(0, 3).map((p) => {
-          const histPrev = (p.placeId && prevRichMap.get(p.placeId)) || prevRichMap.get(p.name);
-          let visitorDelta: number | null = null;
-          let blogDelta: number | null = null;
-          let deltaSource: "real" | "backfill" | "estimate" | null = null;
-          if (p.visitorReviewCount != null && histPrev?.visitor != null) {
-            visitorDelta = p.visitorReviewCount - histPrev.visitor;
-            deltaSource = "real";
-          }
-          if (p.blogReviewCount != null && histPrev?.blog != null) {
-            blogDelta = p.blogReviewCount - histPrev.blog;
-            if (!deltaSource) deltaSource = "real";
-          }
-          if (visitorDelta == null && p.placeId) {
-            const s = compMap.get(p.placeId);
-            if (s?.visitor != null && p.visitorReviewCount != null) {
-              visitorDelta = p.visitorReviewCount - s.visitor;
-              deltaSource = s.isEst ? "backfill" : "real";
+        // 각 place 의 1/7/30일 visitor·blog 델타 — DailySnapshot 기반 (실측 또는 추정).
+        // 내 매장은 StoreDailySnapshot, 경쟁사는 CompetitorDailySnapshot.
+        const computeDelta = (p: any) => {
+          const past = (
+            d: 1 | 7 | 30,
+          ): { visitor: number | null; blog: number | null } => {
+            if (p.isMine) {
+              const s = d === 1 ? mySnap1d : d === 7 ? mySnap7d : mySnap30d;
+              return {
+                visitor: s?.visitorReviewCount ?? null,
+                blog: s?.blogReviewCount ?? null,
+              };
             }
-          }
-          if (blogDelta == null && p.placeId) {
-            const s = compMap.get(p.placeId);
-            if (s?.blog != null && p.blogReviewCount != null) {
-              blogDelta = p.blogReviewCount - s.blog;
-              if (!deltaSource) deltaSource = s.isEst ? "backfill" : "real";
-            }
-          }
-          if (visitorDelta == null) {
-            const est = linearPast(p.visitorReviewCount);
-            if (est != null && p.visitorReviewCount != null) {
-              visitorDelta = p.visitorReviewCount - est;
-              deltaSource = "estimate";
-            }
-          }
-          if (blogDelta == null) {
-            const est = linearPast(p.blogReviewCount);
-            if (est != null && p.blogReviewCount != null) {
-              blogDelta = p.blogReviewCount - est;
-              if (!deltaSource) deltaSource = "estimate";
-            }
-          }
-          return {
-            rank: p.rank,
-            name: p.name,
-            placeId: p.placeId,
-            visitorReviewCount: p.visitorReviewCount,
-            blogReviewCount: p.blogReviewCount,
-            visitorDelta,
-            blogDelta,
-            deltaSource,
-            isMine: p.isMine,
+            if (!p.placeId) return { visitor: null, blog: null };
+            const m = d === 1 ? compMap1d : d === 7 ? compMap7d : compMap30d;
+            const c = m.get(p.placeId);
+            return { visitor: c?.visitor ?? null, blog: c?.blog ?? null };
           };
-        });
+          const subtract = (
+            cur: number | null | undefined,
+            prev: number | null | undefined,
+          ) => (cur != null && prev != null ? cur - prev : null);
+          const p1 = past(1), p7 = past(7), p30 = past(30);
+          return {
+            visitorDelta: subtract(p.visitorReviewCount, p1.visitor),
+            blogDelta: subtract(p.blogReviewCount, p1.blog),
+            visitorDelta7d: subtract(p.visitorReviewCount, p7.visitor),
+            blogDelta7d: subtract(p.blogReviewCount, p7.blog),
+            visitorDelta30d: subtract(p.visitorReviewCount, p30.visitor),
+            blogDelta30d: subtract(p.blogReviewCount, p30.blog),
+          };
+        };
 
-        // 내 매장 정보 (Top 3 안에 있을 수도, 밖에 있을 수도)
-        const myPlace = allPlaces.find((p: any) => p.isMine);
+        const top3 = allPlaces.slice(0, 3).map((p) => ({
+          rank: p.rank,
+          name: p.name,
+          placeId: p.placeId,
+          visitorReviewCount: p.visitorReviewCount,
+          blogReviewCount: p.blogReviewCount,
+          ...computeDelta(p),
+          isMine: p.isMine,
+        }));
+
+        // 내 매장 정보 (Top 3 안에 있을 수도, 밖에 있을 수도) + 1d/7d delta
+        const myRaw = allPlaces.find((p: any) => p.isMine);
+        const myPlace = myRaw
+          ? {
+              rank: myRaw.rank,
+              name: myRaw.name,
+              placeId: myRaw.placeId,
+              visitorReviewCount: myRaw.visitorReviewCount,
+              blogReviewCount: myRaw.blogReviewCount,
+              ...computeDelta(myRaw),
+              isMine: true,
+            }
+          : null;
 
         // 일/주/월 검색량 — 네이버 검색광고 API는 월간만 제공하므로 주/일은 선형 환산(추정).
         // 실제 수집되는 KeywordDailyVolume.totalVolume 도 "그 날 기록한 월간 검색량"이라
@@ -214,11 +263,10 @@ export class KeywordService {
         const dailyVolume = monthly > 0 ? Math.round(monthly / 30) : 0;
         const volumeEstimated = monthly > 0;
 
-        // 순위 변동 (가장 최근 과거 기록 대비) — RankHistory 기반
+        // 순위 변동 — 1일/7일/30일 분리. 양수 = 상승(좋아짐), 음수 = 하락(나빠짐).
         const currRank = kw.currentRank ?? latest?.rank ?? null;
-        const prevRank = prevRich?.rank ?? null;
-        const rankChange =
-          currRank != null && prevRank != null ? prevRank - currRank : null;
+        const sub = (cur: number | null, prev: number | null) =>
+          cur != null && prev != null ? prev - cur : null;
         return {
           ...kw,
           monthlyVolume: monthly,
@@ -227,9 +275,11 @@ export class KeywordService {
           volumeEstimated,
           totalResults: latest?.totalResults ?? null,
           checkedAt: latest?.checkedAt ?? null,
-          rankChange,
+          rankChange: sub(currRank, prev1d?.rank ?? null),
+          rankChange7d: sub(currRank, prev7d?.rank ?? null),
+          rankChange30d: sub(currRank, prev30d?.rank ?? null),
           top3,
-          myPlace: myPlace || null,
+          myPlace,
         };
       }),
     );

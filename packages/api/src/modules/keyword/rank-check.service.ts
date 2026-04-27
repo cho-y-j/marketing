@@ -31,6 +31,8 @@ export class RankCheckService {
       store.keywords.map((kw) => kw.keyword),
       store.name,
       store.naverPlaceId || undefined,
+      store.mapx,
+      store.mapy,
     );
 
     // DB 업데이트 + 히스토리 저장 + 순위 변동 알림
@@ -227,18 +229,22 @@ export class RankCheckService {
       keyword,
       store.name,
       store.naverPlaceId || undefined,
+      store.mapx,
+      store.mapy,
     );
 
-    // 히스토리 저장
-    await this.prisma.keywordRankHistory.create({
-      data: {
-        storeId,
-        keyword,
-        rank: result.rank,
-        totalResults: result.totalResults,
-        topPlaces: result.topPlaces,
-      },
-    });
+    // 히스토리 저장 — reliable=false 면 currentRank 오염 방지로 기록 X
+    if (result.reliable) {
+      await this.prisma.keywordRankHistory.create({
+        data: {
+          storeId,
+          keyword,
+          rank: result.rank,
+          totalResults: result.totalResults,
+          topPlaces: result.topPlaces,
+        },
+      });
+    }
 
     return {
       storeName: store.name,
@@ -274,15 +280,18 @@ export class RankCheckService {
     if (!hasRichData) {
       const result = await this.rankChecker.checkPlaceRank(
         keyword, store.name, store.naverPlaceId || undefined,
+        store.mapx, store.mapy,
       );
-      latest = await this.prisma.keywordRankHistory.create({
-        data: {
-          storeId, keyword,
-          rank: result.rank,
-          totalResults: result.totalResults,
-          topPlaces: result.topPlaces as any,
-        },
-      });
+      if (result.reliable) {
+        latest = await this.prisma.keywordRankHistory.create({
+          data: {
+            storeId, keyword,
+            rank: result.rank,
+            totalResults: result.totalResults,
+            topPlaces: result.topPlaces as any,
+          },
+        });
+      }
       topPlaces = result.topPlaces;
     }
 
@@ -368,141 +377,78 @@ export class RankCheckService {
       prevPlaceMap.set(p.name, entry);
     }
 
-    // 3-b. 내 매장 스냅샷 fallback (비교 날짜에 KeywordRankHistory 없을 때 써짐 드물게)
-    const snapDate = new Date();
-    snapDate.setUTCHours(0, 0, 0, 0);
-    const storeSnap = await this.prisma.storeDailySnapshot.findFirst({
-      where: { storeId, date: { lte: snapDate } },
+    // 3-b. 변동량 계산 — DailySnapshot 직접 비교 (사장님 룰: KeywordRankHistory.topPlaces 백필은
+    // 같은 값 복제이므로 신뢰 X. 실제 추정 데이터는 StoreDailySnapshot/CompetitorDailySnapshot 에 있음).
+    //
+    // 흐름:
+    //  - compareDays 기준 N일 전 일자 계산 (오늘 자정 - N일)
+    //  - 그 날 또는 그 이전 가장 가까운 row 의 visitor/blog 누적값 → 오늘 - 그 값 = delta
+    //  - 내 매장: StoreDailySnapshot, 경쟁사: CompetitorDailySnapshot
+    const targetDate = new Date();
+    targetDate.setUTCHours(0, 0, 0, 0);
+    targetDate.setUTCDate(targetDate.getUTCDate() - compareDays);
+
+    const myStoreSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId, date: { lte: targetDate } },
       orderBy: { date: "desc" },
-      select: { visitorDelta: true, blogDelta: true, date: true },
+      select: { visitorReviewCount: true, blogReviewCount: true },
     });
 
-    // 3-b-i. 경쟁사 과거 스냅샷 병렬 조회 — 신규 가입자는 KeywordRankHistory 가 없어도
-    // CompetitorDailySnapshot 의 백필된 추정치로 "N일전 리뷰수"를 구할 수 있음.
-    const pastDate = new Date(latestTs - compareDays * 24 * 60 * 60 * 1000);
-    pastDate.setUTCHours(23, 59, 59, 999);
     const placeIds = topPlaces.map((p: any) => p.placeId).filter(Boolean);
     const compSnaps = placeIds.length
       ? await this.prisma.competitorDailySnapshot.findMany({
           where: {
             storeId,
             competitorPlaceId: { in: placeIds },
-            date: { lte: pastDate },
+            date: { lte: targetDate },
           },
           orderBy: { date: "desc" },
           select: {
             competitorPlaceId: true,
             visitorReviewCount: true,
             blogReviewCount: true,
-            isEstimated: true,
           },
         })
       : [];
     const compSnapMap = new Map<
       string,
-      { visitorReviewCount: number | null; blogReviewCount: number | null; isEstimated: boolean }
+      { visitorReviewCount: number | null; blogReviewCount: number | null }
     >();
     for (const s of compSnaps) {
+      // 같은 placeId 의 row 가 여러 개면 가장 최근(targetDate 에 가장 가까운 과거)것만
       if (!compSnapMap.has(s.competitorPlaceId)) {
         compSnapMap.set(s.competitorPlaceId, {
           visitorReviewCount: s.visitorReviewCount,
           blogReviewCount: s.blogReviewCount,
-          isEstimated: s.isEstimated,
         });
       }
     }
 
-    // 3-b-ii. 선형 추정 상수 — 외식업 월 성장률 ~10~15% 기준 일간 0.3~0.5%. 보수적으로 0.3%.
-    const LINEAR_DAILY_RATE = 0.003;
-    const linearPast = (current: number | null | undefined, days: number) => {
-      if (current == null || current === 0) return null;
-      const past = Math.round(current * Math.max(0, 1 - LINEAR_DAILY_RATE * days));
-      return past;
-    };
-
-    // 근사 매칭 시 기간 스케일 (예: 2일치 데이터로 7일전 탭 눌렀으면 × 3.5)
-    // 관측된 변화가 그대로 이어진다고 가정하는 선형 외삽 — 신규 가입자 시각 체감용.
-    const scaleToRequested = (rawDelta: number | null): number | null => {
-      if (rawDelta == null) return null;
-      if (!compareApproximate || !actualCompareDays || actualCompareDays === compareDays) {
-        return rawDelta;
-      }
-      const factor = compareDays / actualCompareDays;
-      return Math.round(rawDelta * factor);
-    };
-
-    // topPlaces에 변동량 추가 — 3단 폴백:
-    //  1. prevTopPlaces(실제 기록)    ← source: 'real' (정확 매칭 시) 또는 'estimate' (근사→선형 외삽)
-    //  2. CompetitorDailySnapshot     ← source: 'backfill'
-    //  3. 현재 × (1 − 0.003 × N일)     ← source: 'estimate'
     topPlaces = topPlaces.map((p: any) => {
       const fromHistory =
         (p.placeId && prevPlaceMap.get(p.placeId)) || prevPlaceMap.get(p.name) || null;
       const rankChange = fromHistory?.rank != null ? fromHistory.rank - p.rank : null;
 
-      let visitorDelta: number | null = null;
-      let blogDelta: number | null = null;
-      let deltaSource: "real" | "backfill" | "estimate" | null = null;
-
-      // 1) 실제 기록 매칭 (근사일 경우 선형 외삽)
-      if (
-        fromHistory &&
-        p.visitorReviewCount != null &&
-        fromHistory.visitorReviewCount != null
-      ) {
-        const raw = p.visitorReviewCount - fromHistory.visitorReviewCount;
-        visitorDelta = scaleToRequested(raw);
-        deltaSource = compareApproximate ? "estimate" : "real";
-      }
-      if (fromHistory && p.blogReviewCount != null && fromHistory.blogReviewCount != null) {
-        const raw = p.blogReviewCount - fromHistory.blogReviewCount;
-        blogDelta = scaleToRequested(raw);
-        if (!deltaSource) deltaSource = compareApproximate ? "estimate" : "real";
-      }
-
-      // 2) CompetitorDailySnapshot 폴백 (마찬가지로 근사 대응)
-      if (visitorDelta == null && p.placeId) {
+      // 비교용 과거 누적값
+      let pastVisitor: number | null = null;
+      let pastBlog: number | null = null;
+      if (p.isMine) {
+        pastVisitor = myStoreSnap?.visitorReviewCount ?? null;
+        pastBlog = myStoreSnap?.blogReviewCount ?? null;
+      } else if (p.placeId) {
         const snap = compSnapMap.get(p.placeId);
-        if (snap?.visitorReviewCount != null && p.visitorReviewCount != null) {
-          const raw = p.visitorReviewCount - snap.visitorReviewCount;
-          visitorDelta = scaleToRequested(raw);
-          deltaSource = snap.isEstimated || compareApproximate ? "backfill" : "real";
-        }
-      }
-      if (blogDelta == null && p.placeId) {
-        const snap = compSnapMap.get(p.placeId);
-        if (snap?.blogReviewCount != null && p.blogReviewCount != null) {
-          const raw = p.blogReviewCount - snap.blogReviewCount;
-          blogDelta = scaleToRequested(raw);
-          if (!deltaSource)
-            deltaSource = snap.isEstimated || compareApproximate ? "backfill" : "real";
-        }
+        pastVisitor = snap?.visitorReviewCount ?? null;
+        pastBlog = snap?.blogReviewCount ?? null;
       }
 
-      // 3) 선형 추정 폴백 (이미 compareDays 반영된 값)
-      if (visitorDelta == null) {
-        const est = linearPast(p.visitorReviewCount, compareDays);
-        if (est != null && p.visitorReviewCount != null) {
-          visitorDelta = p.visitorReviewCount - est;
-          deltaSource = "estimate";
-        }
-      }
-      if (blogDelta == null) {
-        const est = linearPast(p.blogReviewCount, compareDays);
-        if (est != null && p.blogReviewCount != null) {
-          blogDelta = p.blogReviewCount - est;
-          if (!deltaSource) deltaSource = "estimate";
-        }
-      }
-
-      // 내 매장은 StoreDailySnapshot delta 가 더 정확 (compareDays=1)
-      if (p.isMine && compareDays === 1 && storeSnap?.visitorDelta != null) {
-        visitorDelta = storeSnap.visitorDelta;
-        deltaSource = "real";
-      }
-      if (p.isMine && compareDays === 1 && storeSnap?.blogDelta != null) {
-        blogDelta = storeSnap.blogDelta;
-      }
+      const visitorDelta =
+        p.visitorReviewCount != null && pastVisitor != null
+          ? p.visitorReviewCount - pastVisitor
+          : null;
+      const blogDelta =
+        p.blogReviewCount != null && pastBlog != null
+          ? p.blogReviewCount - pastBlog
+          : null;
 
       return {
         ...p,
@@ -511,16 +457,17 @@ export class RankCheckService {
         isHot: rankChange != null && rankChange >= 10,
         visitorDelta,
         blogDelta,
-        deltaSource, // 프런트가 '~' 접두사/배지 표시에 활용
       };
     });
 
     // 3-c. 내 매장 7일/30일 누적 리뷰 증가 (상단 스탯용)
     // 정확히 N일 전 스냅샷이 없으면 가장 오래된 스냅샷을 기준선으로 사용 (부분 집계).
     // 그래도 없으면 현재 누적을 "매장 가입일~오늘" 일수로 나눈 추정 일평균 × 기간으로 fallback.
-    const weekAgo = new Date(snapDate);
+    const baseDate = new Date();
+    baseDate.setUTCHours(0, 0, 0, 0);
+    const weekAgo = new Date(baseDate);
     weekAgo.setDate(weekAgo.getDate() - 7);
-    const monthAgo = new Date(snapDate);
+    const monthAgo = new Date(baseDate);
     monthAgo.setDate(monthAgo.getDate() - 30);
 
     const latestSnap = await this.prisma.storeDailySnapshot.findFirst({
@@ -597,10 +544,16 @@ export class RankCheckService {
       computeDelta(monthSnap, "blogReviewCount", 30),
     ]);
 
+    // 일별 delta — 가장 최근 StoreDailySnapshot 의 visitorDelta/blogDelta column (전일 대비 누적 증가)
+    const todayStoreSnap = await this.prisma.storeDailySnapshot.findFirst({
+      where: { storeId },
+      orderBy: { date: "desc" },
+      select: { visitorDelta: true, blogDelta: true },
+    });
     const myDeltas = {
       daily: {
-        visitor: storeSnap?.visitorDelta ?? null,
-        blog: storeSnap?.blogDelta ?? null,
+        visitor: todayStoreSnap?.visitorDelta ?? null,
+        blog: todayStoreSnap?.blogDelta ?? null,
       },
       weekly: {
         visitor: wv.value,

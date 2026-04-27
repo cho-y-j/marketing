@@ -13,6 +13,7 @@ import { DailySnapshotJob } from "../../jobs/daily-snapshot.job";
 import { CompetitorBackfillService } from "../../modules/competitor/competitor-backfill.service";
 import { EventCollectorService } from "./event-collector.service";
 import { KAMIS_CATALOG, KAMIS_ALL_ITEMS, isKamisRegistered } from "../../modules/ingredient/kamis-catalog";
+import { BatchAnalysisJob } from "../../jobs/batch-analysis.job";
 
 @Injectable()
 export class StoreSetupService {
@@ -38,6 +39,8 @@ export class StoreSetupService {
     @Inject(forwardRef(() => CompetitorBackfillService))
     private backfillService: CompetitorBackfillService,
     private eventCollector: EventCollectorService,
+    @Inject(forwardRef(() => BatchAnalysisJob))
+    private batchJob: BatchAnalysisJob,
   ) {}
 
   /**
@@ -107,6 +110,7 @@ export class StoreSetupService {
         blogReviewCount: placeInfo?.blogReviewCount,
         address: placeInfo?.address || store.address,
       },
+      { mapx: store.mapx, mapy: store.mapy },
     );
 
     // 새 경쟁사의 과거 30일 backfill
@@ -160,6 +164,42 @@ export class StoreSetupService {
       menuTokens.add(t);
       if (t.includes("아귀")) menuTokens.add(t.replace("아귀", "아구"));
       if (t.includes("아구")) menuTokens.add(t.replace("아구", "아귀"));
+    }
+
+    // 매장명에서 핵심 메뉴 토큰 추출 — 사용자 의뢰자 명시 룰
+    //  예: "남해막창꼼장어" → "막창", "꼼장어"
+    //      "찬란한아구공덕직영점" → "아구" (+ 별칭 "아귀")
+    //  이게 빠지면 "[지역] 막창" 같은 secondary 쿼리가 안 만들어져 DIRECT 경쟁사가 부정확해짐.
+    if (storeMeta?.name) {
+      const KNOWN_MENU_DICT = [
+        // 고기류
+        "막창", "꼼장어", "곱창", "대창", "삼겹살", "갈비", "등심", "안심", "차돌", "한우", "소고기", "돼지고기", "오겹살", "항정살",
+        // 해산물
+        "회", "활어", "아구", "아귀", "해물", "낙지", "조개", "굴", "전복", "장어", "광어", "참치", "연어", "방어", "대게", "킹크랩",
+        // 찜/탕/국
+        "찜닭", "감자탕", "닭갈비", "부대찌개", "순대국", "갈비탕", "설렁탕", "곰탕", "해장국",
+        // 면/밥
+        "국밥", "칼국수", "라멘", "냉면", "쌀국수", "비빔밥", "덮밥", "초밥", "스시",
+        // 분식/패스트
+        "김밥", "떡볶이", "순대", "토스트", "샌드위치", "버거",
+        // 치킨/피자
+        "치킨", "피자",
+        // 카페/디저트
+        "카페", "케이크", "도넛", "와플", "빙수", "베이커리", "빵",
+        // 보쌈/족발
+        "보쌈", "족발",
+        // 일식/중식 메뉴
+        "돈까스", "마라탕", "마라샹궈", "딤섬", "탕수육", "짬뽕", "짜장",
+      ];
+      const cleanedName = storeMeta.name.replace(/(본점|본관|직영점|역점|지점|타운|전문점|점)/g, "");
+      for (const menu of KNOWN_MENU_DICT) {
+        if (cleanedName.includes(menu)) {
+          menuTokens.add(menu);
+          // 아구/아귀 양방향 별칭
+          if (menu === "아구") menuTokens.add("아귀");
+          if (menu === "아귀") menuTokens.add("아구");
+        }
+      }
     }
     const menuArr = [...menuTokens];
     const hasMenuToken = (kw: string) => menuArr.some((t) => kw.includes(t));
@@ -327,20 +367,44 @@ export class StoreSetupService {
   ) {
     this.logger.log(`[전체 백그라운드 셋업 시작] ${storeName}`);
     try {
-      // Stage 2-1: 규칙 기반 키워드 생성 (0.1초)
-      const kwResult = this.generateRuleBasedKeywords(address, category, storeName);
+      // Stage 2-1: AI 키워드 생성 (Sonnet) → 룰 폴백
+      // 의뢰자 공식 프롬프트 + 사용자 예시 2개 + 검색량 ≥ 300 게이트(회식 예외)
+      // 캐시 hit 시 0초, 미스 시 ~1.5~5초. 매장 정보 같으면 영구 재사용.
+      const aiResult = await this.keywordDiscovery
+        .generateInitialKeywords({ storeName, address, category, district })
+        .catch((e) => {
+          this.logger.warn(`[bg] AI 키워드 생성 예외 — 룰 폴백: ${e.message}`);
+          return null;
+        });
+
+      let kwResult: { keywords: string[]; primaryKeyword: string };
+      let kwSource: "ai" | "rule";
+      if (aiResult && aiResult.source === "ai" && aiResult.keywords.length > 0) {
+        kwResult = { keywords: aiResult.keywords, primaryKeyword: aiResult.primaryKeyword };
+        kwSource = "ai";
+        this.logger.log(
+          `[bg] AI 키워드 ${aiResult.keywords.length}개 (cache=${aiResult.cacheHit ? "HIT" : "MISS"}, 게이트 폐기 ${aiResult.rejectedByVolume?.length ?? 0}개)`,
+        );
+      } else {
+        kwResult = this.generateRuleBasedKeywords(address, category, storeName);
+        kwSource = "rule";
+        this.logger.log(`[bg] 룰 폴백 키워드 ${kwResult.keywords.length}개`);
+      }
+
       const excluded = await this.prisma.excludedKeyword.findMany({
         where: { storeId },
         select: { keyword: true },
       });
       const excludedSet = new Set(excluded.map((e) => e.keyword));
       const keywords = kwResult.keywords.filter((k) => !excludedSet.has(k));
-      const KEYWORD_CAP = 3;
+      // AI 결과는 이미 검색량 정렬 + 게이트 통과한 7~10개 → 그대로 사용
+      // 룰 폴백은 3개 → 그대로 cap
+      const KEYWORD_CAP = kwSource === "ai" ? 10 : 3;
       let cappedKeywords = keywords.slice(0, KEYWORD_CAP);
       if (!cappedKeywords.includes(kwResult.primaryKeyword) && kwResult.primaryKeyword) {
         cappedKeywords = [kwResult.primaryKeyword, ...cappedKeywords].slice(0, KEYWORD_CAP);
       }
-      this.logger.log(`[bg] 키워드 ${cappedKeywords.length}개: ${cappedKeywords.join(", ")}`);
+      this.logger.log(`[bg] 최종 키워드 ${cappedKeywords.length}개 (${kwSource}): ${cappedKeywords.join(", ")}`);
 
       // Stage 2-2: 키워드 저장 (AI 생성분)
       const createdKeywords: Array<{ id: string; keyword: string }> = [];
@@ -458,20 +522,31 @@ export class StoreSetupService {
             this.logger.warn(`[bg custom] 경쟁사 Place 조회 실패 [${name}]: ${e.message}`);
           }
           try {
-            await this.prisma.competitor.create({
-              data: {
-                storeId,
-                competitorName: info?.name || name,
-                competitorPlaceId: placeId || undefined,
-                category: info?.category || finalCategory || undefined,
-                type: "USER_SET",
-                competitionType: "DIRECT",
-                receiptReviewCount: info?.visitorReviewCount || undefined,
-                blogReviewCount: info?.blogReviewCount || undefined,
-                lastComparedAt: new Date(),
-              },
+            const dupWhere = placeId
+              ? { storeId, competitorPlaceId: placeId }
+              : { storeId, competitorName: info?.name || name };
+            const existing = await this.prisma.competitor.findFirst({
+              where: dupWhere,
+              select: { id: true },
             });
-            this.logger.log(`[bg custom] 경쟁사 저장: ${info?.name || name}`);
+            if (existing) {
+              this.logger.log(`[bg custom] 경쟁사 중복 skip: ${info?.name || name}`);
+            } else {
+              await this.prisma.competitor.create({
+                data: {
+                  storeId,
+                  competitorName: info?.name || name,
+                  competitorPlaceId: placeId || undefined,
+                  category: info?.category || finalCategory || undefined,
+                  type: "USER_SET",
+                  competitionType: "DIRECT",
+                  receiptReviewCount: info?.visitorReviewCount || undefined,
+                  blogReviewCount: info?.blogReviewCount || undefined,
+                  lastComparedAt: new Date(),
+                },
+              });
+              this.logger.log(`[bg custom] 경쟁사 저장: ${info?.name || name}`);
+            }
           } catch (e: any) {
             if (!e.message?.includes("Unique")) {
               this.logger.warn(`[bg custom] 경쟁사 저장 실패 [${name}]: ${e.message}`);
@@ -491,6 +566,7 @@ export class StoreSetupService {
           blogReviewCount: placeInfo?.blogReviewCount,
           address: placeInfo?.address || updatedStore?.address,
         },
+        { mapx: updatedStore?.mapx ?? null, mapy: updatedStore?.mapy ?? null },
       );
       const competitorCount = await this.prisma.competitor.count({ where: { storeId } });
       const keywordCount = await this.prisma.storeKeyword.count({ where: { storeId } });
@@ -561,18 +637,33 @@ export class StoreSetupService {
       this.logger.warn(`[bg] 첫 분석 실패: ${e.message}`);
     }
 
-    // 3) 첫 순위 체크 (Top 300 페이지네이션, 키워드당 30~60초)
+    // 3) 첫 순위 체크 — Bull 큐에 enqueue (인라인 await 금지)
+    //
+    // 왜 큐에 적재하는가:
+    //   - 키워드당 30~60초 × N개 = 매장 1개에 5~10분 소요
+    //   - 같은 IP 에서 매장 2개 연달아 등록 시 페이지 요청이 누적 → 네이버가 IP 차단 (403)
+    //   - 큐 limiter (1 job / 30s) + concurrency=1 이 매장 간 자동 쿨다운 강제
+    //   - 워커가 차례로 처리하므로 가입 직후 사용자에겐 폴링 UI("순위 분석 중") 가 표시됨
+    //
+    // jobId 가 멱등 키 (first-rank:storeId:date) — 같은 매장에 두 번 적재돼도 한 번만 실행.
     try {
-      await this.rankCheckService.checkAllKeywordRanks(storeId);
-      const checkedCount = await this.prisma.storeKeyword.count({
-        where: { storeId, lastCheckedAt: { not: null } },
-      });
-      this.logger.log(`[bg] 첫 순위 체크 완료 — ${checkedCount}개 키워드 체크`);
+      await this.batchJob.enqueueRankCheckManual(storeId);
+      this.logger.log(`[bg] 첫 순위 체크 큐 적재 완료 — 워커가 차례로 처리`);
     } catch (e: any) {
-      this.logger.warn(`[bg] 순위 체크 실패: ${e.message}`);
+      this.logger.warn(`[bg] 순위 체크 큐 적재 실패: ${e.message}`);
     }
 
-    // 4) 첫 일별 스냅샷 (리뷰/검색량 기준선)
+    // 4) 30일 역산 backfill 먼저 (어제 row 가 만들어져야 5)에서 오늘 delta 계산 가능)
+    try {
+      await this.backfillService.backfillStore(storeId);
+      await this.backfillService.backfillAllCompetitors(storeId);
+      await this.backfillService.backfillKeywordRanks(storeId);
+      this.logger.log(`[bg] 30일 역산 backfill 완료`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 30일 backfill 실패: ${e.message}`);
+    }
+
+    // 5) 첫 일별 스냅샷 (오늘 row — 백필이 만든 어제 row 와 비교해 delta 계산됨)
     try {
       const today = new Date();
       today.setUTCHours(0, 0, 0, 0);
@@ -581,15 +672,6 @@ export class StoreSetupService {
       this.logger.log(`[bg] 첫 스냅샷 기록 완료`);
     } catch (e: any) {
       this.logger.warn(`[bg] 첫 스냅샷 실패: ${e.message}`);
-    }
-
-    // 5) 30일 역산 backfill (내 매장 + 경쟁사들)
-    try {
-      await this.backfillService.backfillStore(storeId);
-      await this.backfillService.backfillAllCompetitors(storeId);
-      this.logger.log(`[bg] 30일 역산 backfill 완료`);
-    } catch (e: any) {
-      this.logger.warn(`[bg] 30일 backfill 실패: ${e.message}`);
     }
 
     // 6) 주재료 자동 판정 (KAMIS 연계)
@@ -621,6 +703,18 @@ export class StoreSetupService {
     } catch (e: any) {
       this.logger.warn(`[bg] 첫 브리핑 생성 실패: ${e.message}`);
     }
+
+    // 전체 백그라운드 셋업 완료 마커 — 프론트가 진짜 완료 시점을 알 수 있도록
+    try {
+      const finalKw = await this.prisma.storeKeyword.count({ where: { storeId } });
+      const finalComp = await this.prisma.competitor.count({ where: { storeId } });
+      await this.prisma.store.update({
+        where: { id: storeId },
+        data: {
+          setupStep: `완료 — 키워드 ${finalKw}개, 경쟁사 ${finalComp}개`,
+        },
+      });
+    } catch {}
 
     this.logger.log(`[백그라운드 셋업 완료] ${storeName}`);
   }
@@ -658,6 +752,37 @@ export class StoreSetupService {
         const roadAddr = detail.roadAddress || "";
         // 행정동 추출은 지번주소에서 (건물동 제외 로직이 동작)
         const effectiveAddr = jibunAddr || roadAddr;
+
+        // 좌표 보충 — summary 응답이 좌표 키를 빠뜨리는 매장이 있어
+        // 1차에서 null 인 경우 검색광고 local.json (mapx/mapy 확실) 으로 채움.
+        // address/카테고리 등 다른 필드는 1차 우선이므로 좌표만 머지.
+        let mapx = detail.mapx ?? null;
+        let mapy = detail.mapy ?? null;
+        if (mapx == null || mapy == null) {
+          try {
+            const enrichName = detail.name || storeName;
+            const places = await this.naverSearch.searchPlace(enrichName, 3);
+            const best = places[0];
+            if (best) {
+              const toWgs = (v: string | number | undefined): number | null => {
+                if (v == null) return null;
+                const n = Number(v);
+                if (!Number.isFinite(n)) return null;
+                return n > 1000 ? n / 1e7 : n;
+              };
+              const ex = toWgs(best.mapx);
+              const ey = toWgs(best.mapy);
+              if (ex != null && ey != null) {
+                mapx = ex;
+                mapy = ey;
+                this.logger.debug(`좌표 보충 [${enrichName}] x=${ex} y=${ey}`);
+              }
+            }
+          } catch (e: any) {
+            this.logger.debug(`좌표 보충 실패: ${e.message}`);
+          }
+        }
+
         return {
           address: effectiveAddr,
           roadAddress: roadAddr,
@@ -667,9 +792,8 @@ export class StoreSetupService {
           visitorReviewCount: detail.visitorReviewCount,
           blogReviewCount: detail.blogReviewCount,
           saveCount: detail.saveCount,
-          // 좌표 — getPlaceDetail 응답에 있을 수도, 없을 수도
-          mapx: (detail as any).mapx ?? (detail as any).x,
-          mapy: (detail as any).mapy ?? (detail as any).y,
+          mapx,
+          mapy,
         };
       }
     } catch (e: any) {
@@ -1409,6 +1533,7 @@ ${catalogText}
     queryPlan: { main: string | null; secondary: string[] },
     category: string,
     _myStore?: { visitorReviewCount?: number | null; blogReviewCount?: number | null; address?: string | null },
+    coords?: { mapx: number | null; mapy: number | null },
   ) {
     const normalizedStoreName = storeName.replace(/\s+/g, "");
     type Candidate = {
@@ -1442,15 +1567,17 @@ ${catalogText}
     this.logger.log(
       `[경쟁사 병렬 수집] 대표="${queryPlan.main ?? "없음"}" + 메뉴=${JSON.stringify(queryPlan.secondary)}`,
     );
+    const mx = coords?.mapx ?? null;
+    const my = coords?.mapy ?? null;
     const [mainResults, ...secondaryResults] = await Promise.all([
       queryPlan.main
-        ? this.rankChecker.fetchTopPlaces(queryPlan.main, EXPOSURE_CAP + 5).catch((e) => {
+        ? this.rankChecker.fetchTopPlaces(queryPlan.main, EXPOSURE_CAP + 5, mx, my).catch((e) => {
             this.logger.warn(`[EXPOSURE] 수집 실패 "${queryPlan.main}": ${e.message}`);
             return [] as Array<{ id: string | null; name: string; rank: number }>;
           })
         : Promise.resolve([] as Array<{ id: string | null; name: string; rank: number }>),
       ...queryPlan.secondary.map((query) =>
-        this.rankChecker.fetchTopPlaces(query, 10).catch((e) => {
+        this.rankChecker.fetchTopPlaces(query, 10, mx, my).catch((e) => {
           this.logger.warn(`[DIRECT] 수집 실패 [${query}]: ${e.message}`);
           return [] as Array<{ id: string | null; name: string; rank: number }>;
         }),
@@ -1521,10 +1648,26 @@ ${catalogText}
       }),
     );
 
-    // ========== Stage 4: 저장 ==========
-    let savedExposure = 0, savedDirect = 0;
+    // ========== Stage 4: 저장 (중복 방어) ==========
+    // runFullBackgroundSetup 이 같은 storeId 에 두 번 실행되거나 (재시도/폴링),
+    // 검색 쿼리가 같은 매장을 두 번 반환할 때 중복 row 가 쌓이는 것 방지.
+    // 같은 storeId 에 같은 placeId 또는 같은 name 이 이미 있으면 skip.
+    let savedExposure = 0, savedDirect = 0, skippedDup = 0;
     for (const c of enriched) {
       const competitionType = c.source; // EXPOSURE or DIRECT (BOTH 폐기)
+
+      // 중복 체크 — placeId 우선, 없으면 name 으로
+      const dupWhere = c.placeId
+        ? { storeId, competitorPlaceId: c.placeId }
+        : { storeId, competitorName: c.name };
+      const existing = await this.prisma.competitor.findFirst({
+        where: dupWhere,
+        select: { id: true },
+      });
+      if (existing) {
+        skippedDup++;
+        continue;
+      }
 
       let dailySearch: number | undefined;
       try {
@@ -1555,6 +1698,9 @@ ${catalogText}
       } catch (e: any) {
         this.logger.warn(`경쟁사 저장 실패 [${c.name}]: ${e.message}`);
       }
+    }
+    if (skippedDup > 0) {
+      this.logger.log(`[경쟁사] 중복 skip ${skippedDup}건 (이미 존재)`);
     }
     this.logger.log(
       `[경쟁사 저장 완료] EXPOSURE ${savedExposure} (상권) / DIRECT ${savedDirect} (동종) / 총 ${savedExposure + savedDirect}`,

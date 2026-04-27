@@ -29,7 +29,9 @@ export class RankCheckProcessor {
     }
   }
 
-  @Process({ name: "check-store-ranks", concurrency: 2 })
+  // concurrency=1: 동시에 한 매장만 처리 — 같은 IP 에서 두 매장의 페이지네이션이
+  // 겹치면 차단 누적. 매장 2개 연달아 등록 → 순차 처리 + 매장 간 30s 쿨다운(limiter).
+  @Process({ name: "check-store-ranks", concurrency: 1 })
   async handle(job: Job<{ storeId: string }>) {
     const store = await this.prisma.store.findUnique({
       where: { id: job.data.storeId },

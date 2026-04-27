@@ -107,6 +107,12 @@ export class CompetitorController {
     return this.backfillService.backfillAllCompetitors(storeId);
   }
 
+  @Post("backfill-rank-history")
+  @ApiOperation({ summary: "키워드 순위 30일 역산 (오늘 측정값 복제)" })
+  backfillRankHistory(@Param("storeId") storeId: string) {
+    return this.backfillService.backfillKeywordRanks(storeId);
+  }
+
   @Get("alerts")
   @ApiOperation({ summary: "경쟁사 알림 + AI 대응 추천 목록" })
   async getAlerts(@Param("storeId") storeId: string) {

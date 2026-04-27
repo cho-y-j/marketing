@@ -1,11 +1,12 @@
 import axios from "axios";
 
-// 브라우저: 현재 호스트의 4000 포트로 API 접근
-// 서버(SSR): 환경변수 또는 Docker 내부 주소
+// NEXT_PUBLIC_API_URL이 있으면 우선 사용 (로컬 dev에서 .env.local로 주입)
+// 없으면 기존 로직: 브라우저는 호스트:4000, SSR은 process.env.API_URL
 const API_URL =
-  typeof window !== "undefined"
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined"
     ? `${window.location.protocol}//${window.location.hostname}:4000`
-    : process.env.API_URL || "http://localhost:4003";
+    : process.env.API_URL || "http://localhost:4003");
 
 export const apiClient = axios.create({
   baseURL: API_URL,

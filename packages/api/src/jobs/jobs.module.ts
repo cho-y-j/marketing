@@ -1,5 +1,5 @@
 import { BullModule } from "@nestjs/bull";
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { BatchAnalysisJob } from "./batch-analysis.job";
 import { BriefingGenerationJob } from "./briefing-generation.job";
@@ -54,7 +54,9 @@ import { IngredientModule } from "../modules/ingredient/ingredient.module";
     }),
     BullModule.registerQueue(
       { name: QUEUES.ANALYSIS },
-      { name: QUEUES.RANK_CHECK },
+      // 순위 체크는 IP 차단 누적 방지를 위해 매장 간 30초 쿨다운 — 동시에 한 건만 처리.
+      // 매장 2개 연달아 등록해도 큐가 직렬화 + 30s 인터벌 강제.
+      { name: QUEUES.RANK_CHECK, limiter: { max: 1, duration: 30_000 } },
       { name: QUEUES.BRIEFING },
       { name: QUEUES.REVIEW },
     ),
@@ -62,7 +64,9 @@ import { IngredientModule } from "../modules/ingredient/ingredient.module";
     BriefingModule,
     KeywordModule,
     ReviewModule,
-    DataModule,
+    // 순환 의존: DataModule.StoreSetupService 가 BatchAnalysisJob 을 주입받아 enqueueRankCheckManual 호출.
+    // DataModule 쪽도 forwardRef(() => JobsModule) 로 import — 양쪽 forwardRef 필수.
+    forwardRef(() => DataModule),
     CompetitorModule,
     IngredientModule,
   ],

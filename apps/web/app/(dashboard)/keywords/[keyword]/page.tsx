@@ -14,13 +14,11 @@ import {
   Search, Lightbulb, Loader2, Flame, ArrowUp, ArrowDown, Minus,
 } from "lucide-react";
 
+// 사장님 룰: /keywords 목록과 통일 — 1일/7일/30일 + 달력 임의 날짜
 const COMPARE_OPTIONS = [
   { days: 1, label: "1일전" },
-  { days: 5, label: "5일전" },
   { days: 7, label: "7일전" },
-  { days: 14, label: "14일전" },
   { days: 30, label: "30일전" },
-  { days: 60, label: "60일전" },
 ];
 
 export default function KeywordDetailPage({
@@ -86,9 +84,9 @@ export default function KeywordDetailPage({
             {totalResults ? `${totalResults}개 매장 노출` : ""}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => refetch()}>
+        <Button size="sm" onClick={() => refetch()}>
           <Loader2 size={14} className="mr-1" />
-          새로고침
+          재분석
         </Button>
       </div>
 
@@ -96,9 +94,16 @@ export default function KeywordDetailPage({
       <div className="grid grid-cols-3 gap-3">
         <KeyMetric
           label="내 순위"
-          value={myRank ? `${myRank}위` : "300위 밖"}
+          value={
+            myRank
+              ? `${myRank}위`
+              : totalResults != null && totalResults <= 10
+              ? "미노출"
+              : "70위 밖"
+          }
           color={myRank && myRank <= 3 ? "blue" : myRank && myRank <= 10 ? "default" : "red"}
         />
+        {/* totalResults 적으면 "300위 밖" 보다 "미노출" 이 정확 — 검색 결과 자체가 N개뿐 */}
         <KeyMetric
           label="월 검색량"
           value={monthlyVolume ? `${monthlyVolume.toLocaleString()}` : "-"}
@@ -134,8 +139,9 @@ export default function KeywordDetailPage({
           <h3 className="text-sm font-bold text-muted-foreground">
             {keyword} 검색 결과 Top {topPlaces.length}
           </h3>
-          {/* N일전 비교 탭 */}
+          {/* 비교 기간: 1일/7일/30일 + 달력 임의 날짜 (경쟁 매장 페이지와 통일) */}
           <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground">비교:</span>
             <div className="flex gap-1 flex-wrap">
               {COMPARE_OPTIONS.map((opt) => (
                 <Button
@@ -149,11 +155,32 @@ export default function KeywordDetailPage({
                 </Button>
               ))}
             </div>
+            <input
+              type="date"
+              max={new Date().toISOString().slice(0, 10)}
+              min={new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}
+              value={
+                new Date(Date.now() - compareDays * 24 * 60 * 60 * 1000)
+                  .toISOString()
+                  .slice(0, 10)
+              }
+              onChange={(e) => {
+                const picked = new Date(e.target.value).getTime();
+                const now = new Date();
+                now.setUTCHours(0, 0, 0, 0);
+                const days = Math.max(
+                  1,
+                  Math.round((now.getTime() - picked) / (24 * 60 * 60 * 1000)),
+                );
+                setCompareDays(days);
+              }}
+              className="text-[11px] min-h-[36px] px-2 border border-border rounded-md bg-white"
+            />
             {actualCompareDays != null && (
               <span className={`text-[11px] ${compareApproximate ? "text-amber-600" : "text-muted-foreground"}`}>
                 {compareApproximate
                   ? `실제 비교: ${actualCompareDays}일 전 (데이터 없어 근사)`
-                  : `실제 비교: ${actualCompareDays}일 전`}
+                  : `${actualCompareDays}일 전 기준`}
               </span>
             )}
           </div>
@@ -237,7 +264,7 @@ export default function KeywordDetailPage({
                         value={p.visitorReviewCount}
                         icon={MessageSquare}
                         delta={p.visitorDelta}
-                        isEstimated={p.deltaSource === "backfill" || p.deltaSource === "estimate"}
+                        isMine={p.isMine}
                       />
                     </td>
                     <td className="text-center px-3 py-2.5">
@@ -245,7 +272,7 @@ export default function KeywordDetailPage({
                         value={p.blogReviewCount}
                         icon={FileText}
                         delta={p.blogDelta}
-                        isEstimated={p.deltaSource === "backfill" || p.deltaSource === "estimate"}
+                        isMine={p.isMine}
                       />
                     </td>
                   </tr>
@@ -272,7 +299,6 @@ export default function KeywordDetailPage({
             </Card>
           )}
           {topPlaces.map((p: any, i: number) => {
-            const isEst = p.deltaSource === "backfill" || p.deltaSource === "estimate";
             return (
               <Card
                 key={i}
@@ -318,14 +344,14 @@ export default function KeywordDetailPage({
                       icon={MessageSquare}
                       value={p.visitorReviewCount}
                       delta={p.visitorDelta}
-                      isEstimated={isEst}
+                      isMine={p.isMine}
                     />
                     <MobileMetric
                       label="블로그 리뷰"
                       icon={FileText}
                       value={p.blogReviewCount}
                       delta={p.blogDelta}
-                      isEstimated={isEst}
+                      isMine={p.isMine}
                     />
                   </div>
                 </CardContent>
@@ -384,21 +410,25 @@ function KeyMetric({
   );
 }
 
+// 색 컨벤션 (사장님 룰): visitor/blog 증감은 부호로 통일 — 양수 빨강, 음수 파랑.
+// 내 매장이라도 동일 (리뷰 삭제 등 감소가 진짜 일어날 수 있음).
+function deltaClass(delta: number, _isMine: boolean | undefined) {
+  return delta > 0 ? "text-red-600" : "text-blue-600";
+}
+
 function MobileMetric({
-  label, icon: Icon, value, delta, isEstimated,
+  label, icon: Icon, value, delta, isMine,
 }: {
   label: string;
   icon: any;
   value?: number | null;
   delta?: number | null;
-  isEstimated?: boolean;
+  isMine?: boolean;
 }) {
-  const prefix = isEstimated ? "~" : "";
   const deltaNode =
     delta == null ? null :
-    delta === 0 ? <span className="text-muted-foreground">{prefix}±0</span> :
-    delta > 0 ? <span className="text-green-600 font-bold">{prefix}+{delta}</span> :
-    <span className="text-red-600 font-bold">{prefix}{delta}</span>;
+    delta === 0 ? <span className="text-muted-foreground">±0</span> :
+    <span className={`font-bold ${deltaClass(delta, isMine)}`}>{delta > 0 ? "+" : ""}{delta}</span>;
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
@@ -416,15 +446,13 @@ function MobileMetric({
 }
 
 function MetricCell({
-  value, icon: Icon, delta, isEstimated,
-}: { value?: number; icon: any; delta?: number | null; isEstimated?: boolean }) {
+  value, icon: Icon, delta, isMine,
+}: { value?: number; icon: any; delta?: number | null; isMine?: boolean }) {
   if (value == null || value === 0) return <span className="text-muted-foreground">-</span>;
-  const prefix = isEstimated ? "~" : "";
   const deltaNode =
     delta == null ? null :
-    delta === 0 ? <span className="text-[10px] text-muted-foreground">{prefix}±0</span> :
-    delta > 0 ? <span className="text-[10px] text-green-600 font-semibold">{prefix}+{delta}</span> :
-    <span className="text-[10px] text-red-600 font-semibold">{prefix}{delta}</span>;
+    delta === 0 ? <span className="text-[10px] text-muted-foreground">±0</span> :
+    <span className={`text-[10px] font-semibold ${deltaClass(delta, isMine)}`}>{delta > 0 ? "+" : ""}{delta}</span>;
   return (
     <span className="inline-flex flex-col items-center gap-0">
       <span className="inline-flex items-center gap-1 text-sm">
@@ -436,6 +464,7 @@ function MetricCell({
   );
 }
 
+// 순위 변동 — change > 0 (= 순위 상승, 좋아짐) = 파랑, < 0 = 빨강
 function RankChange({ change }: { change: number | null }) {
   if (change == null)
     return <span className="text-[10px] text-muted-foreground/60">기록없음</span>;
@@ -448,7 +477,7 @@ function RankChange({ change }: { change: number | null }) {
   }
   if (change > 0) {
     return (
-      <span className="inline-flex items-center gap-0.5 text-xs font-bold text-green-600">
+      <span className="inline-flex items-center gap-0.5 text-xs font-bold text-blue-600">
         <ArrowUp size={11} />
         {change}
       </span>

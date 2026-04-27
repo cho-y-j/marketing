@@ -99,6 +99,26 @@ export class BatchAnalysisJob {
     );
   }
 
+  /**
+   * 매장 등록 직후 첫 순위 체크를 큐에 적재.
+   * 인라인 await 하지 말 것 — 매장 2개 연달아 등록 시 IP 차단 폭발의 원인.
+   * 큐의 limiter + concurrency=1 이 매장 간 쿨다운을 보장.
+   * jobId 에 :first 키 — 같은 매장에 대한 중복 enqueue 자동 멱등.
+   */
+  async enqueueRankCheckManual(storeId: string) {
+    return this.rankQueue.add(
+      "check-store-ranks",
+      { storeId },
+      {
+        attempts: 2,
+        backoff: { type: "exponential", delay: 60_000 },
+        removeOnComplete: 100,
+        removeOnFail: 200,
+        jobId: `first-rank:${storeId}:${this.todayKey()}`,
+      },
+    );
+  }
+
   private async getActiveStores() {
     return findAutoAnalysisStores(this.prisma, { caller: "BatchAnalysisJob" });
   }

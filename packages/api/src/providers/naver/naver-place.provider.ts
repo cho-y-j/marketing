@@ -14,6 +14,10 @@ export interface PlaceInfo {
   visitorReviewCount?: number;
   blogReviewCount?: number;
   saveCount?: number;
+  // WGS84 좌표 (longitude=mapx, latitude=mapy).
+  // map.naver.com summary 응답은 이미 WGS84 (1.221... 같은 실수). KATECH 변환 불필요.
+  mapx?: number | null;
+  mapy?: number | null;
 }
 
 export interface ReviewData {
@@ -69,6 +73,7 @@ export class NaverPlaceProvider {
       if (d && (d.name || d.id)) {
         const visitorText: string = d.visitorReviews?.displayText || "";
         const visitorCount = this.parseReviewCount(visitorText);
+        const coords = this.extractCoordinates(d);
         return {
           id: d.id || placeId,
           name: d.name || "",
@@ -82,6 +87,8 @@ export class NaverPlaceProvider {
           visitorReviewCount: visitorCount || d.visitorReviewCount || 0,
           blogReviewCount: d.blogReviews?.total ?? d.blogReviewCount ?? 0,
           saveCount: d.saveCount ?? d.bookmarkCount ?? 0,
+          mapx: coords.x,
+          mapy: coords.y,
         };
       }
     } catch (e: any) {
@@ -90,6 +97,55 @@ export class NaverPlaceProvider {
 
     // 2차: allSearch 폴백 (매장 검색)
     return this.getPlaceInfo(placeId);
+  }
+
+  /**
+   * map.naver.com summary 응답에서 좌표 추출.
+   * 네이버는 응답마다 키 위치가 다름 — 알려진 모든 후보를 순서대로 탐색.
+   *
+   * 응답 구조 변형:
+   *   - placeDetail.coordinate.{x,y}        ← 신규 (WGS84 longitude/latitude)
+   *   - placeDetail.x / placeDetail.y       ← 일부 매장
+   *   - placeDetail.address.coordinate.*    ← 주소 객체에 묶여있는 경우
+   *   - placeDetail.location.{lng,lat}      ← 드물게
+   *   - placeDetail.mapx / placeDetail.mapy ← legacy
+   *
+   * 모두 WGS84 실수 (예: x=126.99, y=37.56). KATECH 1e7 변환 불필요.
+   * 검증: 한국 영토 범위 (x: 124~132, y: 33~39) 밖이면 null 반환.
+   */
+  private extractCoordinates(d: any): { x: number | null; y: number | null } {
+    const candidates: Array<[any, any]> = [
+      [d?.coordinate?.x, d?.coordinate?.y],
+      [d?.x, d?.y],
+      [d?.address?.coordinate?.x, d?.address?.coordinate?.y],
+      [d?.address?.x, d?.address?.y],
+      [d?.location?.lng, d?.location?.lat],
+      [d?.location?.x, d?.location?.y],
+      [d?.mapx, d?.mapy],
+    ];
+    for (const [rawX, rawY] of candidates) {
+      const x = this.toFiniteNumber(rawX);
+      const y = this.toFiniteNumber(rawY);
+      if (x == null || y == null) continue;
+      // KATECH-style 큰 정수면 1e7 로 나눠 WGS84 로 변환 (`searchAd local.json` 동일 패턴)
+      const wgsX = x > 1000 ? x / 1e7 : x;
+      const wgsY = y > 1000 ? y / 1e7 : y;
+      // 한국 영토 범위 검증 (제주~독도, 마라도~백두산).
+      // 좌표 swap 방어: x↔y 가 뒤바뀐 응답이면 스왑 후 재검증.
+      if (this.isInsideKorea(wgsX, wgsY)) return { x: wgsX, y: wgsY };
+      if (this.isInsideKorea(wgsY, wgsX)) return { x: wgsY, y: wgsX };
+    }
+    return { x: null, y: null };
+  }
+
+  private toFiniteNumber(v: any): number | null {
+    if (v == null) return null;
+    const n = typeof v === "string" ? Number(v) : (v as number);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  private isInsideKorea(x: number, y: number): boolean {
+    return x >= 124 && x <= 132 && y >= 33 && y <= 39;
   }
 
   // "방문자 리뷰 1,563" → 1563
@@ -115,6 +171,7 @@ export class NaverPlaceProvider {
       const place = resp.data?.result?.place?.list?.[0];
       if (!place) return null;
 
+      const coords = this.extractCoordinates(place);
       return {
         id: place.id || placeId,
         name: place.name || "",
@@ -128,6 +185,8 @@ export class NaverPlaceProvider {
         visitorReviewCount: place.visitorReviewCount || 0,
         blogReviewCount: place.blogReviewCount || 0,
         saveCount: place.saveCount || 0,
+        mapx: coords.x,
+        mapy: coords.y,
       };
     } catch (e: any) {
       this.logger.warn(`플레이스 정보 조회 실패: ${e.message}`);
@@ -192,6 +251,7 @@ export class NaverPlaceProvider {
         if (detail) return detail;
       }
 
+      const coords = this.extractCoordinates(place);
       return {
         id: place.id || "",
         name: place.name || "",
@@ -205,6 +265,8 @@ export class NaverPlaceProvider {
         visitorReviewCount: place.visitorReviewCount || 0,
         blogReviewCount: place.blogReviewCount || 0,
         saveCount: place.saveCount || 0,
+        mapx: coords.x,
+        mapy: coords.y,
       };
     } catch (e: any) {
       this.logger.warn(`매장 검색 실패 [${storeName}]: ${e.message}`);

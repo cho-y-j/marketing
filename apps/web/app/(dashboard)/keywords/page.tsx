@@ -90,6 +90,8 @@ export default function KeywordsPage() {
   };
 
   const [sortBy, setSortBy] = useState<"volume" | "rank" | "name">("volume");
+  // 변동 표시 기간 — 1일/7일/30일 토글 (사장님 룰: 한 번에 하나만 표기)
+  const [period, setPeriod] = useState<"1d" | "7d" | "30d">("1d");
   const kwsRaw = keywords ?? [];
   const kws = [...kwsRaw].sort((a: any, b: any) => {
     if (sortBy === "rank") {
@@ -215,27 +217,49 @@ export default function KeywordsPage() {
         )}
       </div>
 
-      {/* 정렬 토글 */}
+      {/* 변동 기간 + 정렬 토글 */}
       {kws.length > 0 && (
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className="text-muted-foreground mr-1">정렬:</span>
-          {[
-            { key: "volume", label: "검색량 순" },
-            { key: "rank", label: "순위 순" },
-            { key: "name", label: "이름 순" },
-          ].map((opt) => (
-            <button
-              key={opt.key}
-              onClick={() => setSortBy(opt.key as any)}
-              className={`px-3 min-h-[36px] rounded-md border transition-colors ${
-                sortBy === opt.key
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-white hover:bg-muted/50 border-border"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-3 text-xs flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground mr-1">변동:</span>
+            {[
+              { key: "1d", label: "1일" },
+              { key: "7d", label: "7일" },
+              { key: "30d", label: "30일" },
+            ].map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setPeriod(opt.key as "1d" | "7d" | "30d")}
+                className={`px-3 min-h-[36px] rounded-md border transition-colors ${
+                  period === opt.key
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-white hover:bg-muted/50 border-border"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground mr-1">정렬:</span>
+            {[
+              { key: "volume", label: "검색량 순" },
+              { key: "rank", label: "순위 순" },
+              { key: "name", label: "이름 순" },
+            ].map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setSortBy(opt.key as any)}
+                className={`px-3 min-h-[36px] rounded-md border transition-colors ${
+                  sortBy === opt.key
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-white hover:bg-muted/50 border-border"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -255,7 +279,7 @@ export default function KeywordsPage() {
       ) : (
         <div className="space-y-3">
           {kws.map((kw: any) => (
-            <KeywordCard key={kw.id} kw={kw} storeId={storeId} onChange={refetch} />
+            <KeywordCard key={kw.id} kw={kw} storeId={storeId} onChange={refetch} period={period} />
           ))}
         </div>
       )}
@@ -276,7 +300,11 @@ export default function KeywordsPage() {
   );
 }
 
-function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onChange: () => void }) {
+function KeywordCard({
+  kw, storeId, onChange, period,
+}: {
+  kw: any; storeId?: string; onChange: () => void; period: "1d" | "7d" | "30d";
+}) {
   const top3 = kw.top3 || [];
   const myPlace = kw.myPlace;
   const myRank = kw.currentRank ?? myPlace?.rank;
@@ -352,26 +380,33 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
             </div>
             <div className="text-right shrink-0">
               <div className={`text-2xl font-black ${rankColor}`}>
-                {myRank ? `${myRank}위` : <span className="text-base">300위 밖</span>}
+                {myRank ? (
+                  `${myRank}위`
+                ) : kw.totalResults != null && kw.totalResults <= 10 ? (
+                  <span className="text-base text-muted-foreground" title={`검색결과 ${kw.totalResults}개 중 내 매장 미포함`}>
+                    미노출
+                  </span>
+                ) : (
+                  <span className="text-base">70위 밖</span>
+                )}
               </div>
-              {/* 순위 변동 (어제 대비) */}
-              {kw.rankChange != null && (
-                <div className="text-[11px] font-semibold mt-0.5">
-                  {kw.rankChange > 0 ? (
-                    <span className="inline-flex items-center gap-0.5 text-green-600">
-                      <ArrowUp size={10} /> {kw.rankChange}
-                    </span>
-                  ) : kw.rankChange < 0 ? (
-                    <span className="inline-flex items-center gap-0.5 text-red-600">
-                      <ArrowDown size={10} /> {Math.abs(kw.rankChange)}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center text-muted-foreground">
-                      <Minus size={10} />
-                    </span>
-                  )}
+              {/* totalResults 적은 키워드는 부가 설명 표시 */}
+              {!myRank && kw.totalResults != null && kw.totalResults <= 10 && (
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  결과 {kw.totalResults}개
                 </div>
               )}
+              {/* 순위 변동 — 토글된 기간 한 가지만 표기. 좋아짐 = 파랑, 나빠짐 = 빨강 */}
+              <div className="mt-0.5">
+                <RankDelta
+                  label={period === "1d" ? "1일" : period === "7d" ? "7일" : "30일"}
+                  change={
+                    period === "1d" ? kw.rankChange :
+                    period === "7d" ? kw.rankChange7d :
+                    kw.rankChange30d
+                  }
+                />
+              </div>
               <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover:text-primary transition-colors" />
             </div>
           </div>
@@ -380,13 +415,13 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
           {top3.length > 0 ? (
             <div className="bg-muted/30 rounded-lg p-2 space-y-1">
               {top3.map((p: any, i: number) => (
-                <PlaceRow key={i} place={p} />
+                <PlaceRow key={i} place={p} period={period} />
               ))}
               {/* 내 매장이 Top 3 밖이면 별도 추가 */}
               {myPlace && !myInTop3 && (
                 <>
                   <div className="border-t border-border/50 my-1" />
-                  <PlaceRow place={myPlace} />
+                  <PlaceRow place={myPlace} period={period} />
                 </>
               )}
             </div>
@@ -401,15 +436,55 @@ function KeywordCard({ kw, storeId, onChange }: { kw: any; storeId?: string; onC
   );
 }
 
-function PlaceRow({ place }: { place: any }) {
-  const isEst = place.deltaSource === "estimate" || place.deltaSource === "backfill";
+// 순위 변동 표시 — change > 0 = 순위 상승(좋음, 파랑), < 0 = 하락(나쁨, 빨강).
+// rankChange 가 null 이면 비교 데이터 없음 — 표시 안 함.
+function RankDelta({ label, change }: { label: string; change: number | null | undefined }) {
+  if (change == null) return null;
+  if (change === 0) {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
+        <span className="text-[9px]">{label}</span>
+        <Minus size={9} />
+      </span>
+    );
+  }
+  if (change > 0) {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-blue-600">
+        <span className="text-[9px] font-normal text-muted-foreground">{label}</span>
+        <ArrowUp size={11} /> {change}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-red-600">
+      <span className="text-[9px] font-normal text-muted-foreground">{label}</span>
+      <ArrowDown size={11} /> {Math.abs(change)}
+    </span>
+  );
+}
+
+function PlaceRow({ place, period }: { place: any; period: "1d" | "7d" | "30d" }) {
+  // 색 컨벤션 (사장님 룰): visitor/blog 증감은 부호로 통일 — + 빨강, - 파랑, ±0 회색.
+  // 내 매장이라도 동일 (감소가 진짜 일어날 수 있음 = 리뷰 삭제 등).
   const fmtDelta = (d: number | null | undefined) => {
     if (d == null) return null;
-    const prefix = isEst ? "~" : "";
-    if (d === 0) return <span className="text-[10px] text-muted-foreground">{prefix}±0</span>;
-    if (d > 0) return <span className="text-[10px] text-green-600 font-semibold">{prefix}+{d}</span>;
-    return <span className="text-[10px] text-red-600 font-semibold">{prefix}{d}</span>;
+    if (d === 0) return <span className="text-[10px] text-muted-foreground">±0</span>;
+    const cls = d > 0 ? "text-red-600" : "text-blue-600";
+    return (
+      <span className={`text-[10px] font-semibold ${cls}`}>
+        {d > 0 ? "+" : ""}{d}
+      </span>
+    );
   };
+  const visitorDelta =
+    period === "1d" ? place.visitorDelta :
+    period === "7d" ? place.visitorDelta7d :
+    place.visitorDelta30d;
+  const blogDelta =
+    period === "1d" ? place.blogDelta :
+    period === "7d" ? place.blogDelta7d :
+    place.blogDelta30d;
   return (
     <div className={`flex items-center gap-2 px-2 py-1.5 rounded ${place.isMine ? "bg-primary/15 ring-1 ring-primary/30" : ""}`}>
       {/* 순위 */}
@@ -430,21 +505,21 @@ function PlaceRow({ place }: { place: any }) {
         </span>
         {place.isMine && <Badge className="ml-1 text-[9px] py-0 px-1.5">나</Badge>}
       </div>
-      {/* 지표 + 증감 */}
+      {/* 지표 + 증감 — period 토글로 한 번에 한 가지만 (1일/7일) */}
       <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
-        <span className="inline-flex flex-col items-end gap-0">
+        <span className="inline-flex flex-col items-end gap-0 leading-tight">
           <span className="inline-flex items-center gap-0.5">
             <MessageSquare size={10} />
             {place.visitorReviewCount?.toLocaleString() ?? "-"}
           </span>
-          {fmtDelta(place.visitorDelta)}
+          {fmtDelta(visitorDelta)}
         </span>
-        <span className="inline-flex flex-col items-end gap-0">
+        <span className="inline-flex flex-col items-end gap-0 leading-tight">
           <span className="inline-flex items-center gap-0.5">
             <FileText size={10} />
             {place.blogReviewCount?.toLocaleString() ?? "-"}
           </span>
-          {fmtDelta(place.blogDelta)}
+          {fmtDelta(blogDelta)}
         </span>
       </div>
     </div>

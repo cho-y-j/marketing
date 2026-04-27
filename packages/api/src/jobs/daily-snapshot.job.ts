@@ -76,6 +76,8 @@ export class DailySnapshotJob {
             blogReviewCount: blog,
             visitorDelta,
             blogDelta,
+            // 사장님 설계: 매일 cron 이 백필 추정값을 진짜 측정으로 덮어씀 — 플래그도 false 로
+            isEstimated: false,
           },
           create: {
             storeId: store.id,
@@ -84,6 +86,7 @@ export class DailySnapshotJob {
             blogReviewCount: blog,
             visitorDelta,
             blogDelta,
+            isEstimated: false,
           },
         });
 
@@ -143,7 +146,13 @@ export class DailySnapshotJob {
               date,
             },
           },
-          update: { visitorReviewCount: visitor, blogReviewCount: blog, visitorDelta, blogDelta },
+          update: {
+            visitorReviewCount: visitor,
+            blogReviewCount: blog,
+            visitorDelta,
+            blogDelta,
+            isEstimated: false,
+          },
           create: {
             storeId: c.storeId,
             competitorPlaceId: c.competitorPlaceId!,
@@ -152,6 +161,7 @@ export class DailySnapshotJob {
             blogReviewCount: blog,
             visitorDelta,
             blogDelta,
+            isEstimated: false,
           },
         });
       } catch (e: any) {

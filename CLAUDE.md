@@ -178,6 +178,44 @@ adlog/                      # 레퍼런스 HTML (애드로그 화면 참고용, 
 | isMine 매칭 오인식 | placeId 정확 일치만 |
 | saveCount 자동 수집 | 불가 (SmartPlace OAuth만 가능) |
 
+## 순위 수집 — pcmap 단발 호출 (2026-04-27 근본 재설계)
+1주일간 모든 currentRank=NULL 오염의 원인이 된 m.search.naver.com 경로의 3중 결함 (display=5 하드코딩, start 파라미터 SSR 무효, 좌표 누락 시 서울 default) 을 폐기하고 pcmap 으로 전환.
+
+- **엔드포인트**: `https://pcmap.place.naver.com/restaurant/list?query=K&x=mapx&y=mapy&display=70`
+- **한 번 호출에 70개** + visitor/blog/save/category/좌표 모두 풍부 필드 (Place API 추가 호출 불필요)
+- **start/page 파라미터는 SSR 에 무효** — Top 70 가 단발 한계. 그 너머는 service worker 우회 GraphQL 이 필요한데 페이지에서 캡쳐 불가 (현재 비현실적)
+- **좌표 필수**: `Store.mapx/mapy` 누락 시 서울 default 로 답이 와서 결과 오염 → `reliable=false` 로 마킹하고 currentRank 안 덮어씀
+- **MAX_RANK = 70**. UI 라벨 "70위 밖" 으로 통일. CLAUDE.md "Top 300" 약속 폐기
+- 호출처: `naver-rank-checker.provider.ts` (`checkPlaceRank`, `fetchTopPlaces`) — 모두 mapx/mapy 시그니처 받음
+
+## 30일 백필 + 매일 cron 마이그레이션 (사장님 설계)
+신규 매장도 즉시 7일/30일 변동 칸이 살아있어야 함. 매일 1회 cron 이 추정값을 진짜 측정으로 자연 마이그레이션.
+
+- **백필 대상 3종**: `StoreDailySnapshot` (내 매장), `CompetitorDailySnapshot` (경쟁사 6명), `KeywordRankHistory` (키워드 N개)
+- **추정 알고리즘** (`competitor-backfill.service.ts`):
+  - visitor: Place API 최근 100건 리뷰 → 각 작성일에 +1 (실관측). 100건 너머는 누적/365일 = 일평균 가상 속도로 분배 (최근일 가중치↑)
+  - blog: 네이버 블로그 검색 sort=date 100건의 postdate 파싱 → 동일
+  - 30일 전 누적 = 오늘 누적 - 그날부터 오늘까지 일별 발행 합 (역산)
+  - 추정 row 는 `isEstimated=true` 마킹
+  - **순위(rank) 자체는 추정 불가** — KeywordRankHistory 백필은 오늘 측정값을 30일 전까지 복제만
+- **매일 cron** (`DailySnapshotJob` 01:00):
+  - upsert 의 `update` 절에 `isEstimated: false` 명시 → 추정값을 진짜 측정으로 덮어쓰며 플래그도 false 로
+  - 7일 누적 후엔 30일 중 7일이 실측, 23일이 추정
+- **매장 등록 순서 (중요)**: 1) AI 키워드+검색량 → 2) 경쟁사 수집 → 3) 분석 → 4) **백필 먼저 (어제 row 생성)** → 5) **첫 스냅샷 (오늘 row + 어제 비교 → delta 정상)** → 6) 키워드 순위 백필 → 7) 첫 브리핑
+
+## 변동량 표시 — 색 컨벤션 + 가중치 (2026-04-27 사장님 룰)
+- **색 (visitor/blog 증감)**: **양수 = 빨강, 음수 = 파랑, ±0 = 회색** (한국 주식식). 내 매장이라도 동일 (리뷰 삭제 등 감소 케이스 있음). isMine 분기 제거
+- **색 (순위 변동)**: 좋아짐 (5위→3위) = 파랑, 나빠짐 = 빨강. 별개 룰
+- **`~` 추정 마크 제거**: 사장님 룰 — 추정·실측 구분 없이 동일 표기
+- **기간 토글 통일**: `/keywords` 1일/7일/30일, `/keywords/[keyword]` 1/7/30일 + 달력(임의 날짜), `/competitors` day/week/month/date
+- **변동률 가중치 (정석)** (`/competitors` `getStatus`):
+  - 급증: rate ≥ 경쟁사 평균 × 1.5  AND  delta ≥ 5
+  - 활발: rate ≥ 경쟁사 평균       AND  delta ≥ 3
+  - 평온: rate ≥ 0
+  - 감소: rate < 0
+  - 작은 매장 부풀림 방지 (rate 비율 + 평균 대비 + 절대값 하한 = 외식업 SaaS 표준)
+- **delta 데이터 소스**: visitor/blog 증감은 `StoreDailySnapshot` / `CompetitorDailySnapshot` 직접 비교 (KeywordRankHistory.topPlaces 의 visitor/blog 는 백필이 같은 값 복제이므로 신뢰 X)
+
 ## 작업 관리
 - **마스터 플랜**: `plan.md` — 전체 Phase 체크리스트 + 진행 로그
 - **메모리**: `.claude/projects/-home-cho-pro-marketing/memory/` — 의뢰자 피드백, 비즈니스 모델, 결정사항

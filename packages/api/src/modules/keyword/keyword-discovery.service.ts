@@ -1,7 +1,24 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import * as crypto from "crypto";
 import { PrismaService } from "../../common/prisma.service";
+import { CacheService } from "../../common/cache.service";
 import { NaverSearchadProvider } from "../../providers/naver/naver-searchad.provider";
 import { AIProvider } from "../../providers/ai/ai.provider";
+
+/**
+ * 검색량 게이트 — 회식·상견례 등 "구매의도 명확" 키워드는 검색량 무관 통과.
+ * 사용자(의뢰자) 명시 룰: 월 300 미만 = 사실상 죽은 키워드 (회식 류는 예외)
+ */
+const KEEP_REGARDLESS_OF_VOLUME = /(회식|상견례|룸식당|룸|단체|모임|돌잔치|상견|돌잔|소개팅|기념일|데이트)/;
+const MIN_VOLUME = 300;
+
+export interface InitialKeywordResult {
+  keywords: string[];
+  primaryKeyword: string;
+  source: "ai" | "rule_fallback_needed";
+  rejectedByVolume?: string[];
+  cacheHit?: boolean;
+}
 
 @Injectable()
 export class KeywordDiscoveryService {
@@ -9,9 +26,210 @@ export class KeywordDiscoveryService {
 
   constructor(
     private prisma: PrismaService,
+    private cache: CacheService,
     private searchad: NaverSearchadProvider,
     private ai: AIProvider,
   ) {}
+
+  /**
+   * 신규 매장 등록 시 초기 키워드 생성 (AI 우선).
+   *
+   * 흐름:
+   *  1) 매장 컨텍스트 hash → Redis 캐시 확인 (영구급, 90일 TTL)
+   *  2) AI 호출 (의뢰자 공식 프롬프트 + 매장명 메뉴 토큰 + 사용자 예시 2개)
+   *  3) 검색량 일괄 조회
+   *  4) 검색량 ≥ 300 게이트 (회식/상견례 등은 예외 통과)
+   *  5) 검색량 내림차순 정렬, 상위 10개
+   *  6) 캐시 저장 후 반환
+   *
+   * 실패(키워드 0개) 시 source="rule_fallback_needed" 반환 — 호출자(store-setup)가 룰 폴백.
+   */
+  async generateInitialKeywords(input: {
+    storeName: string;
+    address: string;
+    category: string;
+    district: string;
+  }): Promise<InitialKeywordResult> {
+    const ctxHash = crypto
+      .createHash("sha256")
+      .update(`${input.storeName}|${input.address}|${input.category}|${input.district}`)
+      .digest("hex")
+      .slice(0, 12);
+    const cacheKey = `kw:initial:${ctxHash}`;
+
+    const cached = await this.cache.get<InitialKeywordResult>(cacheKey);
+    if (cached && cached.keywords?.length > 0) {
+      this.logger.log(`[키워드 AI] 캐시 HIT ${cacheKey} → ${cached.keywords.join(", ")}`);
+      return { ...cached, cacheHit: true };
+    }
+
+    // 매장명 그대로 → AI 가 핵심 메뉴 토큰 (남해막창꼼장어 → 막창/꼼장어) 추출
+    // 카테고리 콤마 분리 ("해물,생선요리" → ["해물", "생선요리"])
+    const categoryParts = input.category
+      .split(/[>,]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2);
+
+    // 지역 힌트
+    const brandLocationHint = input.storeName.match(/([가-힣]{2,4}?)(본점|본관|직영점|역점|지점|점)/)?.[1];
+    const dong = input.district.split(/\s+/).find((p) => /[가-힣]{2,}동$/.test(p))?.replace(/동$/, "");
+    const gu = input.district.split(/\s+/).find((p) => /[가-힣]{2,}구$/.test(p))?.replace(/구$/, "");
+    const regionHint = brandLocationHint || dong || gu || input.district;
+
+    const aiCandidates = await this.callAIForInitialKeywords(
+      input.storeName,
+      input.address,
+      input.category,
+      categoryParts,
+      regionHint,
+    );
+
+    if (aiCandidates.length === 0) {
+      this.logger.warn(`[키워드 AI] 후보 0개 — 룰 폴백 신호 반환 (${input.storeName})`);
+      return { keywords: [], primaryKeyword: "", source: "rule_fallback_needed" };
+    }
+
+    // 검색량 일괄 조회 + 게이트
+    const filtered = await this.applyVolumeGate(aiCandidates);
+
+    if (filtered.passed.length === 0) {
+      this.logger.warn(
+        `[키워드 AI] 게이트 통과 0개 — 룰 폴백 신호. 후보: ${aiCandidates.join(", ")}`,
+      );
+      return { keywords: [], primaryKeyword: "", source: "rule_fallback_needed" };
+    }
+
+    // 검색량 내림차순 정렬, 상위 10개
+    filtered.passed.sort((a, b) => b.volume - a.volume);
+    const top = filtered.passed.slice(0, 10);
+    const keywords = top.map((k) => k.keyword);
+    const primaryKeyword = keywords[0]; // 검색량 최고
+
+    const result: InitialKeywordResult = {
+      keywords,
+      primaryKeyword,
+      source: "ai",
+      rejectedByVolume: filtered.rejected,
+    };
+
+    // 캐시 90일 (매장 정보 안 바뀌면 영구급)
+    await this.cache.set(cacheKey, result, 90 * 86400);
+    this.logger.log(
+      `[키워드 AI] 생성 ${keywords.length}개 (대표="${primaryKeyword}", 폐기 ${filtered.rejected.length}개): ${keywords.join(", ")}`,
+    );
+    return result;
+  }
+
+  /**
+   * AI 호출 — 의뢰자 공식 프롬프트 + 사용자 예시 2개 + 매장명 핵심메뉴 추출 지시
+   */
+  private async callAIForInitialKeywords(
+    storeName: string,
+    address: string,
+    category: string,
+    categoryParts: string[],
+    regionHint: string,
+  ): Promise<string[]> {
+    const systemPrompt = `너는 자영업 매장의 네이버 광고/노출 키워드를 설계하는 마케팅 전문가다.
+매장 정보(매장명, 주소, 카테고리)를 보고 "검색량이 충분히 나오면서, 실제 방문 의도가 있는 고객이 검색할 만한 키워드"를 설계한다.
+
+[엄격 규칙]
+1. 모든 키워드는 반드시 [지역명] 또는 [지역명+역]을 포함한다. 메뉴 단독("아구찜", "막창") 금지.
+2. 키워드 구조 3가지를 균형 있게 섞는다:
+   - 유입: "[지역] 맛집", "[역] 맛집"
+   - 상황: "[지역] 점심 맛집", "[지역] 회식", "[지역] 룸식당", "[지역] 상견례", "[지역] 데이트"
+   - 메뉴: "[지역] [핵심메뉴]" — 매장명/카테고리에서 추출한 핵심 메뉴 단어 사용
+3. 매장명에서 핵심 메뉴 단어 추출 필수.
+   예: "남해막창꼼장어" → 핵심 메뉴 = ["막창", "꼼장어"] → "[지역] 막창", "[지역] 꼼장어"
+   예: "찬란한아구 공덕직영점" → 핵심 메뉴 = ["아구찜", "해물찜"]
+4. 지역 단위는 검색량이 나오는 단위로 자동 선택:
+   - 동/역 검색량이 충분하면 "[동] 맛집"
+   - 너무 좁으면 "[시] 맛집" 또는 "[구] 맛집"으로 자동 강등
+5. 포괄적 카테고리("한식", "음식점", "양식", "고기집") 단독 키워드 금지.
+6. 회식·상견례·룸식당·단체·돌잔치·기념일 등 상황 키워드는 검색량 적어도 가치 있음 — 매장 분위기에 맞으면 1~2개 포함.
+7. 매장 업종이 회식 부적합(카페/디저트/분식)이면 "데이트", "점심" 등으로 대체.
+8. 총 7~10개. 중복/유사어 제거.
+9. 출력은 JSON 배열만. 설명·주석·마크다운 금지.
+
+[참고 예시 1] 찬란한아구 공덕직영점 (서울 마포구 도화동, 한식 > 아구찜,해물찜)
+["공덕 맛집", "공덕역 맛집", "공덕 아구찜", "공덕 해물찜", "공덕 점심 맛집", "공덕역 점심 맛집"]
+
+[참고 예시 2] 육목원 (서울 강남구, 소고기집)
+["강남 맛집", "강남역 맛집", "강남 소고기", "강남역 소고기", "강남 회식", "강남역 회식", "뱅뱅사거리 맛집"]`;
+
+    const userPrompt = `매장 정보:
+- 매장명: ${storeName}
+- 주소: ${address}
+- 카테고리(원본): ${category}
+- 카테고리(분해): ${categoryParts.join(", ") || "-"}
+- 지역 힌트(역명 우선): ${regionHint || "-"}
+
+위 매장의 핵심 메뉴를 매장명·카테고리에서 직접 추출하고, 규칙대로 키워드 7~10개 JSON 배열만 응답.`;
+
+    try {
+      const response = await this.ai.analyze(systemPrompt, userPrompt);
+      const match = response.content.match(/\[[\s\S]*\]/);
+      if (!match) {
+        this.logger.warn(`[키워드 AI] JSON 배열 미발견 — 응답: ${response.content.slice(0, 200)}`);
+        return [];
+      }
+      const parsed = JSON.parse(match[0]);
+      const cleaned = (Array.isArray(parsed) ? parsed : [])
+        .filter((k: any) => typeof k === "string")
+        .map((k: string) => k.trim().replace(/,/g, "").replace(/\s+/g, " "))
+        .filter((k: string) => k.length >= 2 && k.length <= 30);
+      // 중복 제거
+      const unique = [...new Set(cleaned)];
+      this.logger.log(`[키워드 AI] ${response.provider} 응답 ${unique.length}개: ${unique.join(", ")}`);
+      return unique;
+    } catch (e: any) {
+      this.logger.warn(`[키워드 AI] 호출 실패: ${e.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 검색량 게이트.
+   *  - 회식/상견례/룸/단체/모임 등 KEEP 패턴 키워드: 검색량 무관 통과 (단 ≥ 1 보장)
+   *  - 그 외: 월 검색량 ≥ 300 통과
+   */
+  private async applyVolumeGate(
+    candidates: string[],
+  ): Promise<{ passed: Array<{ keyword: string; volume: number }>; rejected: string[] }> {
+    const volumeMap = new Map<string, number>();
+    // 검색광고 API 는 공백 제거된 키워드를 받음
+    const queryKeys = candidates.map((k) => k.replace(/\s+/g, ""));
+
+    // 5개씩 배치 (rate limit 회피, 기존 코드 패턴 따름)
+    const BATCH = 5;
+    for (let i = 0; i < queryKeys.length; i += BATCH) {
+      const batch = queryKeys.slice(i, i + BATCH);
+      try {
+        const stats = await this.searchad.getKeywordStats(batch);
+        for (const s of stats) {
+          const total = this.searchad.getTotalMonthlySearch(s);
+          volumeMap.set(s.relKeyword, total);
+        }
+      } catch (e: any) {
+        this.logger.warn(`[키워드 AI] 검색량 조회 실패: ${e.message}`);
+      }
+    }
+
+    const passed: Array<{ keyword: string; volume: number }> = [];
+    const rejected: string[] = [];
+    for (const kw of candidates) {
+      const queryKey = kw.replace(/\s+/g, "");
+      const vol = volumeMap.get(queryKey) ?? 0;
+      if (KEEP_REGARDLESS_OF_VOLUME.test(kw)) {
+        passed.push({ keyword: kw, volume: Math.max(vol, 1) });
+      } else if (vol >= MIN_VOLUME) {
+        passed.push({ keyword: kw, volume: vol });
+      } else {
+        rejected.push(`${kw}(${vol})`);
+      }
+    }
+    return { passed, rejected };
+  }
 
   // 연관 키워드 + AI 히든 키워드 발굴
   async discoverKeywords(storeId: string) {

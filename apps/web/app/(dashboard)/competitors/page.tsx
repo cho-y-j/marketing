@@ -32,14 +32,28 @@ const PERIOD_LABEL: Record<Period, string> = {
 type Metric = "visitor" | "blog";
 type SortKey = "cumulative" | "delta" | "rate";
 
-// 증감률로 상태 판정 (이모지 없이, 색상과 텍스트로만 구분)
-function getStatus(rate: number | null, delta: number | null) {
+// 상태 판정 — 정석: 경쟁사 평균 rate 대비 + 절대값 하한 (작은 매장 부풀림 방지)
+//   급증: rate ≥ avg × 1.5  AND  delta ≥ 5
+//   활발: rate ≥ avg          AND  delta ≥ 3
+//   평온: rate ≥ 0
+//   감소: rate < 0
+//   avgRate 가 null/0 이면 폴백 — 기존 고정 임계값 (1.5% / 0.5%)
+function getStatus(rate: number | null, delta: number | null, avgRate: number | null) {
   if (rate == null || delta == null) return { label: "수집중", color: "bg-muted text-muted-foreground border-border" };
+  if (rate < 0) return { label: "감소", color: "bg-red-100 text-red-700 border-red-300" };
+  if (rate === 0) return { label: "정체", color: "bg-amber-50 text-amber-700 border-amber-200" };
+  // 가중치 적용 — 경쟁사 평균이 의미있는 표본일 때만
+  if (avgRate != null && avgRate > 0) {
+    if (rate >= avgRate * 1.5 && delta >= 5)
+      return { label: "급증", color: "bg-orange-100 text-orange-700 border-orange-300" };
+    if (rate >= avgRate && delta >= 3)
+      return { label: "활발", color: "bg-green-100 text-green-700 border-green-300" };
+    return { label: "평온", color: "bg-muted/60 text-foreground/70 border-border" };
+  }
+  // 폴백 — 평균 없을 때
   if (rate >= 1.5) return { label: "급증", color: "bg-orange-100 text-orange-700 border-orange-300" };
   if (rate >= 0.5) return { label: "활발", color: "bg-green-100 text-green-700 border-green-300" };
-  if (rate > 0) return { label: "평온", color: "bg-muted/60 text-foreground/70 border-border" };
-  if (rate === 0) return { label: "정체", color: "bg-amber-50 text-amber-700 border-amber-200" };
-  return { label: "감소", color: "bg-red-100 text-red-700 border-red-300" };
+  return { label: "평온", color: "bg-muted/60 text-foreground/70 border-border" };
 }
 
 type MetricData = {
@@ -228,6 +242,11 @@ export default function CompetitorsPage() {
   const avgCompetitorRate = competitorRates.length > 0
     ? competitorRates.reduce((s, n) => s + n, 0) / competitorRates.length
     : null;
+  // visitor / blog 별 평균 rate (getStatus 가중치용)
+  const visitorRates = allRows.filter((r) => !r.isMine && r.visitor.rate != null).map((r) => r.visitor.rate!);
+  const blogRates = allRows.filter((r) => !r.isMine && r.blog.rate != null).map((r) => r.blog.rate!);
+  const avgVisitorRate = visitorRates.length > 0 ? visitorRates.reduce((s, n) => s + n, 0) / visitorRates.length : null;
+  const avgBlogRate = blogRates.length > 0 ? blogRates.reduce((s, n) => s + n, 0) / blogRates.length : null;
 
   const handleAdd = () => {
     const name = newName.trim();
@@ -351,7 +370,7 @@ export default function CompetitorsPage() {
               {keyMetric(myRow!).rate != null && avgCompetitorRate != null && (
                 <div>
                   <span className="font-semibold text-foreground">내 속도:</span>{" "}
-                  <span className={`font-bold ${keyMetric(myRow!).rate! > avgCompetitorRate ? "text-green-600" : "text-red-600"}`}>
+                  <span className={`font-bold ${keyMetric(myRow!).rate! > avgCompetitorRate ? "text-blue-600" : "text-red-600"}`}>
                     {keyMetric(myRow!).rate! > 0 ? "+" : ""}{keyMetric(myRow!).rate!.toFixed(2)}%
                   </span>{" "}
                   vs 경쟁사 평균 {avgCompetitorRate > 0 ? "+" : ""}{avgCompetitorRate.toFixed(2)}%{" "}
@@ -426,6 +445,8 @@ export default function CompetitorsPage() {
             row={r}
             periodLabel={periodLabel}
             sortMetric={sortMetric}
+            avgVisitorRate={avgVisitorRate}
+            avgBlogRate={avgBlogRate}
             onDelete={r.isMine || !r.competitorId ? undefined : () => {
               if (!confirm(`"${r.name}" 삭제?`)) return;
               deleteComp.mutate(r.competitorId!, { onSuccess: () => toast.success("삭제됨") });
@@ -473,6 +494,8 @@ export default function CompetitorsPage() {
                   key={r.key}
                   rank={idx + 1}
                   row={r}
+                  avgVisitorRate={avgVisitorRate}
+                  avgBlogRate={avgBlogRate}
                   onDelete={r.isMine || !r.competitorId ? undefined : () => {
                     if (!confirm(`"${r.name}" 삭제?`)) return;
                     deleteComp.mutate(r.competitorId!, { onSuccess: () => toast.success("삭제됨") });
@@ -493,9 +516,9 @@ export default function CompetitorsPage() {
       {/* ===== 범례 ===== */}
       <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground px-1">
         <span>증감률 기준:</span>
-        <Badge variant="outline" className="bg-orange-100 text-orange-700 border-orange-300">급증 ≥1.5%</Badge>
-        <Badge variant="outline" className="bg-green-100 text-green-700 border-green-300">활발 0.5~1.5%</Badge>
-        <Badge variant="outline" className="bg-muted/60 text-foreground/70 border-border">평온 0~0.5%</Badge>
+        <Badge variant="outline" className="bg-orange-100 text-orange-700 border-orange-300">급증 평균×1.5↑ + Δ≥5</Badge>
+        <Badge variant="outline" className="bg-green-100 text-green-700 border-green-300">활발 평균↑ + Δ≥3</Badge>
+        <Badge variant="outline" className="bg-muted/60 text-foreground/70 border-border">평온 0↑</Badge>
         <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">정체 0%</Badge>
         <Badge variant="outline" className="bg-red-100 text-red-700 border-red-300">감소 &lt;0%</Badge>
       </div>
@@ -538,24 +561,30 @@ export default function CompetitorsPage() {
 
 // 모바일 카드 — 방문자/블로그 한 줄 압축 (키워드 상세 페이지 톤 통일)
 function MobileRankCard({
-  rank, row, periodLabel, sortMetric, onDelete,
+  rank, row, periodLabel, sortMetric, avgVisitorRate, avgBlogRate, onDelete,
 }: {
   rank: number;
   row: Row;
   periodLabel: string;
   sortMetric: Metric;
+  avgVisitorRate: number | null;
+  avgBlogRate: number | null;
   onDelete?: () => void;
 }) {
   const fmtDelta = (v: number | null) =>
     v == null ? "-" : v === 0 ? "±0" : v > 0 ? `+${v.toLocaleString()}` : `${v.toLocaleString()}`;
   const fmtRate = (v: number | null) =>
     v == null ? "-" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
-  const clr = (v: number | null) =>
-    v == null ? "text-muted-foreground" : v > 0 ? "text-red-600" : v < 0 ? "text-green-600" : "text-muted-foreground";
+  // 사장님 룰: 부호로 통일 — 양수 빨강, 음수 파랑, ±0 회색
+  const clr = (v: number | null) => {
+    if (v == null || v === 0) return "text-muted-foreground";
+    return v > 0 ? "text-red-600" : "text-blue-600";
+  };
 
   const primaryStatus = getStatus(
     sortMetric === "visitor" ? row.visitor.rate : row.blog.rate,
     sortMetric === "visitor" ? row.visitor.delta : row.blog.delta,
+    sortMetric === "visitor" ? avgVisitorRate : avgBlogRate,
   );
 
   return (
@@ -644,10 +673,12 @@ function MetricInline({
 }
 
 function RankRow({
-  rank, row, onDelete,
+  rank, row, avgVisitorRate, avgBlogRate, onDelete,
 }: {
   rank: number;
   row: Row;
+  avgVisitorRate: number | null;
+  avgBlogRate: number | null;
   onDelete?: () => void;
 }) {
   const fmtDelta = (v: number | null) => {
@@ -659,14 +690,14 @@ function RankRow({
     if (v == null) return "-";
     return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
   };
-  const clr = (v: number | null) =>
-    v == null ? "text-muted-foreground" :
-    v > 0 ? "text-green-600" :
-    v < 0 ? "text-red-600" :
-    "text-muted-foreground";
+  // 사장님 룰: 부호로 통일 — 양수 빨강, 음수 파랑, ±0 회색
+  const clr = (v: number | null) => {
+    if (v == null || v === 0) return "text-muted-foreground";
+    return v > 0 ? "text-red-600" : "text-blue-600";
+  };
 
-  const vStatus = getStatus(row.visitor.rate, row.visitor.delta);
-  const bStatus = getStatus(row.blog.rate, row.blog.delta);
+  const vStatus = getStatus(row.visitor.rate, row.visitor.delta, avgVisitorRate);
+  const bStatus = getStatus(row.blog.rate, row.blog.delta, avgBlogRate);
 
   return (
     <div

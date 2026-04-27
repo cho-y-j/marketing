@@ -148,6 +148,76 @@ export class CompetitorBackfillService {
     return { visitorDays, blogDays };
   }
 
+  /**
+   * 키워드 순위 히스토리 30일 역산 백필.
+   *
+   * 정책:
+   *  - 새 매장은 첫 측정 1건뿐이라 "어제 vs 오늘" / "7일 전 vs 오늘" 비교 화면이 비어 있음
+   *  - 측정 직후 등록 화면에서도 7일 증감 칸이 살아있어야 한다는 사장님 요구
+   *  - 순위 자체는 과거 시점을 네이버에서 받아올 수 없음 → 오늘 측정값을 30일 전까지 복제
+   *  - topPlaces JSON 도 동일 복제 → visitor/blog 7일 delta 는 0 (실제 데이터 누적되며 자연 마이그레이션)
+   *  - isEstimated=true 마킹은 컬럼 부재로 생략. 매일 05시 cron 이 새 진짜 row 1개씩 추가하며 진실로 전환
+   */
+  async backfillKeywordRanks(storeId: string, daysToBackfill = 30) {
+    const keywords = await this.prisma.storeKeyword.findMany({
+      where: { storeId },
+      select: { keyword: true },
+    });
+    if (keywords.length === 0) return { keywords: 0, rowsCreated: 0 };
+
+    let rowsCreated = 0;
+    const todayUtc = new Date();
+    todayUtc.setUTCHours(0, 0, 0, 0);
+
+    for (const { keyword } of keywords) {
+      // 오늘(또는 가장 최신) 측정 row 1건이 있어야 백필 가능
+      const latest = await this.prisma.keywordRankHistory.findFirst({
+        where: { storeId, keyword },
+        orderBy: { checkedAt: "desc" },
+        select: { rank: true, totalResults: true, topPlaces: true, checkedAt: true },
+      });
+      if (!latest) {
+        this.logger.debug(`[순위 백필] "${keyword}" — 측정 기록 없음, 스킵`);
+        continue;
+      }
+
+      // 1일 전 ~ daysToBackfill 일 전까지, 같은 날짜에 이미 row 가 있으면 스킵
+      for (let i = 1; i <= daysToBackfill; i++) {
+        const checkedAt = new Date(todayUtc);
+        checkedAt.setUTCDate(checkedAt.getUTCDate() - i);
+        // 그 날짜의 KeywordRankHistory 가 이미 있으면 (실측 또는 이전 백필) 스킵
+        const existing = await this.prisma.keywordRankHistory.findFirst({
+          where: {
+            storeId, keyword,
+            checkedAt: {
+              gte: checkedAt,
+              lt: new Date(checkedAt.getTime() + 24 * 60 * 60 * 1000),
+            },
+          },
+          select: { id: true },
+        });
+        if (existing) continue;
+
+        await this.prisma.keywordRankHistory.create({
+          data: {
+            storeId,
+            keyword,
+            rank: latest.rank,
+            totalResults: latest.totalResults,
+            topPlaces: latest.topPlaces ?? undefined,
+            checkedAt,
+          },
+        });
+        rowsCreated++;
+      }
+    }
+
+    this.logger.log(
+      `[순위 백필] storeId=${storeId} 키워드 ${keywords.length}개, ${rowsCreated}행 생성`,
+    );
+    return { keywords: keywords.length, rowsCreated };
+  }
+
   /** 특정 매장의 모든 경쟁사 backfill */
   async backfillAllCompetitors(storeId: string) {
     const competitors = await this.prisma.competitor.findMany({

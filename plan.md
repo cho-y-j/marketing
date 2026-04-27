@@ -492,3 +492,47 @@ Phase 9: 키워드 품질 검증 & 매장명 변형 집계 ███████
    - 카피 톤: "기록없음" → "내일부터 쌓여요", "100위 밖" → "가능성 키워드" 등
 3. **초대하기 포인트 지급 로직** — 규칙(초대 1명당 2,000P?) + 전환 조건(매장 등록 완료 시 지급?) 확정
 4. **모바일 앱** — 웹 안정화 후 React Native + Expo
+
+---
+
+## 2026-04-27 세션 — 순위 수집 근본 재설계 + 변동율 표시 정석화
+
+### 배경
+1주일 동안 모든 currentRank 가 NULL/오염되어 사장님 매장 진짜 순위 (가경동 맛집 = 15위 등) 가 한 번도 안 보임. 실측으로 m.search.naver.com 경로의 3중 결함 발견.
+
+### 발견된 결함
+1. **m.search.naver.com SSR display=5 하드코딩** — 우리 스크래퍼는 page step 10 가정. 6~10등은 영영 못 가져옴
+2. **start 파라미터 SSR 무효** — start=1, 11, 21, ... 모두 동일한 1~5위만 반복 수집
+3. **좌표 누락 시 서울 default** — 청주 매장이 서울 기준으로 검색되어 결과 오염
+
+### 수정 (모두 머지됨)
+- **fetcher 교체**: `m.search.naver.com` → `pcmap.place.naver.com/restaurant/list?display=70` + 좌표(`Store.mapx/mapy`)
+  - 한 번 호출에 70개 + visitor/blog/save/category 풍부 (Place API 추가 호출 0회)
+  - `naver-rank-checker.provider.ts` 전면 재작성
+- **30일 백필 + 매일 cron 마이그레이션**:
+  - `competitor-backfill.service.ts` 에 `backfillKeywordRanks` 추가
+  - `DailySnapshotJob` upsert 의 `update` 절에 `isEstimated: false` 명시 → 추정 → 실측 자연 전환
+  - 매장 등록 순서 변경: 백필 먼저 → 첫 스냅샷 (어제 row 와 비교해 오늘 delta 정상 계산)
+- **변동량 데이터 소스 교체**: keyword.service `findAllWithCompetition` + rank-check.service `getKeywordCompetition` 의 1d/7d/30d delta 계산을 `KeywordRankHistory.topPlaces` (백필 같은 값 복제) → `StoreDailySnapshot/CompetitorDailySnapshot` 직접 비교로 변경
+- **UI 통일**:
+  - `~` 추정 마크 완전 제거
+  - 색: 양수=빨강, 음수=파랑, ±0=회색 (visitor/blog). 순위 변동만 별개 (좋아짐=파랑)
+  - 기간 토글 통일: `/keywords` 1일/7일/30일, `/keywords/[keyword]` 1/7/30일 + 달력
+  - "300위 밖" → "70위 밖" 정직 표기
+- **변동율 가중치 (정석)** — `/competitors` `getStatus`:
+  - 급증: rate ≥ 경쟁사 평균 × 1.5 AND delta ≥ 5
+  - 활발: rate ≥ 경쟁사 평균 AND delta ≥ 3
+  - 평온: rate ≥ 0 / 감소: rate < 0
+  - 작은 매장 부풀림 방지 (외식업 SaaS 표준)
+
+### 라이브 검증
+| 매장 | 결과 |
+|---|---|
+| 남다른대구막창 서현점 | 가경동 맛집 = **15위**, 가경동 막창 = **9위** |
+| 남해막창꼼장어 | **청주 꼼장어 = 1위**, 가경동 막창 = 12위, 가경동 회식 = 50위 |
+
+신규 등록 풀 스텝 (키워드 8 + 경쟁사 6 + 백필 30일 × 매장+경쟁사+키워드 + 첫 분석/스냅샷/브리핑) 에러 0건 통과.
+
+### 한계 (다음 세션)
+- **Top 70 너머**: pcmap 도 SSR 70개 한계, 페이지네이션 클릭은 service worker 우회 GraphQL 로 캡쳐 불가. 현재 Top 70 가 단발 한계. adlog 가 어떻게 Top 300 까지 가는지는 reverse engineering 추가 필요
+- **순위(rank) 자체 백필 불가**: KeywordRankHistory 는 오늘 측정값 복제만. 진짜 순위 변동은 매일 cron 누적 7일 후부터
