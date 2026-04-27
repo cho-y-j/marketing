@@ -1,10 +1,11 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, ExternalLink, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { BookOpen, ExternalLink, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2 } from "lucide-react";
 
 /**
  * 외부 블로그 mention 카드 — 캐시노트 "SNS 언급 감지" 의 한국 환경 버전.
@@ -34,12 +35,28 @@ type Overview = {
 };
 
 export function BlogMentionCard({ storeId }: { storeId?: string }) {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery<Overview>({
     queryKey: ["blog-mentions", storeId],
     queryFn: () =>
       apiClient.get(`/stores/${storeId}/blog-mentions`).then((r) => r.data),
     enabled: !!storeId,
     staleTime: 5 * 60 * 1000, // 5분 캐시 — 경쟁사 호출 비용 큼
+  });
+
+  // 수동 즉시 수집 — 매일 cron 안 기다리고 지금 새 글 가져오기
+  const collect = useMutation({
+    mutationFn: () =>
+      apiClient.post(`/stores/${storeId}/blog-mentions/collect`).then((r) => r.data),
+    onSuccess: (r: { fetched: number; kept: number; inserted: number; removed: number }) => {
+      qc.invalidateQueries({ queryKey: ["blog-mentions", storeId] });
+      const msg =
+        r.removed > 0
+          ? `수집 완료 — 신규 ${r.inserted}건 / 노이즈 정리 ${r.removed}건`
+          : `수집 완료 — ${r.kept}건 매장 글 확인`;
+      toast.success(msg);
+    },
+    onError: (e: any) => toast.error("수집 실패: " + (e.response?.data?.message || e.message)),
   });
 
   if (isLoading) {
@@ -71,11 +88,27 @@ export function BlogMentionCard({ storeId }: { storeId?: string }) {
               </p>
             </div>
           </div>
-          {data.yesterday > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-semibold">
-              🆕 어제 {data.yesterday}건
-            </span>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {data.yesterday > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-semibold">
+                🆕 어제 {data.yesterday}건
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => collect.mutate()}
+              disabled={collect.isPending}
+              title="지금 즉시 수집 (매일 01시 자동 수집과 별개로 수동 트리거)"
+              className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-md text-[11px] font-medium border border-border bg-white hover:bg-muted/40 transition-colors disabled:opacity-60"
+            >
+              {collect.isPending ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <RefreshCw size={11} />
+              )}
+              {collect.isPending ? "수집 중" : "지금 수집"}
+            </button>
+          </div>
         </div>
 
         {/* 3-stat — 30일 / 7일 / 경쟁사 비교 */}
