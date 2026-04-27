@@ -11,7 +11,7 @@ import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { apiClient } from "@/lib/api-client";
 import {
   ArrowLeft, Crown, MessageSquare, FileText, TrendingUp,
-  Search, Lightbulb, Loader2, Flame, ArrowUp, ArrowDown, Minus,
+  Search, Lightbulb, Loader2, Flame, ArrowUp, ArrowDown, Minus, Wand2,
 } from "lucide-react";
 
 // 사장님 룰: /keywords 목록과 통일 — 1일/7일/30일 + 달력 임의 날짜
@@ -84,10 +84,18 @@ export default function KeywordDetailPage({
             {totalResults ? `${totalResults}개 매장 노출` : ""}
           </p>
         </div>
-        <Button size="sm" onClick={() => refetch()}>
-          <Loader2 size={14} className="mr-1" />
-          재분석
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => refetch()}>
+            <Loader2 size={14} className="mr-1" />
+            재분석
+          </Button>
+          {/* 이 키워드로 AI 글 작성 — /content 딥링크 */}
+          <Button asChild size="sm">
+            <Link href={`/content?type=PLACE_POST&keyword=${encodeURIComponent(keyword)}`}>
+              <Wand2 size={14} className="mr-1" /> AI 글 작성
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* 핵심 지표 — 이 키워드 하나에 특정된 것만 */}

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,7 @@ import { ConsultationCTA } from "@/components/common/consultation-cta";
 import {
   Plus, Search, Loader2, Crown, ChevronRight,
   MessageSquare, FileText, Sparkles, RefreshCw, X, Trash2,
-  ArrowUp, ArrowDown, Minus,
+  ArrowUp, ArrowDown, Minus, Wand2,
 } from "lucide-react";
 
 export default function KeywordsPage() {
@@ -193,13 +194,27 @@ export default function KeywordsPage() {
                     <span>PC {previewData.pc?.toLocaleString() ?? 0}</span>
                     <span>모바일 {previewData.mobile?.toLocaleString() ?? 0}</span>
                   </div>
-                  <Button onClick={confirmAdd} disabled={adding} className="w-full" size="sm">
-                    {adding ? (
-                      <><Loader2 size={14} className="animate-spin mr-1" /> 추가 중...</>
-                    ) : (
-                      <><Plus size={14} className="mr-1" /> "{previewData.keyword}" 추가하기</>
-                    )}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button onClick={confirmAdd} disabled={adding} className="flex-1" size="sm">
+                      {adding ? (
+                        <><Loader2 size={14} className="animate-spin mr-1" /> 추가 중...</>
+                      ) : (
+                        <><Plus size={14} className="mr-1" /> 추가하기</>
+                      )}
+                    </Button>
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      title="이 키워드로 AI 콘텐츠 즉시 생성"
+                    >
+                      <Link
+                        href={`/content?type=PLACE_POST&keyword=${encodeURIComponent(previewData.keyword)}`}
+                      >
+                        <Wand2 size={14} className="mr-1" /> AI 글 작성
+                      </Link>
+                    </Button>
+                  </div>
                 </>
               ) : (
                 <div className="text-center py-3">
@@ -323,6 +338,12 @@ function KeywordCard({
   period: "1d" | "7d" | "30d";
   searchFlow?: { today: number | null; yesterday: number | null; delta: number | null };
 }) {
+  const router = useRouter();
+  const goWrite = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    router.push(`/content?type=PLACE_POST&keyword=${encodeURIComponent(kw.keyword)}`);
+  };
   const top3 = kw.top3 || [];
   const myPlace = kw.myPlace;
   const myRank = kw.currentRank ?? myPlace?.rank;
@@ -370,11 +391,20 @@ function KeywordCard({
                 {kw.type === "HIDDEN" && (
                   <Badge variant="secondary" className="text-[10px] py-0 bg-amber-100 text-amber-700">히든</Badge>
                 )}
+                {/* 이 키워드로 AI 글 작성 — /content 딥링크 (사장님 룰: 키워드는 실행 입력값) */}
+                <button
+                  type="button"
+                  onClick={goWrite}
+                  className="ml-auto inline-flex items-center gap-1 px-2 min-h-[36px] rounded-md text-[11px] font-medium text-brand bg-brand-subtle/40 hover:bg-brand-subtle transition-colors"
+                  title="이 키워드로 AI 콘텐츠 생성"
+                >
+                  <Wand2 size={11} /> AI 글
+                </button>
                 <button
                   type="button"
                   onClick={handleExclude}
                   disabled={excluding}
-                  className="ml-1 p-2 -m-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50 inline-flex items-center justify-center min-w-[36px] min-h-[36px]"
+                  className="p-2 -m-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50 inline-flex items-center justify-center min-w-[36px] min-h-[36px]"
                   title="이 키워드 제외"
                 >
                   {excluding ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
