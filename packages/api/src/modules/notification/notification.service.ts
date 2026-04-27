@@ -87,4 +87,14 @@ export class NotificationService {
       message: "오늘 할 마케팅 액션 3가지가 준비되었습니다",
     });
   }
+
+  // 외부 블로그 mention — 누가 매장 글 올렸을 때
+  async notifyNewBlogMentions(userId: string, storeName: string, count: number) {
+    return this.create(userId, {
+      type: "BLOG_MENTION",
+      title: `🆕 ${storeName} 블로그에 ${count}건 글 올라왔어요`,
+      message: "어떤 손님이 후기를 썼는지 확인해보세요",
+      data: { storeName, count },
+    });
+  }
 }

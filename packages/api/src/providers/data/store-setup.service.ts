@@ -11,6 +11,7 @@ import { AnalysisService } from "../../modules/analysis/analysis.service";
 import { BriefingService } from "../../modules/briefing/briefing.service";
 import { DailySnapshotJob } from "../../jobs/daily-snapshot.job";
 import { CompetitorBackfillService } from "../../modules/competitor/competitor-backfill.service";
+import { BlogMentionService } from "../../modules/blog-mention/blog-mention.service";
 import { EventCollectorService } from "./event-collector.service";
 import { KAMIS_CATALOG, KAMIS_ALL_ITEMS, isKamisRegistered } from "../../modules/ingredient/kamis-catalog";
 import { BatchAnalysisJob } from "../../jobs/batch-analysis.job";
@@ -38,6 +39,7 @@ export class StoreSetupService {
     private dailySnapshotJob: DailySnapshotJob,
     @Inject(forwardRef(() => CompetitorBackfillService))
     private backfillService: CompetitorBackfillService,
+    private blogMention: BlogMentionService,
     private eventCollector: EventCollectorService,
     @Inject(forwardRef(() => BatchAnalysisJob))
     private batchJob: BatchAnalysisJob,
@@ -661,6 +663,14 @@ export class StoreSetupService {
       this.logger.log(`[bg] 30일 역산 backfill 완료`);
     } catch (e: any) {
       this.logger.warn(`[bg] 30일 backfill 실패: ${e.message}`);
+    }
+
+    // 4-b) 외부 블로그 mention 백필 — 매장명으로 네이버 블로그 검색 후 영속화
+    try {
+      const r = await this.blogMention.backfillForStore(storeId);
+      this.logger.log(`[bg] 블로그 mention 백필 완료 — 가져옴 ${r.fetched} / 신규 ${r.inserted}`);
+    } catch (e: any) {
+      this.logger.warn(`[bg] 블로그 mention 백필 실패: ${e.message}`);
     }
 
     // 5) 첫 일별 스냅샷 (오늘 row — 백필이 만든 어제 row 와 비교해 delta 계산됨)

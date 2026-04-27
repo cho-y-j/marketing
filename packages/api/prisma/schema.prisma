@@ -679,3 +679,20 @@ model ConsultationRequest {
 
   @@index([status, createdAt])
 }
+
+// ===== 외부 블로그 mention (매장명으로 검색되는 다른 사람 블로그 글) =====
+// 사장님 룰: 캐시노트의 SNS 언급 감지 → 한국 환경에 맞게 네이버 블로그로.
+// 매일 01시 cron 이 어제 발행분 수집 + 매장 등록 시 30일 백필.
+model BlogMention {
+  id        String   @id @default(cuid())
+  storeId   String
+  postedAt  DateTime // 블로그 글 작성일 (postdate)
+  title     String   // 글 제목 (HTML 태그 제거)
+  url       String   // 원문 URL
+  blogger   String?  // 작성자/블로그 이름 (있을 때만)
+  snippet   String?  @db.Text // 글 본문 미리보기 (description 100~200자)
+  indexedAt DateTime @default(now()) // 우리 시스템 수집 시각
+
+  @@unique([storeId, url])
+  @@index([storeId, postedAt])
+}

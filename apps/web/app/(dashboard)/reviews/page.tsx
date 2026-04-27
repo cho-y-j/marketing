@@ -16,6 +16,7 @@ import {
 import { formatNumber, getReviewStatusConfig, CARD_BASE } from "@/lib/design-system";
 import { toast } from "sonner";
 import { copyText } from "@/lib/copy";
+import { BlogMentionCard } from "@/components/reviews/blog-mention-card";
 import {
   MessageSquare,
   Sparkles,
@@ -161,6 +162,9 @@ export default function ReviewsPage() {
           </div>
         ))}
       </div>
+
+      {/* 외부 블로그 mention — 사장님 매장이 언급된 다른 사람 블로그 */}
+      <BlogMentionCard storeId={storeId} />
 
       {/* 검수 대기 (DRAFTED) */}
       {drafted.length > 0 && (

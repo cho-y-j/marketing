@@ -4,6 +4,8 @@ import { PrismaService } from "../common/prisma.service";
 import { findAutoAnalysisStores } from "../common/helpers/auto-analysis-targets.helper";
 import { NaverPlaceProvider } from "../providers/naver/naver-place.provider";
 import { NaverSearchadProvider } from "../providers/naver/naver-searchad.provider";
+import { BlogMentionService } from "../modules/blog-mention/blog-mention.service";
+import { NotificationService } from "../modules/notification/notification.service";
 
 /**
  * Phase 8 — 일별 스냅샷 수집 배치잡.
@@ -24,6 +26,8 @@ export class DailySnapshotJob {
     private prisma: PrismaService,
     private place: NaverPlaceProvider,
     private searchad: NaverSearchadProvider,
+    private blogMention: BlogMentionService,
+    private notification: NotificationService,
   ) {}
 
   @Cron("0 1 * * *") // 매일 01:00
@@ -34,8 +38,37 @@ export class DailySnapshotJob {
     await this.collectStoreSnapshots(today);
     await this.collectCompetitorSnapshots(today);
     await this.collectKeywordVolumes(today);
+    await this.collectBlogMentions();
 
     this.logger.log(`[일별 스냅샷] 완료`);
+  }
+
+  /**
+   * 외부 블로그 mention 일별 수집 — 매장명으로 네이버 블로그 검색.
+   * 어제 새 글 1건 이상이면 푸시 알림 ("내 매장 블로그에 입소문 났어요!").
+   */
+  async collectBlogMentions() {
+    const stores = await findAutoAnalysisStores(this.prisma, {
+      select: { id: true, name: true, userId: true },
+      caller: "DailySnapshotJob.blogMentions",
+    });
+
+    for (const store of stores) {
+      try {
+        const before = await this.blogMention.countYesterday(store.id);
+        await this.blogMention.collectForStore(store.id);
+        const after = await this.blogMention.countYesterday(store.id);
+        const newCount = Math.max(0, after - before);
+        if (newCount > 0 && store.userId) {
+          await this.notification
+            .notifyNewBlogMentions(store.userId, store.name, newCount)
+            .catch((e) => this.logger.warn(`[blog-mention 푸시] ${store.name}: ${e.message}`));
+        }
+      } catch (e: any) {
+        this.logger.warn(`[blog-mention] ${store.name} 실패: ${e.message}`);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
   // 매장 스냅샷 — 현재 리뷰 누적을 저장 + 전일 대비 delta 계산
