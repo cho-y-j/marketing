@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
@@ -18,17 +19,46 @@ const contentTypes = [
   { type: "BLOG_POST", label: "블로그 글", icon: BookOpen, desc: "블로그 포스트", iconBg: "bg-brand-subtle", iconColor: "text-brand" },
 ];
 
+const VALID_TYPES = new Set(["PLACE_POST", "REVIEW_REPLY", "SNS_POST", "BLOG_POST"]);
+
 export default function ContentPage() {
   const { storeId } = useCurrentStoreId();
+  const searchParams = useSearchParams();
   const { data: keywords } = useKeywords(storeId);
   const { data: contents, isLoading } = useContents(storeId);
   const generateContent = useGenerateContent(storeId);
   const deleteContent = useDeleteContent(storeId);
-  const [selectedType, setSelectedType] = useState("PLACE_POST");
+
+  // /events 같은 다른 화면에서 딥링크로 진입 시 ?type=BLOG_POST&keyword=... prefill
+  const initialType = (() => {
+    const t = searchParams.get("type");
+    return t && VALID_TYPES.has(t) ? t : "PLACE_POST";
+  })();
+  const initialKeyword = searchParams.get("keyword") || "";
+
+  const [selectedType, setSelectedType] = useState(initialType);
+  const prefillKeyword = initialKeyword; // query 로만 들어옴 — 일반 진입 시 빈 문자열
   const [copied, setCopied] = useState(false);
 
+  // 진입 후 query param 으로 자동 한 번 생성 — 사장님이 + 버튼 누른 다음 자동 시작 의도
+  useEffect(() => {
+    if (initialKeyword && storeId && !generateContent.isPending && !generateContent.data) {
+      generateContent.mutate(
+        { type: initialType, targetKeywords: [initialKeyword] },
+        {
+          onSuccess: () => toast.success(`"${initialKeyword}" 으로 AI 콘텐츠 생성됨`),
+          onError: (e: any) => toast.error("자동 생성 실패: " + (e.response?.data?.message || e.message)),
+        },
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
+
   const handleGenerate = () => {
-    const targetKeywords = keywords?.slice(0, 5).map((k: any) => k.keyword) ?? [];
+    // 우선순위: prefillKeyword (있으면) → 매장 상위 키워드 5개
+    const targetKeywords = prefillKeyword
+      ? [prefillKeyword]
+      : keywords?.slice(0, 5).map((k: any) => k.keyword) ?? [];
     generateContent.mutate(
       { type: selectedType, targetKeywords },
       {

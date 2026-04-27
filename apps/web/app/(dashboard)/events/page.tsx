@@ -11,7 +11,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
   CalendarDays, MapPin, Loader2, Sparkles, PartyPopper, Check, Plus,
+  Wand2, ExternalLink,
 } from "lucide-react";
+import Link from "next/link";
 
 type Event = {
   id: string;
@@ -36,7 +38,28 @@ const RADIUS_OPTIONS: Array<{ label: string; value: number | null }> = [
   { label: "전체", value: null },
 ];
 
-type KeywordSuggestion = { keyword: string; reason: string };
+type Channel = "BLOG" | "PLACE_POST" | "POWERLINK";
+type KeywordSuggestion = { keyword: string; reason: string; channels: Channel[] };
+
+// 채널 → /content 페이지의 type 매핑 (POWERLINK 는 콘텐츠 생성 안 함 → 외부 링크)
+const CHANNEL_TO_CONTENT_TYPE: Record<Channel, string | null> = {
+  BLOG: "BLOG_POST",
+  PLACE_POST: "PLACE_POST",
+  POWERLINK: null,
+};
+
+const CHANNEL_LABEL: Record<Channel, string> = {
+  BLOG: "블로그",
+  PLACE_POST: "플레이스 소식",
+  POWERLINK: "파워링크",
+};
+
+// DESIGN-apple §10: 양수=빨강 / 음수=파랑 컨벤션과 충돌 없도록 채널 배지는 색상 카테고리만
+const CHANNEL_BADGE_CLASS: Record<Channel, string> = {
+  BLOG: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  PLACE_POST: "bg-sky-50 text-sky-700 border-sky-200",
+  POWERLINK: "bg-orange-50 text-orange-700 border-orange-200",
+};
 type Strategy = {
   idea: string;
   difficulty: "쉬움" | "보통" | "어려움";
@@ -286,25 +309,72 @@ function EventCard({ event, storeId }: { event: Event; storeId?: string }) {
             <div className="space-y-1.5">
               {suggestions.map((s, i) => {
                 const added = addedKeywords.has(s.keyword);
+                // 추천 채널 — 콘텐츠 생성 가능한 채널 우선 (BLOG_POST → PLACE_POST → POWERLINK)
+                const orderedChannels: Channel[] = (s.channels ?? []).slice().sort((a, b) => {
+                  const order: Record<Channel, number> = { BLOG: 0, PLACE_POST: 1, POWERLINK: 2 };
+                  return order[a] - order[b];
+                });
+                const aiAuthorChannel = orderedChannels.find((c) => CHANNEL_TO_CONTENT_TYPE[c]);
+                const aiAuthorType = aiAuthorChannel ? CHANNEL_TO_CONTENT_TYPE[aiAuthorChannel] : null;
+                const hasPowerlink = orderedChannels.includes("POWERLINK");
                 return (
                   <div
                     key={i}
-                    className={`flex items-center gap-2 px-2.5 py-2 rounded-md border text-xs ${
-                      added ? "bg-green-50 border-green-200" : "bg-muted/30 border-border"
+                    className={`rounded-md border text-xs break-keep ${
+                      added ? "bg-green-50 border-green-200" : "bg-white border-border"
                     }`}
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-foreground">{s.keyword}</div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">{s.reason}</div>
+                    <div className="flex items-start gap-2 px-2.5 py-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-foreground">{s.keyword}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">{s.reason}</div>
+                        {orderedChannels.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {orderedChannels.map((c) => (
+                              <Badge
+                                key={c}
+                                variant="outline"
+                                className={`text-[9px] py-0 px-1.5 ${CHANNEL_BADGE_CLASS[c]}`}
+                              >
+                                {CHANNEL_LABEL[c]}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {added ? (
+                        <Badge className="bg-green-100 text-green-700 border-green-300 shrink-0">
+                          <Check size={10} className="mr-0.5" /> 추가됨
+                        </Badge>
+                      ) : (
+                        <Button size="xs" variant="ghost" onClick={() => addOne(s.keyword)} className="shrink-0" title="추적 키워드로 추가">
+                          <Plus size={11} />
+                        </Button>
+                      )}
                     </div>
-                    {added ? (
-                      <Badge className="bg-green-100 text-green-700 border-green-300 shrink-0">
-                        <Check size={10} className="mr-0.5" /> 추가됨
-                      </Badge>
-                    ) : (
-                      <Button size="xs" variant="ghost" onClick={() => addOne(s.keyword)} className="shrink-0">
-                        <Plus size={11} />
-                      </Button>
+                    {/* 실행 액션 — 채널별 1-click 연결. 사장님 룰: 키워드는 결과가 아니라 입력값 */}
+                    {(aiAuthorType || hasPowerlink) && (
+                      <div className="flex items-center gap-1 px-2.5 pb-2 pt-0.5">
+                        {aiAuthorType && (
+                          <Link
+                            href={`/content?type=${aiAuthorType}&keyword=${encodeURIComponent(s.keyword)}`}
+                            className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-md text-[11px] font-medium text-brand bg-brand-subtle/40 hover:bg-brand-subtle transition-colors"
+                          >
+                            <Wand2 size={11} /> AI 글 작성
+                          </Link>
+                        )}
+                        {hasPowerlink && (
+                          <a
+                            href="https://searchad.naver.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-md text-[11px] font-medium text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors"
+                            title="네이버 광고센터에서 파워링크로 등록"
+                          >
+                            <ExternalLink size={11} /> 파워링크 등록
+                          </a>
+                        )}
+                      </div>
                     )}
                   </div>
                 );

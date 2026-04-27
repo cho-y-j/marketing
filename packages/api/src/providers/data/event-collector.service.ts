@@ -274,7 +274,11 @@ export class EventCollectorService {
    * @returns 키워드 5~8개 + 추천 이유
    */
   async suggestMarketingKeywords(storeId: string, eventId: string): Promise<{
-    keywords: Array<{ keyword: string; reason: string }>;
+    keywords: Array<{
+      keyword: string;
+      reason: string;
+      channels: Array<"BLOG" | "PLACE_POST" | "POWERLINK">;
+    }>;
     strategies: Array<{ idea: string; difficulty: "쉬움" | "보통" | "어려움"; expectedEffect: string }>;
     event: { name: string; startDate: Date; endDate: Date };
   }> {
@@ -289,12 +293,16 @@ export class EventCollectorService {
 
     const systemPrompt = `당신은 자영업 마케팅 전문가. 특정 지역 축제를 매장 유입으로 연결하는 **실전 광고 키워드 + 매장 행동 전략** 을 같이 추천한다.
 
-## 1) 광고 키워드 (5~8개)
+## 1) 광고 키워드 (5~8개) + 추천 채널
 - 축제 방문객/관광객이 축제 전/후 **실제 검색할 만한 키워드**
 - 축제 이름 + 매장 지역 + 매장 업종/메뉴 조합 중심
 - 방문 의도 있는 키워드 (정보 탐색 X)
 - 포괄어 금지 ("맛집", "한식" 단독 X — 반드시 지역 결합)
 - 각 키워드의 추천 이유 한 줄
+- **각 키워드별 추천 채널 1~3개** (배열): BLOG | PLACE_POST | POWERLINK
+  - BLOG: 정보형 긴 글 적합 (예: "단양 철쭉제 등산 후 식사 코스")
+  - PLACE_POST: 짧은 매장 소식 적합 (예: "철쭉제 한정 메뉴")
+  - POWERLINK: 네이버 검색 광고 적합 (구체 의도 + 단가 합리적)
 
 ## 2) 매장 행동 전략 (3~5개) — "키워드만으로는 손님이 안 옴"
 사장님이 축제 시즌에 매장에서 **실제로 준비할 행동**. 키워드가 입력값이 아니라 매장 자체 실행이 답.
@@ -306,7 +314,8 @@ export class EventCollectorService {
 ## 출력 (JSON만, 설명 없이)
 {
   "keywords": [
-    {"keyword": "단양 철쭉제 맛집", "reason": "축제 방문객의 식사 검색 1순위"}
+    {"keyword": "단양 철쭉제 맛집", "reason": "축제 방문객의 식사 검색 1순위", "channels": ["POWERLINK", "PLACE_POST"]},
+    {"keyword": "단양 등산 후 보리밥 코스", "reason": "정보형 검색", "channels": ["BLOG"]}
   ],
   "strategies": [
     {"idea": "철쭉제 한정 4인 세트 출시", "difficulty": "쉬움", "expectedEffect": "단체 객단가 +20%"},
@@ -337,8 +346,17 @@ export class EventCollectorService {
       const match = resp.content.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("JSON not found");
       const parsed = JSON.parse(match[0]);
+      // 채널 화이트리스트 — AI 가 다른 값 넣어도 거름
+      const ALLOWED_CHANNELS = new Set(["BLOG", "PLACE_POST", "POWERLINK"]);
       const keywords = (parsed.keywords ?? [])
         .filter((k: any) => typeof k?.keyword === "string" && typeof k?.reason === "string")
+        .map((k: any) => ({
+          keyword: k.keyword,
+          reason: k.reason,
+          channels: Array.isArray(k.channels)
+            ? k.channels.filter((c: any) => typeof c === "string" && ALLOWED_CHANNELS.has(c))
+            : [],
+        }))
         .slice(0, 8);
       // 매장 행동 전략 — difficulty 화이트리스트로 견고하게
       const ALLOWED_DIFFICULTY = new Set(["쉬움", "보통", "어려움"]);
