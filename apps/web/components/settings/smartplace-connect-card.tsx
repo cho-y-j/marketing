@@ -26,7 +26,7 @@ export function SmartPlaceConnectCard() {
 
   const extractBizId = (input: string): string => {
     const trimmed = input.trim();
-    // URL에서 biz ID 추출: https://new-smartplace.naver.com/bizes/123456/...
+    // URL에서 biz ID 추출: https://new.smartplace.naver.com/bizes/123456/...
     const match = trimmed.match(/bizes\/(\d+)/);
     if (match) return match[1] as string;
     // 숫자만 입력한 경우
@@ -84,7 +84,7 @@ export function SmartPlaceConnectCard() {
         {connected ? (
           <div className="flex items-center gap-2">
             <a
-              href={`https://new-smartplace.naver.com/bizes/${store.smartPlaceBizId}/reviews/list`}
+              href={`https://new.smartplace.naver.com/bizes/${store.smartPlaceBizId}/reviews/list`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-[#03C75A] font-medium flex items-center gap-1 hover:underline"
@@ -134,12 +134,12 @@ export function SmartPlaceConnectCard() {
                   스마트플레이스에 로그인
                 </p>
                 <a
-                  href="https://new-smartplace.naver.com"
+                  href="https://new.smartplace.naver.com"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[#03C75A] hover:underline flex items-center gap-0.5 mt-0.5"
                 >
-                  new-smartplace.naver.com <ExternalLink size={10} />
+                  new.smartplace.naver.com <ExternalLink size={10} />
                 </a>
               </div>
             </div>
@@ -165,7 +165,7 @@ export function SmartPlaceConnectCard() {
                   주소창에서 숫자를 복사
                 </p>
                 <div className="mt-1 p-2 bg-surface rounded-lg border border-border-primary font-mono text-[11px]">
-                  new-smartplace.naver.com/bizes/
+                  new.smartplace.naver.com/bizes/
                   <span className="bg-warning-light text-warning font-bold px-1 rounded">
                     123456789
                   </span>

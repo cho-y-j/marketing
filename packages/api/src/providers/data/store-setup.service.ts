@@ -664,12 +664,14 @@ export class StoreSetupService {
     }
 
     // 5) 첫 일별 스냅샷 (오늘 row — 백필이 만든 어제 row 와 비교해 delta 계산됨)
+    //    + 키워드 일별 검색량 (어제 vs 오늘 표시용)
     try {
       const today = new Date();
       today.setUTCHours(0, 0, 0, 0);
       await this.dailySnapshotJob.collectStoreSnapshots(today);
       await this.dailySnapshotJob.collectCompetitorSnapshots(today);
-      this.logger.log(`[bg] 첫 스냅샷 기록 완료`);
+      await this.dailySnapshotJob.collectKeywordVolumes(today);
+      this.logger.log(`[bg] 첫 스냅샷 기록 완료 (매장+경쟁사+키워드 검색량)`);
     } catch (e: any) {
       this.logger.warn(`[bg] 첫 스냅샷 실패: ${e.message}`);
     }

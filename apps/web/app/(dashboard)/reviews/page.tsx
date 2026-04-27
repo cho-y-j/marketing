@@ -15,6 +15,7 @@ import {
 } from "@/hooks/useReviews";
 import { formatNumber, getReviewStatusConfig, CARD_BASE } from "@/lib/design-system";
 import { toast } from "sonner";
+import { copyText } from "@/lib/copy";
 import {
   MessageSquare,
   Sparkles,
@@ -35,8 +36,8 @@ export default function ReviewsPage() {
   const naverPlaceId = store?.naverPlaceId;
   const smartPlaceBizId = store?.smartPlaceBizId;
   const smartPlaceReviewUrl = smartPlaceBizId
-    ? `https://new-smartplace.naver.com/bizes/${smartPlaceBizId}/reviews/list`
-    : "https://new-smartplace.naver.com/bizes/my-bizes";
+    ? `https://new.smartplace.naver.com/bizes/${smartPlaceBizId}/reviews/list`
+    : "https://new.smartplace.naver.com/bizes/my-bizes";
   const { data: reviews, isLoading } = useReviews(storeId);
   const fetchMutation = useFetchReviews(storeId);
   const draftMutation = useDraftReplies(storeId);
@@ -370,9 +371,10 @@ function ReviewCard({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(review.draftReply || "");
-                  toast.success("답글이 클립보드에 복사되었습니다");
+                onClick={async () => {
+                  const ok = await copyText(review.draftReply || "");
+                  if (ok) toast.success("답글이 클립보드에 복사되었습니다");
+                  else toast.error("복사 실패 — 직접 길게 눌러 복사해주세요");
                 }}
                 className="rounded-xl h-8 text-xs border-brand/30 text-brand hover:bg-brand-subtle"
               >

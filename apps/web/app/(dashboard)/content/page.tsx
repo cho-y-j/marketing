@@ -7,6 +7,7 @@ import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useKeywords } from "@/hooks/useKeywords";
 import { useContents, useGenerateContent, useDeleteContent } from "@/hooks/useContent";
 import { formatNumber, CARD_BASE } from "@/lib/design-system";
+import { copyText } from "@/lib/copy";
 import { toast } from "sonner";
 import { Sparkles, Copy, RefreshCw, FileText, MessageSquare, Instagram, BookOpen, Check, Loader2, Trash2, Wand2 } from "lucide-react";
 
@@ -37,11 +38,15 @@ export default function ContentPage() {
     );
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    toast.success("클립보드에 복사되었습니다");
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async (text: string) => {
+    const ok = await copyText(text);
+    if (ok) {
+      setCopied(true);
+      toast.success("클립보드에 복사되었습니다");
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      toast.error("복사 실패 — 길게 눌러 직접 복사해주세요");
+    }
   };
 
   const handleDelete = (id: string) => {

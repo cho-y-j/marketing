@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiClient } from "@/lib/api-client";
+import { copyText } from "@/lib/copy";
 import { toast } from "sonner";
 import { Copy, Share2, Users, Coins, Check, Gift } from "lucide-react";
 
@@ -27,7 +28,8 @@ export default function InvitePage() {
 
   const copyCode = async () => {
     if (!code) return;
-    await navigator.clipboard.writeText(code);
+    const ok = await copyText(code);
+    if (!ok) return toast.error("복사 실패 — 직접 길게 눌러 복사해주세요");
     setCopied(true);
     toast.success("추천 코드가 복사됐어요");
     setTimeout(() => setCopied(false), 2000);
@@ -35,7 +37,8 @@ export default function InvitePage() {
 
   const copyLink = async () => {
     if (!inviteLink) return;
-    await navigator.clipboard.writeText(inviteLink);
+    const ok = await copyText(inviteLink);
+    if (!ok) return toast.error("복사 실패 — 직접 길게 눌러 복사해주세요");
     toast.success("초대 링크가 복사됐어요");
   };
 

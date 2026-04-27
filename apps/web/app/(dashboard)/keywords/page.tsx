@@ -36,6 +36,13 @@ export default function KeywordsPage() {
     enabled: !!storeId,
   });
 
+  // 키워드별 어제/오늘/델타 검색량 — `/keywords/flow` (KeywordDailyVolume)
+  const { data: searchFlow } = useQuery<Record<string, { today: number | null; yesterday: number | null; delta: number | null }>>({
+    queryKey: ["keywords-flow", storeId],
+    queryFn: () => apiClient.get(`/stores/${storeId}/keywords/flow`).then((r) => r.data),
+    enabled: !!storeId,
+  });
+
   // 검색량 미리보기 (먼저 조회)
   const handlePreview = async () => {
     if (!newKeyword.trim() || !storeId) return;
@@ -279,7 +286,14 @@ export default function KeywordsPage() {
       ) : (
         <div className="space-y-3">
           {kws.map((kw: any) => (
-            <KeywordCard key={kw.id} kw={kw} storeId={storeId} onChange={refetch} period={period} />
+            <KeywordCard
+              key={kw.id}
+              kw={kw}
+              storeId={storeId}
+              onChange={refetch}
+              period={period}
+              searchFlow={searchFlow?.[kw.keyword]}
+            />
           ))}
         </div>
       )}
@@ -301,9 +315,13 @@ export default function KeywordsPage() {
 }
 
 function KeywordCard({
-  kw, storeId, onChange, period,
+  kw, storeId, onChange, period, searchFlow,
 }: {
-  kw: any; storeId?: string; onChange: () => void; period: "1d" | "7d" | "30d";
+  kw: any;
+  storeId?: string;
+  onChange: () => void;
+  period: "1d" | "7d" | "30d";
+  searchFlow?: { today: number | null; yesterday: number | null; delta: number | null };
 }) {
   const top3 = kw.top3 || [];
   const myPlace = kw.myPlace;
@@ -368,15 +386,31 @@ function KeywordCard({
                     월 <strong className="text-foreground">{kw.monthlyVolume.toLocaleString()}</strong> ·
                     주 {kw.weeklyVolume.toLocaleString()} ·
                     일 {kw.dailyVolume.toLocaleString()}
-                    {kw.volumeEstimated && (
-                      <span className="ml-1 text-[10px] text-muted-foreground/70">· 추정</span>
-                    )}
                   </>
                 ) : (
                   <span className="text-muted-foreground/70">검색량 집계 중…</span>
                 )}
                 {kw.totalResults != null && ` · ${kw.totalResults}개 매장 노출`}
               </p>
+              {/* 일 단위 검색량 어제 vs 오늘 (KeywordDailyVolume) — 사장님 룰: 매출 변동 원인 추적용 */}
+              {searchFlow && searchFlow.today != null && (
+                <p className="text-[11px] mt-0.5 inline-flex items-center gap-1.5">
+                  <span className="text-muted-foreground">검색</span>
+                  {searchFlow.yesterday != null && (
+                    <span className="text-muted-foreground">
+                      어제 {searchFlow.yesterday.toLocaleString()}
+                    </span>
+                  )}
+                  <span className="text-foreground font-semibold">
+                    오늘 {searchFlow.today.toLocaleString()}
+                  </span>
+                  {searchFlow.delta != null && searchFlow.delta !== 0 && (
+                    <span className={`font-bold ${searchFlow.delta > 0 ? "text-red-600" : "text-blue-600"}`}>
+                      {searchFlow.delta > 0 ? "▲" : "▼"} {searchFlow.delta > 0 ? "+" : ""}{searchFlow.delta.toLocaleString()}
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
             <div className="text-right shrink-0">
               <div className={`text-2xl font-black ${rankColor}`}>

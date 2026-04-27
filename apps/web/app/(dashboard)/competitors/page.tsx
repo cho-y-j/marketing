@@ -379,6 +379,32 @@ export default function CompetitorsPage() {
                   </span>
                 </div>
               )}
+              {/* 보정 메시지 — 누적 등수 하위권이라도 증가율 상위면 긍정 강조 (사장님 룰: 스트레스 완화) */}
+              {(() => {
+                const myRate = keyMetric(myRow!).rate;
+                if (myRate == null) return null;
+                const sortedByRate = [...allRows]
+                  .filter((r) => keyMetric(r).rate != null)
+                  .sort((a, b) => (keyMetric(b).rate ?? -Infinity) - (keyMetric(a).rate ?? -Infinity));
+                const myRateRank = sortedByRate.findIndex((r) => r.isMine) + 1;
+                if (myRateRank === 0) return null;
+                const totalRated = sortedByRate.length;
+                const isCumulativeBottom = myRank != null && myRank > Math.ceil(totalRows / 2);
+                const isRateTop = myRateRank <= Math.ceil(totalRated / 3);
+                if (isCumulativeBottom && isRateTop) {
+                  return (
+                    <div className="mt-1 p-2 rounded-md bg-blue-50 border border-blue-200 text-blue-800">
+                      💡 누적 {myRank}위지만, <strong>{periodLabel} 증가율은 {totalRated}매장 중 {myRateRank}위</strong>로 상위권 — 가속 추세 유지하시면 곧 추월합니다
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <span className="font-semibold text-foreground">증가율 순위:</span>{" "}
+                    <span className="font-bold">{myRateRank}위 / {totalRated}매장</span>
+                  </div>
+                );
+              })()}
             </div>
           </CardContent>
         </Card>

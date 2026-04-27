@@ -239,20 +239,34 @@ export class BlogAnalysisService {
    * 매장의 블로그 분석 결과 조회
    */
   async getAnalysisResults(storeId: string) {
-    return this.prisma.blogAnalysis.findMany({
+    // ExcludedKeyword 에 등록된 키워드는 제외 — 사장님이 "제외" 누른 항목 새로고침해도 안 보이게 (사장님 룰)
+    const excluded = await this.prisma.excludedKeyword.findMany({
+      where: { storeId },
+      select: { keyword: true },
+    });
+    const excludedSet = new Set(excluded.map((e) => e.keyword));
+    const results = await this.prisma.blogAnalysis.findMany({
       where: { storeId },
       orderBy: { analyzedAt: "desc" },
     });
+    return results.filter((r) => !excludedSet.has(r.keyword));
   }
 
   /**
    * 키워드별 블로그 분석 요약 (대시보드/분석 페이지용)
    */
   async getSummary(storeId: string) {
-    const results = await this.prisma.blogAnalysis.findMany({
+    // 제외 키워드 동일 적용
+    const excluded = await this.prisma.excludedKeyword.findMany({
+      where: { storeId },
+      select: { keyword: true },
+    });
+    const excludedSet = new Set(excluded.map((e) => e.keyword));
+    const allResults = await this.prisma.blogAnalysis.findMany({
       where: { storeId },
       orderBy: { analyzedAt: "desc" },
     });
+    const results = allResults.filter((r) => !excludedSet.has(r.keyword));
 
     // 중복 키워드 제거 (최신만)
     const seen = new Set<string>();
