@@ -19,6 +19,7 @@ import { DataModule } from "./providers/data/data.module";
 import { ActionModule } from "./modules/action/action.module";
 import { AdminModule } from "./modules/admin/admin.module";
 import { BlogMentionModule } from "./modules/blog-mention/blog-mention.module";
+import { SalesModule } from "./modules/sales/sales.module";
 import { JobsModule } from "./jobs/jobs.module";
 
 @Module({
@@ -46,6 +47,7 @@ import { JobsModule } from "./jobs/jobs.module";
     ActionModule,
     AdminModule,
     BlogMentionModule,
+    SalesModule,
     JobsModule,
   ],
   controllers: [],

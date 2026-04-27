@@ -14,6 +14,7 @@ import {
   getGradeConfig,
 } from "@/lib/design-system";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SalesSection } from "@/components/reports/sales-section";
 import {
   Award,
   TrendingUp,
@@ -43,12 +44,15 @@ export default function ReportsPage() {
       {/* 헤더 */}
       <div>
         <h2 className="text-xl md:text-2xl font-bold tracking-tight text-text-primary">
-          주간 성과 리포트
+          매출 & 마케팅 성과
         </h2>
         <p className="text-sm text-text-secondary mt-0.5">
-          이번 주 마케팅 활동과 성과 요약
+          매출 입력 후 일/주/월 단위로 마케팅 효과 추적
         </p>
       </div>
+
+      {/* 매출 섹션 — 일/주/월 토글 + 차트 + AI ROI 인사이트 (사장님 룰: 본업이라 상단) */}
+      <SalesSection storeId={storeId} />
 
       {isLoading ? (
         <div className="space-y-4">

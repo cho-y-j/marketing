@@ -696,3 +696,23 @@ model BlogMention {
   @@unique([storeId, url])
   @@index([storeId, postedAt])
 }
+
+// ===== 매장 일별 매출 (사장님 입력 또는 영수증 OCR) =====
+// 사장님 룰: 캐시노트는 자동만, 우리는 수동 + AI ROI 매칭으로 차별화.
+// 진짜 가치 = "광고 시작 후 매출 +N%" 증명 → 매출 정확도보다 마케팅 매칭이 핵심.
+model Sales {
+  id          String   @id @default(cuid())
+  storeId     String
+  date        DateTime // 영업일 (UTC 자정 기준)
+  totalAmount Int // 총 매출 (원)
+  cardAmount  Int? // 카드 매출 (영수증에 분리되어 있으면)
+  cashAmount  Int? // 현금 매출
+  source      String   @default("MANUAL") // MANUAL | OCR
+  note        String?  @db.Text // 사장님 메모 ("이벤트 시작" 같은 마커용)
+  receiptText String?  @db.Text // OCR 추출 원본 텍스트 (재처리/감사용)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([storeId, date])
+  @@index([storeId, date])
+}
