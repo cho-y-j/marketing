@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { User, Sparkles, LogOut } from "lucide-react";
+import { User, Sparkles, LogOut, Receipt } from "lucide-react";
 import { NotificationBell } from "./notification-bell";
 import { StoreSwitcher } from "./store-switcher";
 import { apiClient } from "@/lib/api-client";
+import { useCurrentStoreId } from "@/hooks/useCurrentStore";
+import { SalesInputModal } from "@/components/reports/sales-input-modal";
 
 export function TopBar() {
   return (
@@ -27,10 +29,39 @@ export function TopBar() {
 
       {/* 우측 아이콘 — 절대 shrink 되지 않게 */}
       <div className="flex items-center gap-1 shrink-0 ml-auto">
+        <SalesQuickButton />
         <NotificationBell />
         <UserMenu />
       </div>
     </header>
+  );
+}
+
+function SalesQuickButton() {
+  const { storeId } = useCurrentStoreId();
+  const [open, setOpen] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (!storeId) return null;
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="size-10 rounded-full hover:bg-surface-tertiary transition-colors flex items-center justify-center"
+        aria-label="매출 입력"
+        title="매출 입력"
+      >
+        <Receipt size={18} className="text-text-secondary" />
+      </button>
+      {open && (
+        <SalesInputModal
+          storeId={storeId}
+          date={today}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }
 

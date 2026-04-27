@@ -10,6 +10,7 @@ import { OnboardingCard } from "@/components/dashboard/onboarding-card";
 import { SetupProgressCard } from "@/components/dashboard/setup-progress-card";
 import { SetupProgressRing } from "@/components/dashboard/setup-progress-ring";
 import { IngredientAlertBar } from "@/components/dashboard/ingredient-alert-bar";
+import { SalesMissingAlert } from "@/components/dashboard/sales-missing-alert";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { useCreateStore } from "@/hooks/useStore";
 import { useDashboard } from "@/hooks/useDashboard";
@@ -104,24 +105,15 @@ export default function DashboardPage() {
 
       {/* 셋업 진행 중 (기존 카드 — setupStatus RUNNING/FAILED 일 때만 노출) */}
       {storeId && <SetupProgressCard storeId={storeId} />}
-      <IngredientAlertBar storeId={storeId} />
+
+      {/* 슬림 알림 바 — 조건부 노출 */}
+      <div className="space-y-2">
+        <SalesMissingAlert storeId={storeId} />
+        <IngredientAlertBar storeId={storeId} />
+      </div>
 
       {/* ═══════════════════════════════════════ */}
-      {/* 섹션 1 ─ 🌅 어제까지 내 매장                 */}
-      {/* ═══════════════════════════════════════ */}
-      <MyStatusSection status={status} myWeeklyGrowth={myWeeklyGrowth} />
-
-      {/* ═══════════════════════════════════════ */}
-      {/* 섹션 2 ─ ⚡ 지금 경쟁 구도 (격차 강렬하게)   */}
-      {/* ═══════════════════════════════════════ */}
-      <CompetitionGapSection
-        myGrowth={myWeeklyGrowth}
-        topCompetitor={topCompetitor}
-        problems={problems}
-      />
-
-      {/* ═══════════════════════════════════════ */}
-      {/* 섹션 3 ─ 🎯 오늘 AI 1순위 할 일 (히어로)    */}
+      {/* 섹션 1 ─ 🎯 오늘 AI 1순위 할 일 (히어로) — 액션 퍼스트 */}
       {/* ═══════════════════════════════════════ */}
       {topAction && <TopActionHero action={topAction} />}
 
@@ -138,6 +130,20 @@ export default function DashboardPage() {
           </div>
         </section>
       )}
+
+      {/* ═══════════════════════════════════════ */}
+      {/* 섹션 2 ─ ⚡ 지금 경쟁 구도 (격차 강렬하게)   */}
+      {/* ═══════════════════════════════════════ */}
+      <CompetitionGapSection
+        myGrowth={myWeeklyGrowth}
+        topCompetitor={topCompetitor}
+        problems={problems}
+      />
+
+      {/* ═══════════════════════════════════════ */}
+      {/* 섹션 3 ─ 🌅 내 매장 지표                     */}
+      {/* ═══════════════════════════════════════ */}
+      <MyStatusSection status={status} myWeeklyGrowth={myWeeklyGrowth} />
 
       {/* ═══════════════════════════════════════ */}
       {/* 섹션 4 ─ 🔑 내 키워드 현황 TOP 3           */}
