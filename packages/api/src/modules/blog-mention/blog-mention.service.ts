@@ -26,27 +26,47 @@ export class BlogMentionService {
    * 매장 1개에 대해 네이버 블로그 검색 후 새 글만 upsert.
    * 매일 cron + 신규 등록 시 백필 둘 다 사용.
    *
-   * @returns { fetched, inserted } — 가져온 총 글 수 / 새로 저장한 수
+   * 노이즈 제거 (사장님 룰: 청주 매장에 서울 글 섞여 들어오는 문제):
+   *  - 검색어를 따옴표로 감싸 네이버 정확 매칭 강제 ("남해막창꼼장어")
+   *  - 결과 후필터 — title + snippet 에 매장명이 (공백 무시) 정확히 포함된 글만
+   *  - 기존 BlogMention 중 매장명 매칭 안 되는 row 자동 삭제 (수집 사이드 이펙트 cleanup)
+   *
+   * @returns { fetched, kept, inserted, removed } — 가져온 / 매장명 통과 / 신규저장 / 기존 정리
    */
-  async collectForStore(storeId: string): Promise<{ fetched: number; inserted: number }> {
+  async collectForStore(storeId: string): Promise<{
+    fetched: number;
+    kept: number;
+    inserted: number;
+    removed: number;
+  }> {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: { name: true },
     });
-    if (!store) return { fetched: 0, inserted: 0 };
+    if (!store) return { fetched: 0, kept: 0, inserted: 0, removed: 0 };
 
+    // 따옴표 정확 매칭 — 네이버 블로그 검색 API 는 "..." 인 경우 단어 그대로 매칭
+    const query = `"${store.name}"`;
     const items = await this.naverSearch
-      .searchBlog(store.name, 100, "date")
+      .searchBlog(query, 100, "date")
       .catch((e) => {
         this.logger.warn(`[blog-mention] "${store.name}" 검색 실패: ${e.message}`);
         return [];
       });
 
+    // post-filter: 매장명이 글 안에 정확히 있는 글만 통과 (공백 무시)
+    const normName = store.name.replace(/\s+/g, "").toLowerCase();
+    const matches = items.filter((it) => {
+      const haystack = (stripHtml(it.title || "") + " " + stripHtml(it.description || ""))
+        .replace(/\s+/g, "")
+        .toLowerCase();
+      return haystack.includes(normName);
+    });
+
     let inserted = 0;
-    for (const it of items) {
+    for (const it of matches) {
       const url = it.link?.trim();
       if (!url) continue;
-      // postdate "20260415" → Date
       const postedAt = this.parseDate(it.postdate);
       if (!postedAt) continue;
       const title = stripHtml(it.title || "").slice(0, 200);
@@ -56,7 +76,7 @@ export class BlogMentionService {
       try {
         await this.prisma.blogMention.upsert({
           where: { storeId_url: { storeId, url } },
-          update: {}, // 같은 URL 다시 받으면 indexedAt 만 유지 — title/snippet 갱신은 노이즈
+          update: {},
           create: { storeId, postedAt, title, url, blogger, snippet },
         });
         inserted++;
@@ -67,10 +87,31 @@ export class BlogMentionService {
       }
     }
 
+    // 기존 row cleanup — 매장명이 글 본문에 없는 row 는 노이즈로 보고 제거
+    const allExisting = await this.prisma.blogMention.findMany({
+      where: { storeId },
+      select: { id: true, title: true, snippet: true },
+    });
+    const toRemove = allExisting
+      .filter((row) => {
+        const haystack = ((row.title || "") + " " + (row.snippet || ""))
+          .replace(/\s+/g, "")
+          .toLowerCase();
+        return !haystack.includes(normName);
+      })
+      .map((r) => r.id);
+    let removed = 0;
+    if (toRemove.length > 0) {
+      const r = await this.prisma.blogMention.deleteMany({
+        where: { id: { in: toRemove } },
+      });
+      removed = r.count;
+    }
+
     this.logger.log(
-      `[blog-mention] ${store.name} — 가져옴 ${items.length} / 신규 ${inserted}`,
+      `[blog-mention] ${store.name} — 가져옴 ${items.length} / 매장명 통과 ${matches.length} / 신규 ${inserted} / 노이즈 정리 ${removed}`,
     );
-    return { fetched: items.length, inserted };
+    return { fetched: items.length, kept: matches.length, inserted, removed };
   }
 
   /**

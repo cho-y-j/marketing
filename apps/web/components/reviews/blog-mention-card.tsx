@@ -63,8 +63,11 @@ export function BlogMentionCard({ storeId }: { storeId?: string }) {
             </div>
             <div>
               <h3 className="text-sm font-bold tracking-tight">외부 블로그 mention</h3>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
+              <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
                 내 매장 이름이 들어간 다른 사람 블로그 글
+                <span className="block text-[10px] text-muted-foreground/70 mt-0.5">
+                  (매장 페이지에 직접 달린 블로그 리뷰와는 별개)
+                </span>
               </p>
             </div>
           </div>
