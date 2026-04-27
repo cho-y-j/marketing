@@ -1,11 +1,12 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, ExternalLink, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2 } from "lucide-react";
+import { BookOpen, ExternalLink, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 
 /**
  * 외부 블로그 mention 카드 — 캐시노트 "SNS 언급 감지" 의 한국 환경 버전.
@@ -36,6 +37,8 @@ type Overview = {
 
 export function BlogMentionCard({ storeId }: { storeId?: string }) {
   const qc = useQueryClient();
+  // 글 리스트 펼침 — 어제 새 글이 있으면 자동 펼침 (사장님 발견 의도), 없으면 접힘
+  const [expanded, setExpanded] = useState(false);
   const { data, isLoading } = useQuery<Overview>({
     queryKey: ["blog-mentions", storeId],
     queryFn: () =>
@@ -58,6 +61,11 @@ export function BlogMentionCard({ storeId }: { storeId?: string }) {
     },
     onError: (e: any) => toast.error("수집 실패: " + (e.response?.data?.message || e.message)),
   });
+
+  // 어제 새 글 있으면 자동 펼침
+  useEffect(() => {
+    if (data && data.yesterday > 0) setExpanded(true);
+  }, [data?.yesterday]);
 
   if (isLoading) {
     return <Skeleton className="h-48 w-full rounded-2xl" />;
@@ -136,12 +144,12 @@ export function BlogMentionCard({ storeId }: { storeId?: string }) {
           <Sparkline trend={data.trend} />
         )}
 
-        {/* 최근 글 리스트 */}
+        {/* 최근 글 리스트 — 기본 2건 + 더보기 (사장님 룰: 본업 내 리뷰 가까이 두기) */}
         {data.recent.length > 0 ? (
           <div className="space-y-1.5 pt-1">
             <p className="text-[11px] font-semibold text-muted-foreground px-0.5">최근 글</p>
             <ul className="space-y-1.5">
-              {data.recent.slice(0, 5).map((m) => (
+              {data.recent.slice(0, expanded ? 5 : 2).map((m) => (
                 <li key={m.id}>
                   <a
                     href={m.url}
@@ -176,6 +184,24 @@ export function BlogMentionCard({ storeId }: { storeId?: string }) {
                 </li>
               ))}
             </ul>
+            {/* 더보기 / 접기 — 글 3건+ 일 때만 노출 */}
+            {data.recent.length > 2 && (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="w-full inline-flex items-center justify-center gap-1 min-h-[36px] text-[11px] font-medium text-muted-foreground hover:text-foreground rounded-md hover:bg-muted/40 transition-colors"
+              >
+                {expanded ? (
+                  <>
+                    <ChevronUp size={12} /> 접기
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown size={12} /> {Math.min(data.recent.length, 5) - 2}건 더보기
+                  </>
+                )}
+              </button>
+            )}
           </div>
         ) : (
           <div className="text-center py-6 text-xs text-muted-foreground">
