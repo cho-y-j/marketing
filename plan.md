@@ -536,3 +536,38 @@ Phase 9: 키워드 품질 검증 & 매장명 변형 집계 ███████
 ### 한계 (다음 세션)
 - **Top 70 너머**: pcmap 도 SSR 70개 한계, 페이지네이션 클릭은 service worker 우회 GraphQL 로 캡쳐 불가. 현재 Top 70 가 단발 한계. adlog 가 어떻게 Top 300 까지 가는지는 reverse engineering 추가 필요
 - **순위(rank) 자체 백필 불가**: KeywordRankHistory 는 오늘 측정값 복제만. 진짜 순위 변동은 매일 cron 누적 7일 후부터
+
+---
+
+## 2026-04-27 세션 추가 — 매출 입력/OCR + 외부 블로그 mention + /reports 정돈
+
+### 완료
+- **외부 블로그 mention 풀 빌드** (`BlogMention` 모델 + `BlogMentionService`)
+  - 따옴표 정확 매칭 `"${storeName}"` + 정규화된 매장명 후필터 + 노이즈 row 자동 cleanup (서울대입구 글이 청주 매장에 섞이던 문제 해결)
+  - 30일 / 7일 / 어제 카운트 + 30일 미니 막대 + 7일 추세 + 경쟁사 평균
+  - 매장 등록 시 백필 + 매일 cron 수집 + 푸시
+  - `/reviews` 페이지에 카드 통합
+- **매출 입력 + OCR** (`Sales` 모델 + `SalesService` + `SalesController`)
+  - Google Vision API DOCUMENT_TEXT_DETECTION + 정규식 (Claude 후처리 X — 사장님 룰)
+  - 영수증 날짜 자동 추출 (YYYY-MM-DD / YY-MM-DD / 한글) → 미입력 날짜 채우기 가능
+  - 모달: 메뉴 → (수동/사진) → 확인. 큰 키패드, 카드/현금 보조, 메모(마커), `<input type="date">` 헤더 (오늘~60일전)
+  - `GET /sales` 일/주/월 집계, `GET /sales/roi` Claude AI 인사이트, `GET /sales/missing` 미입력 알림용
+- **/reports 페이지 정돈**
+  - 헤더: "주간 성과 리포트" → "매출 & 마케팅 성과"
+  - SalesSection (일/주/월 토글 + 막대 차트 + 마케팅 활동 마커 + AI ROI 인사이트) 상단 고정
+  - 등급/지역 순위/이번 주 액션 = 컴팩트 stat bar (3분할 divide)
+  - "ROI 추정" / "ROI 상세" 카드 제거 (실매출과 충돌)
+- **KAMIS 농수산물 가격 API 통합** + 한식 매장 쌀 자동 룰 (1자 식재료 검증 통과)
+
+### 보류 / 다음 세션
+- **Instagram mention 추적** (사장님: 카페·브런치·이자카야는 인스타가 본업)
+  - **v1**: `/settings/integrations` 에서 사장님 인스타 OAuth 연동 → 본인 매장 계정에 @멘션 / 태그된 사진 webhook → `/reviews` 인스타 탭. Meta 앱 검수 (`instagram_manage_comments`, `pages_show_list`) 1~2주 대기 동안 OAuth 흐름 + DB 스키마 + UI 선개발
+  - **v2**: 해시태그 검색 (Meta Hashtag Search API). Per app 24h 30개 한도라 **유료 플랜 한정 + 매장 등급 우선순위 큐**
+  - **v3 (보류)**: 위치 태그 검색. 2018년에 정식 API 빠짐. Apify 등 외부 SaaS 월 $50+ — 매장당 ROI 안 나옴
+  - 한국 자영업자 비즈니스 계정 전환율 30% 미만 → 가입 첫 화면에 안 넣음. 트렌디 가게 사장님 옵션
+- **B-2 AI 글 히스토리 persist** — 사장님 재현 케이스 명세 대기
+- **B-6 매장 등록 입력 오류** — 사장님 재현 케이스 명세 대기
+- **B-9 경쟁 매장 정책** — 의뢰자 원안(단일 키워드 Top 10) vs 현재(EXPOSURE 3 + DIRECT 3) 결정 대기
+- **B-10 홈 액션 퍼스트 재설계** — 큰 작업
+- **홈에 매출 누락 알림 카드** — `/sales/missing` API 는 있음, UI 미완 (21시 이후 + 오늘 미입력)
+- **홈 헤더에 매출 입력 작은 아이콘** — 사장님 우려("매출 입력이 메인에 있으면 너무 수동적") 후 절충안 미완
