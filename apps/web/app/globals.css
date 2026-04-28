@@ -204,6 +204,14 @@ h1, h2, h3, h4, h5, h6 {
          <button className="apple-pill-filled">Shop</button>
    ======================================== */
 @layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
   .apple-pill {
     display: inline-flex;
     align-items: center;

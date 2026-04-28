@@ -15,28 +15,26 @@ export function SetupProgressCard({ storeId, onComplete }: SetupProgressCardProp
 
   if (isLoading || !setup) return null;
 
-  // 진짜 완료 — 백엔드가 set한 "완료 —" 마커가 들어왔을 때
+  // 완료 판정 — status + 데이터 유무로만 (setupStep 텍스트 의존 폐기).
+  // 백엔드가 "완료 —" 마커 갱신을 누락해도 데이터가 충분하면 완료 처리.
   const isFullyDone =
     setup.status === "COMPLETED" &&
     setup.keywordCount > 0 &&
-    setup.competitorCount > 0 &&
-    setup.step?.startsWith("완료 —");
+    setup.competitorCount > 0;
 
   if (isFullyDone) {
     onComplete?.();
     return null;
   }
 
-  // status=COMPLETED 라도 데이터가 0이거나 setupStep에 진행 표현이 있으면 백그라운드 진행 중
-  // (백엔드가 Stage 1 직후 setupStatus=COMPLETED set하고 백그라운드 도는 구조 때문)
+  // status=PENDING/RUNNING 이거나, COMPLETED 인데 데이터 0 인 경우만 진행 중.
   const isStillProcessing =
     setup.status !== "FAILED" &&
     !setup.error &&
     (setup.status === "RUNNING" ||
       setup.status === "PENDING" ||
       setup.keywordCount === 0 ||
-      setup.competitorCount === 0 ||
-      (setup.step != null && /(진행 중|분석 중|수집 중|추가 분석)/.test(setup.step)));
+      setup.competitorCount === 0);
 
   const handleRetry = () => {
     retrySetup.mutate(storeId, {

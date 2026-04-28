@@ -42,6 +42,7 @@ export interface Action {
   // 신규: 구체적 가이드
   steps?: string[];           // 단계별 실행 방법
   expectedEffect?: string;    // 예상 효과 (예: "리뷰 5개 = 순위 +3위 추정")
+  estimatedMinutes?: number;  // 사장님 예상 소요 시간 (분)
   metric?: {                  // 측정 가능한 지표
     current: number;
     target: number;
@@ -381,6 +382,8 @@ export class MarketingEngineService {
         title: "리뷰 요청 시작하기",
         description: "방문 고객에게 리뷰를 요청하세요. AI가 리뷰 답글도 자동으로 작성합니다.",
         reason: "리뷰 30개 미만 — 다른 작업보다 리뷰가 최우선",
+        expectedEffect: "리뷰 5개 누적 시 평균 순위 +2~3위 상승",
+        estimatedMinutes: 20,
         href: "/reviews",
         priority: 100,
       });
@@ -389,6 +392,8 @@ export class MarketingEngineService {
         title: "기존 리뷰에 답글 달기",
         description: "답글이 달린 매장은 재방문율과 리뷰 작성률이 높아집니다.",
         reason: "리뷰 답글은 재방문 유도 효과가 있음",
+        expectedEffect: "답글률 80%+ 달성 시 신규 리뷰 +30%",
+        estimatedMinutes: 15,
         href: "/reviews",
         priority: 90,
       });
@@ -401,6 +406,8 @@ export class MarketingEngineService {
         title: "키워드 순위 체크",
         description: "현재 어떤 키워드에서 노출되고 있는지 확인하세요.",
         reason: "리뷰는 있지만 검색 유입이 없음 — 순위 확인 필요",
+        expectedEffect: "약점 키워드 1개 식별 → 다음 액션 자동 추천",
+        estimatedMinutes: 5,
         href: "/keywords",
         priority: 95,
       });
@@ -409,6 +416,8 @@ export class MarketingEngineService {
         title: "블로그 콘텐츠 생성",
         description: "키워드 맞춤 블로그 글로 검색 노출을 확보하세요.",
         reason: "블로그 노출이 플레이스 순위에 직접 영향",
+        expectedEffect: "1건 발행 = 해당 키워드 순위 +1~3위",
+        estimatedMinutes: 30,
         href: "/content",
         priority: 85,
       });
@@ -422,7 +431,9 @@ export class MarketingEngineService {
           title: `"${keywordStrategy.focusKeywords[0]}" 집중 공략`,
           description: `이 키워드가 가장 유망합니다. 관련 콘텐츠를 늘리세요.`,
           reason: "검색량 대비 순위가 좋은 키워드에 집중",
-          href: "/keywords",
+          expectedEffect: "콘텐츠 1건 = 해당 키워드 +2~5위",
+          estimatedMinutes: 30,
+          href: "/content",
           priority: 90,
         });
       }
@@ -431,6 +442,8 @@ export class MarketingEngineService {
         title: "경쟁사 동향 확인",
         description: "경쟁사의 리뷰/순위 변화를 모니터링하세요.",
         reason: "최적화 단계에서는 경쟁사 대비 포지션이 중요",
+        expectedEffect: "공격적 경쟁사 1곳 식별 → 대응 액션 자동 생성",
+        estimatedMinutes: 5,
         href: "/competitors",
         priority: 80,
       });
@@ -443,6 +456,8 @@ export class MarketingEngineService {
         title: "순위 모니터링",
         description: "상위 순위를 유지하기 위해 꾸준히 확인하세요.",
         reason: "상위권 유지가 곧 매출 유지",
+        expectedEffect: "이탈 키워드 조기 발견 → 즉시 보강 가능",
+        estimatedMinutes: 5,
         href: "/keywords",
         priority: 70,
       });
@@ -451,6 +466,8 @@ export class MarketingEngineService {
         title: "정기 콘텐츠 발행",
         description: "주 1~2회 플레이스 소식이나 블로그 글을 발행하세요.",
         reason: "꾸준한 활동이 알고리즘에 유리",
+        expectedEffect: "주 1건 4주 누적 = 평균 순위 +3~5위",
+        estimatedMinutes: 30,
         href: "/content",
         priority: 65,
       });
@@ -464,6 +481,8 @@ export class MarketingEngineService {
           title: "블로그 콘텐츠 생성",
           description: "경쟁사 대비 블로그 노출이 부족합니다.",
           reason: p.description,
+          expectedEffect: "1건 발행 = 블로그 노출 키워드 +2~3개",
+          estimatedMinutes: 30,
           href: "/content",
           priority: 75,
         });
@@ -474,6 +493,8 @@ export class MarketingEngineService {
           title: "순위 체크 실행",
           description: "현재 순위를 확인해야 전략을 세울 수 있습니다.",
           reason: "순위 데이터 없음",
+          expectedEffect: "키워드별 현 위치 파악 → 다음 액션 자동",
+          estimatedMinutes: 5,
           href: "/keywords",
           priority: 88,
         });

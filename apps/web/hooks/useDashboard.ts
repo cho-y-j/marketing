@@ -34,6 +34,10 @@ export function useDashboard(storeId: string) {
           type: string;
           title: string;
           description: string;
+          reason?: string;
+          expectedEffect?: string;
+          estimatedMinutes?: number;
+          steps?: string[];
           href: string;
         }>;
         aiPending?: boolean;
@@ -44,6 +48,19 @@ export function useDashboard(storeId: string) {
           change: number | null;
           monthlyVolume: number | null;
           type: string;
+        }>;
+        keywordDistribution?: {
+          rising: number;
+          flat: number;
+          falling: number;
+          weakest: { keyword: string; rank: number } | null;
+        };
+        competitorActions?: Array<{
+          title: string;
+          reason: string;
+          ctaLabel: string;
+          href: string;
+          severity: "info" | "warning" | "critical";
         }>;
         competitorComparison: Array<{
           name: string;

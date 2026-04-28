@@ -74,7 +74,7 @@ export class DashboardService {
       href: VALID_HREFS.has(a.href) ? a.href : typeToHref(a.type),
     }));
 
-    // === 4. 키워드 순위 현황 (상위 5개) ===
+    // === 4. 키워드 순위 현황 (상위 8개) ===
     const keywordRanks = keywords.slice(0, 8).map((k) => ({
       keyword: k.keyword,
       currentRank: k.currentRank,
@@ -85,6 +85,23 @@ export class DashboardService {
       monthlyVolume: k.monthlySearchVolume,
       type: k.type,
     }));
+
+    // === 4-b. 키워드 분포 (홈 § 1 진단용) ===
+    // change 부호: prev - cur. 양수 = 좋아짐(순위 낮아짐), 음수 = 나빠짐
+    let rising = 0;
+    let flat = 0;
+    let falling = 0;
+    let weakest: { keyword: string; rank: number } | null = null;
+    for (const k of keywordRanks) {
+      const c = k.change;
+      if (c == null || c === 0) flat++;
+      else if (c > 0) rising++;
+      else falling++;
+      if (k.currentRank != null && (!weakest || k.currentRank > weakest.rank)) {
+        weakest = { keyword: k.keyword, rank: k.currentRank };
+      }
+    }
+    const keywordDistribution = { rising, flat, falling, weakest };
 
     // === 5. 경쟁사 비교 요약 ===
     const competitorComparison = competitors.slice(0, 5).map((c) => ({
@@ -226,6 +243,47 @@ export class DashboardService {
       .filter((x): x is NonNullable<typeof x> => x != null)
       .sort((a, b) => (b.totalGrowth ?? 0) - (a.totalGrowth ?? 0));
 
+    // === 6-b. 경쟁 액션 카드 (홈 § 4 용) — "차이 + 원인 + 1탭 액션" ===
+    // 가장 공격적인 경쟁사 1개 vs 우리 주간 증감 비교 → 권장 액션
+    // dedup: § 2 actions 에 같은 type 있으면 § 4 에서 제외 (사장님 룰)
+    const actionTypes = new Set(topActions.map((a: any) => a.type));
+    const competitorActions: Array<{
+      title: string;
+      reason: string;
+      ctaLabel: string;
+      href: string;
+      severity: "info" | "warning" | "critical";
+    }> = [];
+    const topComp = competitorWeeklyGrowth[0];
+    if (topComp && myWeeklyGrowth) {
+      const myBlog = myWeeklyGrowth.blog ?? 0;
+      const compBlog = topComp.blog ?? 0;
+      const myVisitor = myWeeklyGrowth.visitor ?? 0;
+      const compVisitor = topComp.visitor ?? 0;
+      // 블로그 격차 — 가장 큰 신호
+      const blogDuplicate = actionTypes.has("BLOG_CONTENT") || actionTypes.has("CONTENT_REGULAR");
+      if (compBlog - myBlog >= 3 && !blogDuplicate) {
+        competitorActions.push({
+          title: `${topComp.name} 이번 주 블로그 +${compBlog}건`,
+          reason: `우리는 ${myBlog}건 — 격차 ${compBlog - myBlog}건`,
+          ctaLabel: "AI 블로그 글 작성",
+          href: "/content?type=BLOG",
+          severity: compBlog - myBlog >= 5 ? "critical" : "warning",
+        });
+      }
+      // 방문자 리뷰 격차
+      const reviewDuplicate = actionTypes.has("REVIEW") || actionTypes.has("REVIEW_REPLY");
+      if (compVisitor - myVisitor >= 5 && !reviewDuplicate) {
+        competitorActions.push({
+          title: `${topComp.name} 방문자 리뷰 +${compVisitor}건`,
+          reason: `우리는 ${myVisitor}건 — 리뷰 요청 시급`,
+          ctaLabel: "리뷰 요청 보내기",
+          href: "/reviews",
+          severity: compVisitor - myVisitor >= 10 ? "critical" : "warning",
+        });
+      }
+    }
+
     // === setupProgress 계산 (2026-04-24 진정한 백그라운드 가입용) ===
     // 6단계: 키워드/경쟁사/첫분석/순위체크/30일백필/브리핑
     const hasKeywords = keywords.length > 0;
@@ -287,7 +345,9 @@ export class DashboardService {
       aiPending: diagnosis.aiPending ?? false,
       keywordStrategy,
       keywordRanks,
+      keywordDistribution,
       competitorComparison,
+      competitorActions,
       myWeeklyGrowth,
       competitorWeeklyGrowth: competitorWeeklyGrowth.slice(0, 3),
       myMetrics: analysis
