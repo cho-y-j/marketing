@@ -186,22 +186,68 @@ export class IngredientPriceService {
     };
 
     const items: Array<any> = [];
+    // DB fallback 헬퍼 — KAMIS 라이브가 0 또는 매칭 실패 시 가장 최근 정상 가격으로 보강.
+    const dbFallback = async (name: string) => {
+      const last = await this.prisma.ingredientPrice.findFirst({
+        where: { itemName: name, price: { gt: 0 } },
+        orderBy: { date: "desc" },
+        select: {
+          price: true,
+          unit: true,
+          priceWeekAgo: true,
+          priceMonthAgo: true,
+          date: true,
+        },
+      });
+      return last;
+    };
     for (const name of store.keyIngredients) {
       const matched = await findMatch(name);
 
-      if (!matched) {
-        items.push({
-          itemName: name,
-          unit: "",
-          current: null,
-          previousWeek: null,
-          previousMonth: null,
-          weeklyChange: null,
-          weeklyChangeAmount: null,
-          monthlyChange: null,
-          monthlyChangeAmount: null,
-          lastUpdated: null,
-        });
+      // KAMIS 매칭 실패 또는 today=0 — DB fallback 우선시
+      // (KAMIS 가 today=0 으로 응답하는 경우 = 오늘 데이터 미업데이트 → DB 마지막 정상값이 더 정확)
+      const noLiveData = !matched || matched.today <= 0;
+
+      if (noLiveData) {
+        const last = await dbFallback(name);
+        if (last) {
+          // DB 에 저장된 시계열 값으로 변동률 계산
+          const wk = last.priceWeekAgo;
+          const mo = last.priceMonthAgo;
+          const weeklyChange =
+            wk != null && wk > 0 ? ((last.price - wk) / wk) * 100 : null;
+          const monthlyChange =
+            mo != null && mo > 0 ? ((last.price - mo) / mo) * 100 : null;
+          items.push({
+            itemName: name,
+            unit: last.unit,
+            current: last.price,
+            previousWeek: wk,
+            previousMonth: mo,
+            weeklyChange: weeklyChange != null ? +weeklyChange.toFixed(1) : null,
+            weeklyChangeAmount:
+              weeklyChange != null && wk != null ? last.price - wk : null,
+            weeklySuspicious: weeklyChange != null && Math.abs(weeklyChange) > 30,
+            monthlyChange: monthlyChange != null ? +monthlyChange.toFixed(1) : null,
+            monthlyChangeAmount:
+              monthlyChange != null && mo != null ? last.price - mo : null,
+            monthlySuspicious: monthlyChange != null && Math.abs(monthlyChange) > 50,
+            lastUpdated: last.date.toISOString().slice(0, 10),
+          });
+        } else {
+          items.push({
+            itemName: name,
+            unit: matched?.unit ?? "",
+            current: null,
+            previousWeek: null,
+            previousMonth: null,
+            weeklyChange: null,
+            weeklyChangeAmount: null,
+            monthlyChange: null,
+            monthlyChangeAmount: null,
+            lastUpdated: null,
+          });
+        }
         continue;
       }
 

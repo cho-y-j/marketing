@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { apiClient } from "@/lib/api-client";
 import { toast } from "sonner";
-import { TrendingUp, TrendingDown, Minus, AlertTriangle, Info, DollarSign, Plus, X, Loader2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, AlertTriangle, Info, DollarSign, Plus, X, Loader2, RotateCw } from "lucide-react";
 
 type PriceItem = {
   itemName: string;
@@ -44,7 +44,7 @@ export default function IngredientsPage() {
   const [newIngredient, setNewIngredient] = useState("");
   const [searchResults, setSearchResults] = useState<string[]>([]);
 
-  const { data, isLoading } = useQuery<{ items: PriceItem[]; alerts: Alert[] }>({
+  const { data, isLoading, isFetching } = useQuery<{ items: PriceItem[]; alerts: Alert[] }>({
     queryKey: ["ingredient-prices", storeId],
     queryFn: () =>
       apiClient.get(`/stores/${storeId}/ingredients/prices`).then((r) => r.data),
@@ -52,6 +52,11 @@ export default function IngredientsPage() {
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["ingredient-prices", storeId] });
+
+  const refresh = async () => {
+    await qc.invalidateQueries({ queryKey: ["ingredient-prices", storeId] });
+    toast.success("새로 불러왔어요");
+  };
 
   const addIngredient = async (name: string) => {
     try {
@@ -108,11 +113,23 @@ export default function IngredientsPage() {
             KAMIS 농수산물유통정보 · 매일 자동 갱신 · 주재료 {data?.items?.length ?? 0}개 추적
           </p>
         </div>
-        {data?.items?.[0]?.lastUpdated && (
-          <Badge variant="outline" className="text-xs">
-            {data.items[0].lastUpdated} 기준
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {data?.items?.[0]?.lastUpdated && (
+            <Badge variant="outline" className="text-xs">
+              {data.items[0].lastUpdated} 기준
+            </Badge>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refresh}
+            disabled={isFetching}
+            className="h-9 gap-1.5"
+          >
+            <RotateCw size={14} className={isFetching ? "animate-spin" : ""} />
+            새로고침
+          </Button>
+        </div>
       </div>
 
       {/* 재료 추가 */}
