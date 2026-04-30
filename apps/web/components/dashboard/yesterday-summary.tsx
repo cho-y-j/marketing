@@ -137,31 +137,31 @@ function ReviewActionCard({ action }: { action: CompetitorAction }) {
           "linear-gradient(135deg, #f5ecff 0%, #fbf2ff 40%, #fff7e6 100%)",
       }}
     >
-      <div className="flex items-stretch min-h-[180px] md:min-h-[200px]">
-        {/* 좌측 일러스트 — 고정 너비. 카드 가로 커져도 늘어나지 않음 */}
-        <div className="relative w-[160px] md:w-[200px] shrink-0 pointer-events-none select-none">
+      <div className="flex items-stretch min-h-[160px] sm:min-h-[180px] md:min-h-[200px]">
+        {/* 좌측 일러스트 — 폰에서 작게(112px), 큰 폰부터 점진 확대 */}
+        <div className="relative w-[112px] sm:w-[150px] md:w-[200px] shrink-0 pointer-events-none select-none">
           <Image
             src="/illustrations/review.png"
             alt=""
             fill
-            sizes="200px"
+            sizes="(max-width: 640px) 112px, (max-width: 768px) 150px, 200px"
             className="object-contain object-center p-2"
           />
         </div>
 
         {/* 우측 텍스트 + CTA — flex-1, 카드 가로 늘어나도 텍스트가 자연 줄바꿈 */}
-        <div className="flex-1 min-w-0 py-5 pr-5 pl-2 flex flex-col justify-center">
+        <div className="flex-1 min-w-0 py-4 pr-3 pl-2 sm:py-5 sm:pr-5 flex flex-col justify-center">
           <p className="text-sm font-semibold text-text-primary break-keep">
             {action.title}
           </p>
           <p className="mt-1.5 text-xs text-text-secondary leading-relaxed break-keep line-clamp-3">
             {action.reason}
           </p>
-          <Link href={action.href} className="inline-flex mt-3 self-start">
-            <button className="h-9 px-4 rounded-lg bg-brand text-white text-[12px] font-semibold hover:bg-brand-dark transition-colors inline-flex items-center gap-1">
-              <Sparkles size={12} />
-              <span>{action.ctaLabel}</span>
-              <ChevronRight size={13} />
+          <Link href={action.href} className="inline-flex mt-3 self-start max-w-full">
+            <button className="h-9 px-3 sm:px-4 rounded-lg bg-brand text-white text-[12px] font-semibold hover:bg-brand-dark transition-colors inline-flex items-center gap-1 max-w-full">
+              <Sparkles size={12} className="shrink-0" />
+              <span className="truncate">{action.ctaLabel}</span>
+              <ChevronRight size={13} className="shrink-0" />
             </button>
           </Link>
         </div>

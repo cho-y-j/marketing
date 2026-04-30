@@ -377,11 +377,17 @@ model KeywordRankHistory {
   storeId      String
   store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
   keyword      String
-  rank         Int? // null이면 50위 밖
+  rank         Int? // null이면 70위 밖 (pcmap MAX_RANK)
   totalResults Int?
   topPlaces    Json? // 상위 10개 매장 스냅샷
   checkedAt    DateTime @default(now())
+  // 사장님 룰 (2026-04-30): 일별 1개 row + 추정→실측 자연 마이그레이션.
+  //  - snapshotDate: 측정 일자. (storeId, keyword, snapshotDate) unique → 매일 1개씩.
+  //  - isEstimated: 백필=true, 실측=false. 매일 cron 이 같은 날짜 row 를 false 로 덮어씀.
+  snapshotDate DateTime @db.Date
+  isEstimated  Boolean  @default(false)
 
+  @@unique([storeId, keyword, snapshotDate])
   @@index([storeId, keyword, checkedAt])
   @@index([storeId, checkedAt])
 }

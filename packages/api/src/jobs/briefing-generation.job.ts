@@ -22,10 +22,10 @@ export class BriefingGenerationJob {
     @InjectQueue(QUEUES.BRIEFING) private briefingQueue: Queue,
   ) {}
 
-  @Cron("0 6 * * *")
+  @Cron("35 4 * * *") // UTC 04:35 = 한국 13:35
   async enqueueDailyBriefings() {
     const stores = await findAutoAnalysisStores(this.prisma, { caller: "BriefingGenerationJob" });
-    this.logger.log(`[06시] 브리핑 enqueue 대상 ${stores.length}개`);
+    this.logger.log(`[13:35] 브리핑 enqueue 대상 ${stores.length}개`);
 
     for (const store of stores) {
       await this.briefingQueue.add(

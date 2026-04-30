@@ -30,7 +30,7 @@ export class DailySnapshotJob {
     private notification: NotificationService,
   ) {}
 
-  @Cron("0 1 * * *") // 매일 01:00
+  @Cron("0 4 * * *") // UTC 04:00 = 한국 13:00 (사장님 룰 — 새벽엔 PC OFF)
   async runDaily() {
     const today = this.todayDate();
     this.logger.log(`[일별 스냅샷] 시작 — ${today.toISOString().slice(0, 10)}`);

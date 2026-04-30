@@ -21,10 +21,10 @@ export class ReviewBatchJob {
     @InjectQueue(QUEUES.REVIEW) private queue: Queue,
   ) {}
 
-  @Cron("0 3 * * *")
+  @Cron("15 4 * * *") // UTC 04:15 = 한국 13:15
   async enqueueDailyReviewFetch() {
     const stores = await findAutoAnalysisStores(this.prisma, { caller: "ReviewBatchJob" });
-    this.logger.log(`[03시] 리뷰 수집+초안 enqueue 대상 ${stores.length}개`);
+    this.logger.log(`[13:15] 리뷰 수집+초안 enqueue 대상 ${stores.length}개`);
     for (const store of stores) {
       await this.queue.add(
         "fetch-and-draft",

@@ -56,7 +56,13 @@ import { IngredientModule } from "../modules/ingredient/ingredient.module";
       { name: QUEUES.ANALYSIS },
       // 순위 체크는 IP 차단 누적 방지를 위해 매장 간 30초 쿨다운 — 동시에 한 건만 처리.
       // 매장 2개 연달아 등록해도 큐가 직렬화 + 30s 인터벌 강제.
-      { name: QUEUES.RANK_CHECK, limiter: { max: 1, duration: 30_000 } },
+      // lockDuration 5분: 매장당 키워드 N개 × pcmap 호출(키워드당 1~2초) 합산이
+      // Bull 기본 30초 lock 을 넘겨 stalled 처리되던 문제 — 4-27~4-29 4건 stalled 누적.
+      {
+        name: QUEUES.RANK_CHECK,
+        limiter: { max: 1, duration: 30_000 },
+        settings: { lockDuration: 300_000, lockRenewTime: 60_000, stalledInterval: 60_000 },
+      },
       { name: QUEUES.BRIEFING },
       { name: QUEUES.REVIEW },
     ),

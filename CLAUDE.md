@@ -116,6 +116,54 @@ adlog/                      # 레퍼런스 HTML (애드로그 화면 참고용, 
 상단 매장 선택 (StoreSwitcher) — 매장 1개여도 표시 + "+ 새 매장 추가"
 ```
 
+## 데이터 매칭 표준 (2026-04-30 — 룰 명시화)
+같은 패턴의 버그가 반복돼서 정리: "수집은 다 됐는데 매칭/룰이 코드와 어긋나서 UI 미표시". 
+**새 데이터 소스 추가하거나 변동 표시 추가 시 이 표를 따른다.**
+
+### A. 수집 원천 (Single Source of Truth)
+| 데이터 | 테이블 | 수집 잡 (한국 시각) | 키 |
+|---|---|---|---|
+| 내 매장 visitor/blog 누적 | `StoreDailySnapshot` | DailySnapshotJob 13:00 | `(storeId, date)` |
+| 등록 경쟁사 6명 visitor/blog | `CompetitorDailySnapshot` | DailySnapshotJob 13:00 | `(storeId, competitorPlaceId, date)` |
+| 키워드별 Top70 매장 + 각 매장의 visitor/blog | `KeywordRankHistory.topPlaces` | RankCheck 13:30 | `(storeId, keyword, snapshotDate)` |
+| 키워드 검색량 일별 | `KeywordDailyVolume` | KeywordManagement 월 13:20 | `(keyword, date)` |
+| KAMIS 가격 | `IngredientPrice` | IngredientPriceJob 13:50 | — |
+
+**중복 수집 금지**: pcmap SSR 1회 호출에 visitor/blog 함께 옴 → `KeywordRankHistory.topPlaces` 가 자동 누적 데이터셋. 별도 매장 API 호출 X.
+
+### B. 매칭 우선순위 (변동 계산 시 반드시 이 순서)
+1. **내 매장** (`isMine=true`) → `StoreDailySnapshot` (실측, 정밀)
+2. **등록 경쟁사 6명** → `CompetitorDailySnapshot` (실측, 정밀)
+3. **그 외 모든 Top70 매장** → `KeywordRankHistory.topPlaces` 폴백 (같은 placeId 의 N일전 카운트)
+4. 셋 다 없으면 `null` → UI 미표시 (또는 "비교없음" 칩)
+
+### C. 시간 기준 룰 (절대로 바꾸지 말 것)
+- **1일 = 어제** = `오늘 자정 이전 마지막 row` (latest의 직전 row 가 아님)
+- **7일/30일** = `N일 전 ± 12시간 윈도우`
+- **달력 임의 날짜** = `그 날 00:00 ~ 23:59 가장 최근 row`
+- **모든 cron** = UTC 기준 표현식, **한국 13:00~13:50 사이 실행** (사장님 PC ON 시간)
+
+### D. 자연 마이그레이션 룰 (모든 누적 테이블 공통)
+- 컬럼: `snapshotDate DATE` + `isEstimated BOOLEAN DEFAULT false`
+- Unique: `(주체, 키, snapshotDate)` (예: `(storeId, keyword, snapshotDate)`)
+- **백필 INSERT**: `isEstimated=true`, upsert 의 `update={}` (실측을 백필이 덮지 않음)
+- **실측 INSERT**: `isEstimated=false`, upsert 의 `update={..., isEstimated:false}` (추정→실측 덮어쓰기)
+- 결과: 시간이 지날수록 추정→실측 자연 마이그레이션
+
+### E. UI 표시 룰
+- 페이지 헤더 **반드시** "마지막 체크/갱신: 오늘 14:35" 표시 (사용자가 데이터 시점 알 수 있게)
+- 변동 칩: `null` → "비교없음" 회색 / `0` → "변동없음" 회색 / `>0` → 색 (D컨벤션) / `<0` → 색
+- 색 — visitor/blog 증감: 양수=빨강, 음수=파랑 (한국 주식식)
+- 색 — 순위 변동: 좋아짐(낮은 숫자)=파랑, 나빠짐(높은 숫자)=빨강
+- "1일/7일/30일/날짜선택" 토글 — `(어제)` 같은 부연 X (당연하므로)
+
+### F. 새 변동 표시 추가 시 체크리스트
+1. 매칭 키 = placeId? storeId? snapshotDate? — A 표 참조
+2. 우선순위 1→2→3→null 폴백 구현했나 — B 룰
+3. 시간 윈도우 — C 룰
+4. 새 누적 테이블이면 isEstimated/snapshotDate/upsert — D 룰
+5. UI 헤더에 "마지막 ..." 시각 + 비교없음/변동없음 칩 — E 룰
+
 ## 핵심 플로우
 ```
 1. 가입 → 플레이스 URL 입력 → 매장 정보 자동 수집

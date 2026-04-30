@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
 import { apiClient } from "@/lib/api-client";
@@ -90,11 +90,12 @@ export default function KeywordDetailPage({
             재분석
           </Button>
           {/* 이 키워드로 AI 글 작성 — /content 딥링크 */}
-          <Button asChild size="sm">
-            <Link href={`/content?type=PLACE_POST&keyword=${encodeURIComponent(keyword)}`}>
-              <Wand2 size={14} className="mr-1" /> AI 글 작성
-            </Link>
-          </Button>
+          <Link
+            href={`/content?type=PLACE_POST&keyword=${encodeURIComponent(keyword)}`}
+            className={buttonVariants({ size: "sm" })}
+          >
+            <Wand2 size={14} className="mr-1" /> AI 글 작성
+          </Link>
         </div>
       </div>
 

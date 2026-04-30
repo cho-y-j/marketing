@@ -12,12 +12,12 @@ export class IngredientPriceJob {
 
   constructor(private service: IngredientPriceService) {}
 
-  @Cron("0 21 * * *") // 한국 06:00 AM
+  @Cron("50 4 * * *") // UTC 04:50 = 한국 13:50 (사장님 룰 — 새벽엔 PC OFF)
   async runDaily() {
-    this.logger.log("[KAMIS 가격 수집] 시작");
+    this.logger.log("[13:50 KAMIS 가격 수집] 시작");
     try {
       const res = await this.service.collectDailyPrices();
-      this.logger.log(`[KAMIS 가격 수집] 완료 — 수집 ${res.collected}, 알림 ${res.alerts}`);
+      this.logger.log(`[13:50 KAMIS 가격 수집] 완료 — 수집 ${res.collected}, 알림 ${res.alerts}`);
     } catch (e: any) {
       this.logger.error(`[KAMIS 가격 수집] 실패: ${e.message}`);
     }

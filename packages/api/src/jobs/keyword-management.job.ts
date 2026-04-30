@@ -31,7 +31,7 @@ export class KeywordManagementJob {
     private searchad: NaverSearchadProvider,
   ) {}
 
-  @Cron("0 3 * * 1") // 매주 월요일 03:00
+  @Cron("20 4 * * 1") // UTC 04:20 월 = 한국 월요일 13:20
   async weeklyKeywordManagement() {
     const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, userId: true, district: true, category: true },

@@ -13,10 +13,10 @@ export class EffectMeasurementJob {
 
   constructor(private actionTracking: ActionTrackingService) {}
 
-  @Cron("0 7 * * *")
+  @Cron("40 4 * * *") // UTC 04:40 = 한국 13:40
   async measureDailyEffects() {
-    this.logger.log("[07:00] 액션 효과 측정 시작");
+    this.logger.log("[13:40] 액션 효과 측정 시작");
     const result = await this.actionTracking.measurePendingEffects();
-    this.logger.log(`[07:00] 액션 효과 측정 완료: ${result.measured}/${result.total}건`);
+    this.logger.log(`[13:40] 액션 효과 측정 완료: ${result.measured}/${result.total}건`);
   }
 }

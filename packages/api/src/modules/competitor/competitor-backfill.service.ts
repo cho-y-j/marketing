@@ -198,15 +198,25 @@ export class CompetitorBackfillService {
         });
         if (existing) continue;
 
-        await this.prisma.keywordRankHistory.create({
-          data: {
+        // 백필은 isEstimated=true. 같은 (storeId, keyword, snapshotDate) row 가 이미 있으면 skip
+        // (실측이 이미 들어왔으면 백필이 덮으면 안 됨).
+        const snapshotDate = new Date(checkedAt);
+        snapshotDate.setUTCHours(0, 0, 0, 0);
+        await this.prisma.keywordRankHistory.upsert({
+          where: {
+            storeId_keyword_snapshotDate: { storeId, keyword, snapshotDate },
+          },
+          create: {
             storeId,
             keyword,
             rank: latest.rank,
             totalResults: latest.totalResults,
             topPlaces: latest.topPlaces ?? undefined,
             checkedAt,
+            snapshotDate,
+            isEstimated: true,
           },
+          update: {}, // 기존 row 보존 — 실측을 백필이 덮지 않음
         });
         rowsCreated++;
       }

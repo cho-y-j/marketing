@@ -128,8 +128,11 @@ export function SalesInputModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4 break-keep">
-      <div className="w-full md:max-w-md bg-white rounded-t-2xl md:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-[70] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4 break-keep">
+      <div
+        className="w-full md:max-w-md bg-white rounded-t-2xl md:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
         {/* 헤더 — 날짜 변경 가능 (며칠 전 매출 입력 가능, 영수증 OCR 자동 설정) */}
         <div className="sticky top-0 bg-white border-b border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-1 min-w-0">

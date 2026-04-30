@@ -16,12 +16,12 @@ export class CompetitorPlaceIdBackfillJob {
 
   constructor(private competitorService: CompetitorService) {}
 
-  @Cron("0 2 * * *") // 매일 02:00
+  @Cron("5 4 * * *") // UTC 04:05 = 한국 13:05 (DailySnapshot 직후)
   async backfill() {
-    this.logger.log(`[02시] 경쟁사 placeId 재보강 시작`);
+    this.logger.log(`[13:05] 경쟁사 placeId 재보강 시작`);
     const result = await this.competitorService.backfillNullPlaceIds();
     this.logger.log(
-      `[02시] 경쟁사 placeId 재보강 완료 — 전체 ${result.total}건, 확보 ${result.filled}건, 미확보 ${result.stillMissing.length}건`,
+      `[13:05] 경쟁사 placeId 재보강 완료 — 전체 ${result.total}건, 확보 ${result.filled}건, 미확보 ${result.stillMissing.length}건`,
     );
     if (result.stillMissing.length > 0) {
       this.logger.warn(

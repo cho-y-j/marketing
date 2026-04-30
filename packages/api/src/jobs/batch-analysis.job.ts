@@ -33,11 +33,11 @@ export class BatchAnalysisJob {
     @InjectQueue(QUEUES.RANK_CHECK) private rankQueue: Queue,
   ) {}
 
-  // 04:00 분석 enqueue (시차 분산)
-  @Cron("0 4 * * *")
+  // UTC 04:25 = 한국 13:25 분석 enqueue (시차 분산)
+  @Cron("25 4 * * *")
   async enqueueDailyAnalysis() {
     const stores = await this.getActiveStores();
-    this.logger.log(`[04시] 분석 enqueue 대상 ${stores.length}개 (${this.calcInterval(stores.length)}초 간격)`);
+    this.logger.log(`[13:25] 분석 enqueue 대상 ${stores.length}개 (${this.calcInterval(stores.length)}초 간격)`);
 
     const interval = this.calcInterval(stores.length);
 
@@ -58,11 +58,11 @@ export class BatchAnalysisJob {
     }
   }
 
-  // 05:00 순위 체크 enqueue (시차 분산)
-  @Cron("0 5 * * *")
+  // UTC 04:30 = 한국 13:30 순위 체크 enqueue (시차 분산)
+  @Cron("30 4 * * *")
   async enqueueDailyRankCheck() {
     const stores = await this.getActiveStores();
-    this.logger.log(`[05시] 순위 체크 enqueue 대상 ${stores.length}개 (${this.calcInterval(stores.length)}초 간격)`);
+    this.logger.log(`[13:30] 순위 체크 enqueue 대상 ${stores.length}개 (${this.calcInterval(stores.length)}초 간격)`);
 
     const interval = this.calcInterval(stores.length);
 

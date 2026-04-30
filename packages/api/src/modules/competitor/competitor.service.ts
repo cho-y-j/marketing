@@ -209,6 +209,7 @@ export class CompetitorService {
   async refreshAll(storeId: string) {
     const competitors = await this.prisma.competitor.findMany({ where: { storeId } });
     let updated = 0;
+    const failed: string[] = [];
     const allChanges: Array<{ type: string; name: string; detail: string }> = [];
 
     for (const c of competitors) {
@@ -218,11 +219,28 @@ export class CompetitorService {
           allChanges.push(...result.changes);
         }
         updated++;
-      } catch {}
+      } catch (e: any) {
+        this.logger.warn(`[refreshAll] ${c.competitorName} 실패: ${e?.message || e}`);
+        failed.push(c.competitorName);
+      }
       await new Promise((r) => setTimeout(r, 1000));
     }
 
-    return { updated, total: competitors.length, changes: allChanges };
+    const refreshedAt = new Date();
+    // 갱신된 경쟁사들의 lastComparedAt 재조회 — UI 가 "마지막 갱신" 표시할 수 있게
+    const refreshedRows = await this.prisma.competitor.findMany({
+      where: { storeId },
+      select: { id: true, competitorName: true, lastComparedAt: true },
+    });
+
+    return {
+      updated,
+      total: competitors.length,
+      failed,
+      changes: allChanges,
+      refreshedAt,
+      competitors: refreshedRows,
+    };
   }
 
   // 경쟁매장 실데이터 수집 (네이버 API 기반 — Chrome 불필요)

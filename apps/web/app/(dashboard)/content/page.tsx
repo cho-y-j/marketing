@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,6 +22,15 @@ const contentTypes = [
 const VALID_TYPES = new Set(["PLACE_POST", "REVIEW_REPLY", "SNS_POST", "BLOG_POST"]);
 
 export default function ContentPage() {
+  // useSearchParams 는 client-only — Next 16 빌드 시 prerender 단계에서 Suspense 경계 필수
+  return (
+    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+      <ContentPageInner />
+    </Suspense>
+  );
+}
+
+function ContentPageInner() {
   const { storeId } = useCurrentStoreId();
   const searchParams = useSearchParams();
   const { data: keywords } = useKeywords(storeId);

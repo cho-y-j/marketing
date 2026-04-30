@@ -27,7 +27,7 @@ export class CompetitorRefreshJob {
     private ai: AIProvider,
   ) {}
 
-  @Cron("30 2 * * *") // 02:30 — 분석(04:00) 전에 경쟁사 데이터 미리 갱신 (API만, CLI 안 씀)
+  @Cron("10 4 * * *") // UTC 04:10 = 한국 13:10 (분석 전에 경쟁사 데이터 갱신)
   async refreshAllCompetitors() {
     const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, userId: true },

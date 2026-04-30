@@ -66,14 +66,29 @@ export class RankCheckService {
         },
       });
 
-      // 히스토리 레코드 생성 (일별 누적)
-      await this.prisma.keywordRankHistory.create({
-        data: {
+      // 히스토리 — (storeId, keyword, snapshotDate) upsert. 실측이 추정 덮어씀 (사장님 자연 마이그레이션 룰).
+      const snapshotDate = new Date(result.checkedAt);
+      snapshotDate.setUTCHours(0, 0, 0, 0);
+      await this.prisma.keywordRankHistory.upsert({
+        where: {
+          storeId_keyword_snapshotDate: { storeId, keyword: result.keyword, snapshotDate },
+        },
+        create: {
           storeId,
           keyword: result.keyword,
           rank: result.rank,
           totalResults: result.totalResults,
           topPlaces: result.topPlaces,
+          checkedAt: result.checkedAt,
+          snapshotDate,
+          isEstimated: false,
+        },
+        update: {
+          rank: result.rank,
+          totalResults: result.totalResults,
+          topPlaces: result.topPlaces,
+          checkedAt: result.checkedAt,
+          isEstimated: false, // 추정→실측 덮어쓰기
         },
       });
 
@@ -235,13 +250,28 @@ export class RankCheckService {
 
     // 히스토리 저장 — reliable=false 면 currentRank 오염 방지로 기록 X
     if (result.reliable) {
-      await this.prisma.keywordRankHistory.create({
-        data: {
+      const snapshotDate = new Date(result.checkedAt);
+      snapshotDate.setUTCHours(0, 0, 0, 0);
+      await this.prisma.keywordRankHistory.upsert({
+        where: {
+          storeId_keyword_snapshotDate: { storeId, keyword, snapshotDate },
+        },
+        create: {
           storeId,
           keyword,
           rank: result.rank,
           totalResults: result.totalResults,
           topPlaces: result.topPlaces,
+          checkedAt: result.checkedAt,
+          snapshotDate,
+          isEstimated: false,
+        },
+        update: {
+          rank: result.rank,
+          totalResults: result.totalResults,
+          topPlaces: result.topPlaces,
+          checkedAt: result.checkedAt,
+          isEstimated: false,
         },
       });
     }
@@ -283,12 +313,27 @@ export class RankCheckService {
         store.mapx, store.mapy,
       );
       if (result.reliable) {
-        latest = await this.prisma.keywordRankHistory.create({
-          data: {
+        const snapshotDate = new Date(result.checkedAt);
+        snapshotDate.setUTCHours(0, 0, 0, 0);
+        latest = await this.prisma.keywordRankHistory.upsert({
+          where: {
+            storeId_keyword_snapshotDate: { storeId, keyword, snapshotDate },
+          },
+          create: {
             storeId, keyword,
             rank: result.rank,
             totalResults: result.totalResults,
             topPlaces: result.topPlaces as any,
+            checkedAt: result.checkedAt,
+            snapshotDate,
+            isEstimated: false,
+          },
+          update: {
+            rank: result.rank,
+            totalResults: result.totalResults,
+            topPlaces: result.topPlaces as any,
+            checkedAt: result.checkedAt,
+            isEstimated: false,
           },
         });
       }
@@ -429,7 +474,10 @@ export class RankCheckService {
         (p.placeId && prevPlaceMap.get(p.placeId)) || prevPlaceMap.get(p.name) || null;
       const rankChange = fromHistory?.rank != null ? fromHistory.rank - p.rank : null;
 
-      // 비교용 과거 누적값
+      // 비교용 과거 누적값 — CLAUDE.md "데이터 매칭 표준 B" 우선순위:
+      //  1) 내 매장 = StoreDailySnapshot
+      //  2) 등록 경쟁사 = CompetitorDailySnapshot (정밀)
+      //  3) 그 외 모든 Top70 매장 = KeywordRankHistory.topPlaces 폴백 (fromHistory)
       let pastVisitor: number | null = null;
       let pastBlog: number | null = null;
       if (p.isMine) {
@@ -439,6 +487,13 @@ export class RankCheckService {
         const snap = compSnapMap.get(p.placeId);
         pastVisitor = snap?.visitorReviewCount ?? null;
         pastBlog = snap?.blogReviewCount ?? null;
+      }
+      // 폴백 — 등록 경쟁사 외 매장은 KeywordRankHistory.topPlaces 의 과거 카운트로 매칭
+      if (pastVisitor == null && fromHistory?.visitorReviewCount != null) {
+        pastVisitor = fromHistory.visitorReviewCount;
+      }
+      if (pastBlog == null && fromHistory?.blogReviewCount != null) {
+        pastBlog = fromHistory.blogReviewCount;
       }
 
       const visitorDelta =

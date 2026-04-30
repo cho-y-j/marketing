@@ -32,6 +32,26 @@ const PERIOD_LABEL: Record<Period, string> = {
 type Metric = "visitor" | "blog";
 type SortKey = "cumulative" | "delta" | "rate";
 
+// "방금 전 / N분 전 / 오늘 14:35 / 04-29 14:35" 상대 표기
+function formatLastUpdated(d: Date | null): string {
+  if (!d) return "갱신 기록 없음";
+  const diffMs = Date.now() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return "방금 전";
+  if (diffMin < 60) return `${diffMin}분 전`;
+  const today = new Date();
+  const isToday =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (isToday) return `오늘 ${hh}:${mm}`;
+  const M = String(d.getMonth() + 1).padStart(2, "0");
+  const D = String(d.getDate()).padStart(2, "0");
+  return `${M}-${D} ${hh}:${mm}`;
+}
+
 // 상태 판정 — 정석: 경쟁사 평균 rate 대비 + 절대값 하한 (작은 매장 부풀림 방지)
 //   급증: rate ≥ avg × 1.5  AND  delta ≥ 5
 //   활발: rate ≥ avg          AND  delta ≥ 3
@@ -89,6 +109,18 @@ export default function CompetitorsPage() {
 
   const [newName, setNewName] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshOverride, setRefreshOverride] = useState<Date | null>(null);
+
+  // 경쟁사 데이터의 lastComparedAt 중 최신값 = "마지막 갱신" 시각
+  // (refresh 직후엔 refreshOverride 우선 — refetch 도착 전 즉시 표시)
+  const lastUpdatedAt = useMemo(() => {
+    if (refreshOverride) return refreshOverride;
+    const ts = (competitors ?? [])
+      .map((c: any) => c.lastComparedAt)
+      .filter(Boolean)
+      .map((d: any) => new Date(d).getTime());
+    return ts.length ? new Date(Math.max(...ts)) : null;
+  }, [competitors, refreshOverride]);
   const [period, setPeriod] = useState<Period>("week");
   const [sortMetric, setSortMetric] = useState<Metric>("visitor"); // 순위 기준
   const [sortKey, setSortKey] = useState<SortKey>("cumulative");
@@ -265,12 +297,24 @@ export default function CompetitorsPage() {
     setRefreshing(true);
     try {
       toast.info("경쟁사 데이터 갱신 중...");
-      await apiClient.post(`/stores/${storeId}/competitors/refresh`);
-      toast.success("갱신 완료");
+      const { data } = await apiClient.post(`/stores/${storeId}/competitors/refresh`);
+      const updated = data?.updated ?? 0;
+      const total = data?.total ?? 0;
+      const failedCount = (data?.failed ?? []).length;
+      if (data?.refreshedAt) setRefreshOverride(new Date(data.refreshedAt));
+      if (failedCount > 0) {
+        toast.warning(`${updated}/${total}곳 갱신 — ${failedCount}곳 실패`);
+      } else if (updated === 0) {
+        toast.error("갱신 실패 — 경쟁사 0곳 처리됨");
+      } else {
+        toast.success(`${updated}/${total}곳 갱신 완료`);
+      }
       refetch();
-    } catch {
-      toast.error("갱신 실패");
-    } finally { setRefreshing(false); }
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message || "갱신 실패");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   if (isLoading) {
@@ -296,6 +340,8 @@ export default function CompetitorsPage() {
             {tab === "EXPOSURE"
               ? `대표 키워드 Top 매장 (업종 불문) · ${competitors?.length ?? 0}곳`
               : `같은 업종 직접 경쟁 · ${competitors?.length ?? 0}곳`}
+            <span className="mx-1.5 opacity-50">·</span>
+            <span>마지막 갱신: {formatLastUpdated(lastUpdatedAt)}</span>
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={handleRefresh} disabled={refreshing}>

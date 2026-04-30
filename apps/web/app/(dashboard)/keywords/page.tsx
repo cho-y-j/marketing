@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentStoreId } from "@/hooks/useCurrentStore";
@@ -29,11 +29,21 @@ export default function KeywordsPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState<any>(null);
   const [adding, setAdding] = useState(false);
+  // 변동 표시 기간 — 1일/7일/30일 + 임의 날짜 (사장님 룰: 한 번에 하나만 표기)
+  const [period, setPeriod] = useState<"1d" | "7d" | "30d" | "date">("1d");
+  const [customDate, setCustomDate] = useState<string>("");
+  const [sortBy, setSortBy] = useState<"volume" | "rank" | "name">("volume");
 
+  // compareDate 가 활성화된 경우(period=date + 유효한 날짜) 백엔드에 파라미터 전달
+  const activeCompareDate = period === "date" && customDate ? customDate : undefined;
   const { data: keywords, isLoading, refetch } = useQuery({
-    queryKey: ["keywords-with-competition", storeId],
+    queryKey: ["keywords-with-competition", storeId, activeCompareDate],
     queryFn: () =>
-      apiClient.get(`/stores/${storeId}/keywords/with-competition`).then((r) => r.data),
+      apiClient
+        .get(`/stores/${storeId}/keywords/with-competition`, {
+          params: activeCompareDate ? { compareDate: activeCompareDate } : undefined,
+        })
+        .then((r) => r.data),
     enabled: !!storeId,
   });
 
@@ -88,8 +98,19 @@ export default function KeywordsPage() {
 
   const handleRankCheck = () => {
     rankCheck.mutate(undefined, {
-      onSuccess: () => {
-        toast.success("순위 체크 완료");
+      onSuccess: (data: any) => {
+        const results = data?.results ?? [];
+        const ok = results.filter((r: any) => r.currentRank != null).length;
+        const total = results.length;
+        if (total === 0) {
+          toast.warning("추적 키워드가 없습니다");
+        } else if (ok === 0) {
+          toast.error(`순위 체크 — ${total}개 모두 신뢰 불가 (네이버 차단 또는 좌표 누락)`);
+        } else if (ok < total) {
+          toast.warning(`${ok}/${total}개 갱신 — ${total - ok}개는 신뢰도 부족으로 이전 값 유지`);
+        } else {
+          toast.success(`${total}개 키워드 순위 갱신 완료`);
+        }
         qc.invalidateQueries({ queryKey: ["keywords-with-competition", storeId] });
       },
       onError: (e: any) =>
@@ -97,9 +118,34 @@ export default function KeywordsPage() {
     });
   };
 
-  const [sortBy, setSortBy] = useState<"volume" | "rank" | "name">("volume");
-  // 변동 표시 기간 — 1일/7일/30일 토글 (사장님 룰: 한 번에 하나만 표기)
-  const [period, setPeriod] = useState<"1d" | "7d" | "30d">("1d");
+  // 키워드 lastCheckedAt 중 최신값 = "마지막 순위 체크" 시각
+  const lastRankCheckedAt = useMemo(() => {
+    const ts = (keywords ?? [])
+      .map((k: any) => k.lastCheckedAt)
+      .filter(Boolean)
+      .map((d: any) => new Date(d).getTime());
+    return ts.length ? new Date(Math.max(...ts)) : null;
+  }, [keywords]);
+
+  // "방금 전 / N분 전 / 오늘 14:35 / 04-29 14:35" 상대 표기
+  const formatLastChecked = (d: Date | null): string => {
+    if (!d) return "체크 기록 없음";
+    const diffMin = Math.floor((Date.now() - d.getTime()) / 60_000);
+    if (diffMin < 1) return "방금 전";
+    if (diffMin < 60) return `${diffMin}분 전`;
+    const today = new Date();
+    const isToday =
+      d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    if (isToday) return `오늘 ${hh}:${mm}`;
+    const M = String(d.getMonth() + 1).padStart(2, "0");
+    const D = String(d.getDate()).padStart(2, "0");
+    return `${M}-${D} ${hh}:${mm}`;
+  };
+
   const kwsRaw = keywords ?? [];
   const kws = [...kwsRaw].sort((a: any, b: any) => {
     if (sortBy === "rank") {
@@ -119,6 +165,8 @@ export default function KeywordsPage() {
           <h2 className="text-xl md:text-2xl font-bold">키워드 분석</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             {kws.length}개 키워드 · 검색 키워드별 내 순위와 상위 매장 비교
+            <span className="mx-1.5 opacity-50">·</span>
+            <span>마지막 체크: {formatLastChecked(lastRankCheckedAt)}</span>
           </p>
         </div>
         <Button
@@ -202,18 +250,13 @@ export default function KeywordsPage() {
                         <><Plus size={14} className="mr-1" /> 추가하기</>
                       )}
                     </Button>
-                    <Button
-                      asChild
-                      variant="outline"
-                      size="sm"
+                    <Link
+                      href={`/content?type=PLACE_POST&keyword=${encodeURIComponent(previewData.keyword)}`}
                       title="이 키워드로 AI 콘텐츠 즉시 생성"
+                      className={buttonVariants({ variant: "outline", size: "sm" })}
                     >
-                      <Link
-                        href={`/content?type=PLACE_POST&keyword=${encodeURIComponent(previewData.keyword)}`}
-                      >
-                        <Wand2 size={14} className="mr-1" /> AI 글 작성
-                      </Link>
-                    </Button>
+                      <Wand2 size={14} className="mr-1" /> AI 글 작성
+                    </Link>
                   </div>
                 </>
               ) : (
@@ -242,16 +285,17 @@ export default function KeywordsPage() {
       {/* 변동 기간 + 정렬 토글 */}
       {kws.length > 0 && (
         <div className="flex items-center gap-3 text-xs flex-wrap">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-muted-foreground mr-1">변동:</span>
             {[
               { key: "1d", label: "1일" },
               { key: "7d", label: "7일" },
               { key: "30d", label: "30일" },
+              { key: "date", label: "날짜선택" },
             ].map((opt) => (
               <button
                 key={opt.key}
-                onClick={() => setPeriod(opt.key as "1d" | "7d" | "30d")}
+                onClick={() => setPeriod(opt.key as "1d" | "7d" | "30d" | "date")}
                 className={`px-3 min-h-[36px] rounded-md border transition-colors ${
                   period === opt.key
                     ? "bg-primary text-primary-foreground border-primary"
@@ -261,6 +305,15 @@ export default function KeywordsPage() {
                 {opt.label}
               </button>
             ))}
+            {period === "date" && (
+              <input
+                type="date"
+                value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                max={new Date().toISOString().slice(0, 10)}
+                className="px-2 min-h-[36px] rounded-md border border-border bg-white text-xs"
+              />
+            )}
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground mr-1">정렬:</span>
@@ -307,6 +360,7 @@ export default function KeywordsPage() {
               storeId={storeId}
               onChange={refetch}
               period={period}
+              customDate={customDate}
               searchFlow={searchFlow?.[kw.keyword]}
             />
           ))}
@@ -330,12 +384,13 @@ export default function KeywordsPage() {
 }
 
 function KeywordCard({
-  kw, storeId, onChange, period, searchFlow,
+  kw, storeId, onChange, period, customDate, searchFlow,
 }: {
   kw: any;
   storeId?: string;
   onChange: () => void;
-  period: "1d" | "7d" | "30d";
+  period: "1d" | "7d" | "30d" | "date";
+  customDate?: string;
   searchFlow?: { today: number | null; yesterday: number | null; delta: number | null };
 }) {
   const router = useRouter();
@@ -461,14 +516,21 @@ function KeywordCard({
                 </div>
               )}
               {/* 순위 변동 — 토글된 기간 한 가지만 표기. 좋아짐 = 파랑, 나빠짐 = 빨강 */}
-              <div className="mt-0.5">
+              <div className="mt-1">
                 <RankDelta
-                  label={period === "1d" ? "1일" : period === "7d" ? "7일" : "30일"}
+                  label={
+                    period === "1d" ? "1일"
+                    : period === "7d" ? "7일"
+                    : period === "30d" ? "30일"
+                    : customDate ? customDate.slice(5) : "날짜"
+                  }
                   change={
                     period === "1d" ? kw.rankChange :
                     period === "7d" ? kw.rankChange7d :
-                    kw.rankChange30d
+                    period === "30d" ? kw.rankChange30d :
+                    kw.rankChangeCustom
                   }
+                  hasCurrentRank={kw.currentRank != null || kw.myPlace?.rank != null}
                 />
               </div>
               <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover:text-primary transition-colors" />
@@ -501,34 +563,59 @@ function KeywordCard({
 }
 
 // 순위 변동 표시 — change > 0 = 순위 상승(좋음, 파랑), < 0 = 하락(나쁨, 빨강).
-// rankChange 가 null 이면 비교 데이터 없음 — 표시 안 함.
-function RankDelta({ label, change }: { label: string; change: number | null | undefined }) {
-  if (change == null) return null;
+// 사장님 룰 (2026-04-30): "이걸 보기 위한 화면" — 변동을 명확히 보이게.
+//  - change=null + 현재순위 있음 → "비교없음" 회색 칩 (이전 측정 부재 안내)
+//  - change=null + 현재순위 null → 표시 안 함 (70위 밖 등)
+//  - change=0 → "변동없음" 회색 칩 (의도된 0 임을 명시)
+//  - change>0 → "▲ N" 파랑 (상승)
+//  - change<0 → "▼ N" 빨강 (하락)
+function RankDelta({
+  label,
+  change,
+  hasCurrentRank,
+}: {
+  label: string;
+  change: number | null | undefined;
+  hasCurrentRank?: boolean;
+}) {
+  if (change == null) {
+    if (!hasCurrentRank) return null;
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground bg-muted">
+        <span className="font-normal">{label}</span>
+        <span>비교없음</span>
+      </span>
+    );
+  }
   if (change === 0) {
     return (
-      <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
-        <span className="text-[9px]">{label}</span>
-        <Minus size={9} />
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground bg-muted">
+        <span className="font-normal">{label}</span>
+        <Minus size={10} />
+        <span>변동없음</span>
       </span>
     );
   }
   if (change > 0) {
     return (
-      <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-blue-600">
-        <span className="text-[9px] font-normal text-muted-foreground">{label}</span>
-        <ArrowUp size={11} /> {change}
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200">
+        <span className="text-[10px] font-normal text-blue-600/80">{label}</span>
+        <ArrowUp size={12} /> {change}
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-red-600">
-      <span className="text-[9px] font-normal text-muted-foreground">{label}</span>
-      <ArrowDown size={11} /> {Math.abs(change)}
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-bold text-red-700 bg-red-50 border border-red-200">
+      <span className="text-[10px] font-normal text-red-600/80">{label}</span>
+      <ArrowDown size={12} /> {Math.abs(change)}
     </span>
   );
 }
 
-function PlaceRow({ place, period }: { place: any; period: "1d" | "7d" | "30d" }) {
+function PlaceRow({ place, period }: { place: any; period: "1d" | "7d" | "30d" | "date" }) {
+  // visitor/blog 변동은 1d/7d/30d 단위만 백엔드에서 계산. "date" 모드는 일단 1d 데이터 사용
+  // (Top3 매장의 임의 날짜 비교는 P3 — CompetitorDailySnapshot 별도 조회 필요)
+  const periodForDelta: "1d" | "7d" | "30d" = period === "date" ? "1d" : period;
   // 색 컨벤션 (사장님 룰): visitor/blog 증감은 부호로 통일 — + 빨강, - 파랑, ±0 회색.
   // 내 매장이라도 동일 (감소가 진짜 일어날 수 있음 = 리뷰 삭제 등).
   const fmtDelta = (d: number | null | undefined) => {
@@ -542,12 +629,12 @@ function PlaceRow({ place, period }: { place: any; period: "1d" | "7d" | "30d" }
     );
   };
   const visitorDelta =
-    period === "1d" ? place.visitorDelta :
-    period === "7d" ? place.visitorDelta7d :
+    periodForDelta === "1d" ? place.visitorDelta :
+    periodForDelta === "7d" ? place.visitorDelta7d :
     place.visitorDelta30d;
   const blogDelta =
-    period === "1d" ? place.blogDelta :
-    period === "7d" ? place.blogDelta7d :
+    periodForDelta === "1d" ? place.blogDelta :
+    periodForDelta === "7d" ? place.blogDelta7d :
     place.blogDelta30d;
   return (
     <div className={`flex items-center gap-2 px-2 py-1.5 rounded ${place.isMine ? "bg-primary/15 ring-1 ring-primary/30" : ""}`}>

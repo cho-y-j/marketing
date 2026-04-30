@@ -56,12 +56,22 @@ export class KeywordService {
    * 키워드 목록 + 각 키워드의 Top 3 매장 + 내 매장 정보 (한 번에 반환)
    * 키워드 페이지 메인 카드용
    */
-  async findAllWithCompetition(storeId: string) {
+  async findAllWithCompetition(storeId: string, compareDate?: string) {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: { name: true, naverPlaceId: true },
     });
     if (!store) return [];
+
+    // compareDate 가 주어지면 그 날짜 row 와 비교 (rankChangeCustom 추가).
+    // YYYY-MM-DD 포맷, 잘못된 입력은 무시.
+    const compareDateObj = (() => {
+      if (!compareDate) return null;
+      const m = compareDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+      return isNaN(d.getTime()) ? null : d;
+    })();
 
     let keywords = await this.prisma.storeKeyword.findMany({
       where: { storeId },
@@ -161,22 +171,32 @@ export class KeywordService {
       }
     }
 
-    // 키워드별 1일/7일 순위 비교용 — KeywordRankHistory 의 N일전 row (순위만)
+    // 키워드별 1일/7일/30일 순위 비교용 — KeywordRankHistory 의 N일전 row (순위만)
+    //
+    // 사장님 룰 (2026-04-30 정정):
+    //  - 1일 = "어제와 비교" — latest 직전 row 가 아니라 오늘 자정 이전 마지막 row.
+    //    같은 날 여러 번 체크돼도 27초 전 row 와 비교되지 않도록.
+    //  - 7일/30일 = N일 전 ± 12시간 윈도우. compareDate 가 주어지면 그 날짜 row.
     const enriched = await Promise.all(
       keywords.map(async (kw) => {
         const latest = latestMap.get(kw.keyword) ?? null;
 
+        // 1일 = 오늘 자정 이전 가장 최근 row. topPlaces 도 포함 (폴백 매칭용)
         const prev1d = latest
-          ? await this.prisma.keywordRankHistory.findFirst({
-              where: {
-                storeId, keyword: kw.keyword,
-                checkedAt: { lt: latest.checkedAt },
-              },
-              orderBy: { checkedAt: "desc" },
-              select: { rank: true, checkedAt: true },
-            })
+          ? await (async () => {
+              const todayStart = new Date(latest.checkedAt);
+              todayStart.setHours(0, 0, 0, 0);
+              return this.prisma.keywordRankHistory.findFirst({
+                where: {
+                  storeId, keyword: kw.keyword,
+                  checkedAt: { lt: todayStart },
+                },
+                orderBy: { checkedAt: "desc" },
+                select: { rank: true, checkedAt: true, topPlaces: true },
+              });
+            })()
           : null;
-        const findPrevRankByDays = async (daysAgo: number) => {
+        const findPrevByDays = async (daysAgo: number) => {
           if (!latest) return null;
           const t = new Date(latest.checkedAt.getTime() - daysAgo * 24 * 60 * 60 * 1000);
           return this.prisma.keywordRankHistory.findFirst({
@@ -188,18 +208,59 @@ export class KeywordService {
               },
             },
             orderBy: { checkedAt: "desc" },
-            select: { rank: true },
+            select: { rank: true, topPlaces: true },
           });
         };
         const [prev7d, prev30d] = await Promise.all([
-          findPrevRankByDays(7),
-          findPrevRankByDays(30),
+          findPrevByDays(7),
+          findPrevByDays(30),
         ]);
+
+        // 사용자가 달력으로 임의 날짜 선택 시 — 그 날짜의 가장 가까운 row (00:00 ~ 23:59 윈도우)
+        const prevCustom = compareDateObj
+          ? await (async () => {
+              const dayStart = new Date(compareDateObj);
+              dayStart.setUTCHours(0, 0, 0, 0);
+              const dayEnd = new Date(compareDateObj);
+              dayEnd.setUTCHours(23, 59, 59, 999);
+              return this.prisma.keywordRankHistory.findFirst({
+                where: {
+                  storeId, keyword: kw.keyword,
+                  checkedAt: { gte: dayStart, lte: dayEnd },
+                },
+                orderBy: { checkedAt: "desc" },
+                select: { rank: true, checkedAt: true, topPlaces: true },
+              });
+            })()
+          : null;
 
         const allPlaces: any[] = (latest?.topPlaces as any[]) || [];
 
-        // 각 place 의 1/7/30일 visitor·blog 델타 — DailySnapshot 기반 (실측 또는 추정).
-        // 내 매장은 StoreDailySnapshot, 경쟁사는 CompetitorDailySnapshot.
+        // KeywordRankHistory.topPlaces 폴백 맵 — placeId → visitor/blog
+        // 사장님 룰: 등록 경쟁사 외에도 키워드 Top70 안 모든 매장의 변동을 보여줌.
+        // pcmap 1회 호출에 visitor/blog 함께 옴 → 추가 수집 비용 0.
+        const buildPlaceCountMap = (
+          tp: any[] | null | undefined,
+        ): Map<string, { visitor: number | null; blog: number | null }> => {
+          const m = new Map<string, { visitor: number | null; blog: number | null }>();
+          for (const p of tp ?? []) {
+            const id = p?.placeId;
+            if (!id) continue;
+            m.set(String(id), {
+              visitor: typeof p.visitorReviewCount === "number" ? p.visitorReviewCount : null,
+              blog: typeof p.blogReviewCount === "number" ? p.blogReviewCount : null,
+            });
+          }
+          return m;
+        };
+        const kwHist1d = buildPlaceCountMap((prev1d?.topPlaces as any[]) || []);
+        const kwHist7d = buildPlaceCountMap((prev7d?.topPlaces as any[]) || []);
+        const kwHist30d = buildPlaceCountMap((prev30d?.topPlaces as any[]) || []);
+
+        // 각 place 의 1/7/30일 visitor·blog 델타.
+        // 우선순위 (사장님 룰): 1) 내 매장 = StoreDailySnapshot
+        //                       2) 등록 경쟁사 = CompetitorDailySnapshot (정밀 실측)
+        //                       3) 그 외 모든 Top70 매장 = KeywordRankHistory.topPlaces 폴백
         const computeDelta = (p: any) => {
           const past = (
             d: 1 | 7 | 30,
@@ -212,9 +273,16 @@ export class KeywordService {
               };
             }
             if (!p.placeId) return { visitor: null, blog: null };
-            const m = d === 1 ? compMap1d : d === 7 ? compMap7d : compMap30d;
-            const c = m.get(p.placeId);
-            return { visitor: c?.visitor ?? null, blog: c?.blog ?? null };
+            // 1순위: 등록 경쟁사 DailySnapshot
+            const compMap = d === 1 ? compMap1d : d === 7 ? compMap7d : compMap30d;
+            const c = compMap.get(p.placeId);
+            if (c && (c.visitor != null || c.blog != null)) {
+              return { visitor: c.visitor ?? null, blog: c.blog ?? null };
+            }
+            // 2순위 (폴백): KeywordRankHistory.topPlaces 안의 같은 시점 카운트
+            const kwMap = d === 1 ? kwHist1d : d === 7 ? kwHist7d : kwHist30d;
+            const k = kwMap.get(String(p.placeId));
+            return { visitor: k?.visitor ?? null, blog: k?.blog ?? null };
           };
           const subtract = (
             cur: number | null | undefined,
@@ -278,6 +346,8 @@ export class KeywordService {
           rankChange: sub(currRank, prev1d?.rank ?? null),
           rankChange7d: sub(currRank, prev7d?.rank ?? null),
           rankChange30d: sub(currRank, prev30d?.rank ?? null),
+          rankChangeCustom: prevCustom ? sub(currRank, prevCustom.rank ?? null) : null,
+          compareDate: compareDateObj ? compareDateObj.toISOString().slice(0, 10) : null,
           top3,
           myPlace,
         };

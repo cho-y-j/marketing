@@ -37,8 +37,12 @@ export class KeywordController {
 
   @Get("with-competition")
   @ApiOperation({ summary: "키워드 + 각 Top 3 매장 + 내 위치 (카드용)" })
-  findAllWithCompetition(@Param("storeId") storeId: string) {
-    return this.keywordService.findAllWithCompetition(storeId);
+  @ApiQuery({ name: "compareDate", required: false, type: String, description: "YYYY-MM-DD — 그 날짜와 변동 비교" })
+  findAllWithCompetition(
+    @Param("storeId") storeId: string,
+    @Query("compareDate") compareDate?: string,
+  ) {
+    return this.keywordService.findAllWithCompetition(storeId, compareDate);
   }
 
   @Get("recommended")

@@ -21,7 +21,7 @@ export class WeeklyReportJob {
     private ai: AIProvider,
   ) {}
 
-  @Cron("30 7 * * 1") // 매주 월요일 07:30
+  @Cron("45 4 * * 1") // UTC 04:45 월 = 한국 월요일 13:45
   async generateWeeklyReports() {
     const stores = await findAutoAnalysisStores(this.prisma, {
       select: { id: true, name: true, userId: true, avgOrderValue: true },
